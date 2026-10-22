@@ -1889,7 +1889,9 @@ body.battle-focus {
   border: 1px solid rgba(238, 226, 201, 0.3);
   border-radius: 50%;
   background:
-    radial-gradient(circle, transparent 0 26%, rgba(238, 226, 201, 0.09) 27% 28%, transparent 29%),
+    /* Inner ring marks the small-input reverse lane: magnitude 0.45 maps to
+       0.45 * 0.72 = 32% of the pad radius (see CHARIOT_CONTROL_CONFIG). */
+    radial-gradient(circle, transparent 0 31%, rgba(238, 226, 201, 0.09) 32% 33%, transparent 34%),
     rgba(31, 29, 25, 0.27);
   touch-action: none;
 }

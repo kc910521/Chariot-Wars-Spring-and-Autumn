@@ -10,6 +10,7 @@ import {
 import { campaignRules, chariotRules, effectRules, projectileRules } from "../src/data/rules.js";
 import { addBloodStain } from "../src/game/blood.js";
 import { createCollisionSystem } from "../src/game/collision.js";
+import { CHARIOT_CONTROL_CONFIG, createPlayerController } from "../src/game/player.js";
 import { bossTypes, enemyStats, formationPatterns } from "../src/data/formations.js";
 import {
   createBallisticProjectile, createProjectileSystem, solveBallisticElevation,
@@ -154,6 +155,128 @@ test("terrain slows movement", () => {
   const entity = { x: 100, y: 100 };
   collision.moveEntitySafely(entity, 100, 0, 8);
   assert.ok(entity.x > 100 && entity.x < 200, `expected slowed travel, got ${entity.x}`);
+});
+
+console.log("[unit] chariot steering");
+
+// Drives the real controller with a bare player object: no DOM, no collision
+// system, and a joystick vector expressed relative to where the nose points.
+const STEER_FACING = -Math.PI / 2;
+
+function angleGap(from, to) {
+  return Math.abs(Math.atan2(Math.sin(to - from), Math.cos(to - from)));
+}
+
+function simulateSteering({ relativeDeg = 180, magnitude = 0.3, frames = 120, startSpeed = 0 } = {}) {
+  const player = {
+    x: 600,
+    y: 600,
+    radius: 17,
+    angle: STEER_FACING,
+    speed: startSpeed,
+    maxSpeed: CHARIOT_CONTROL_CONFIG.maxSpeed,
+    acceleration: CHARIOT_CONTROL_CONFIG.acceleration,
+    deceleration: CHARIOT_CONTROL_CONFIG.deceleration,
+    maxTurnRate: CHARIOT_CONTROL_CONFIG.maxTurnRate,
+    knockbackX: 0,
+    knockbackY: 0,
+    impactCooldown: 0,
+    mode: "chariot",
+    invulnerable: 0,
+    health: 100,
+  };
+  const stickAngle = STEER_FACING + relativeDeg * (Math.PI / 180);
+  const touchInput = {
+    x: Math.cos(stickAngle) * magnitude,
+    y: Math.sin(stickAngle) * magnitude,
+  };
+  const controller = createPlayerController({
+    player,
+    world: { width: 1200, height: 1200 },
+    keys: new Set(),
+    touchInput,
+    moveEntitySafely: (entity, dx, dy) => {
+      entity.x += dx;
+      entity.y += dy;
+    },
+    // Backing into nothing must stay harmless: the reverse cap sits below the
+    // ram-damage speed, so damagePlayer() only ever runs on a real impact.
+    damagePlayer: () => {
+      throw new Error("reversing should not damage the chariot");
+    },
+    state: { mode: "running" },
+  });
+  for (let frame = 0; frame < frames; frame += 1) controller.readControls(1 / 60);
+  const travelled = Math.hypot(player.x - 600, player.y - 600);
+  const travelAngle = Math.atan2(player.y - 600, player.x - 600);
+  return { player, stickAngle, travelled, travelAngle };
+}
+
+test("the reverse lane stays inside its own tuning bounds", () => {
+  assert.ok(
+    CHARIOT_CONTROL_CONFIG.reverseLowSpeedThreshold > CHARIOT_CONTROL_CONFIG.reverseMaxSpeed,
+    "a reverse cap above the low-speed gate would flicker between reversing and turning",
+  );
+  assert.ok(CHARIOT_CONTROL_CONFIG.reverseMaxSpeed < 85, "reversing must stay below ram damage");
+  assert.ok(
+    CHARIOT_CONTROL_CONFIG.reverseAngleThreshold > Math.PI / 2
+      && CHARIOT_CONTROL_CONFIG.reverseAngleThreshold <= Math.PI,
+    "the lane has to sit behind the nose",
+  );
+  assert.ok(
+    CHARIOT_CONTROL_CONFIG.reverseMaxInputMagnitude < 1,
+    "keyboard input contributes magnitude 1, so it must stay in the turning lane",
+  );
+});
+
+test("a small stick behind the nose backs up without turning", () => {
+  const { player, travelled, travelAngle } = simulateSteering({ relativeDeg: 180, magnitude: 0.3 });
+  assert.equal(player.angle, STEER_FACING, "facing must survive the whole reverse");
+  assert.ok(travelled > 20, `expected visible backward travel, got ${travelled}`);
+  assert.ok(
+    angleGap(travelAngle, STEER_FACING + Math.PI) < 0.02,
+    `expected travel straight back, got ${travelAngle}`,
+  );
+  assert.ok(
+    player.speed <= CHARIOT_CONTROL_CONFIG.reverseMaxSpeed + 1e-9,
+    `reverse speed ${player.speed} exceeded its cap`,
+  );
+});
+
+test("backward diagonals reverse along the stick direction", () => {
+  for (const relativeDeg of [135, 140, 160, 180]) {
+    const { player, stickAngle, travelAngle } = simulateSteering({ relativeDeg, magnitude: 0.3 });
+    assert.equal(player.angle, STEER_FACING, `facing rotated at ${relativeDeg}deg`);
+    assert.ok(
+      angleGap(travelAngle, stickAngle) < 0.02,
+      `expected travel along the stick at ${relativeDeg}deg, got ${travelAngle}`,
+    );
+  }
+});
+
+test("a full-strength backward push still turns the chariot", () => {
+  const { player } = simulateSteering({ relativeDeg: 180, magnitude: 0.9 });
+  assert.ok(
+    angleGap(player.angle, STEER_FACING) > Math.PI / 2,
+    "pushing past the small-input range must keep the old turn behaviour",
+  );
+});
+
+test("a moving chariot turns instead of snapping into reverse", () => {
+  const { player } = simulateSteering({ relativeDeg: 180, magnitude: 0.3, startSpeed: 120, frames: 6 });
+  assert.ok(
+    angleGap(player.angle, STEER_FACING) > 0,
+    "the low-speed gate must hold while the chariot is still fast",
+  );
+});
+
+test("steering with the nose is unchanged", () => {
+  const { player, stickAngle } = simulateSteering({ relativeDeg: 90, magnitude: 0.3, frames: 90 });
+  assert.ok(
+    angleGap(player.angle, STEER_FACING) > Math.PI / 4,
+    "a sideways stick should still rotate the chariot",
+  );
+  assert.ok(angleGap(player.angle, stickAngle) < 1e-6, "the chariot should end up facing the stick");
 });
 
 console.log("[unit] ballistics");

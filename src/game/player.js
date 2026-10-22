@@ -7,11 +7,17 @@ export const CHARIOT_CONTROL_CONFIG = Object.freeze({
   maxTurnRate: 120, // Degrees per second; increase for faster heading changes.
   turnSpeedFactor: 0.62, // Lower to lose more speed during sharp turns.
   turnAngleThreshold: 0.08, // Radians; lower to keep turn slowdown active longer.
-  reverseLowSpeedThreshold: 32, // Increase to allow reverse-step input at higher speeds.
-  reverseMaxInputMagnitude: 0.35, // Increase to make the no-turn reverse zone easier to reach.
-  reverseAngleThreshold: 160 * (Math.PI / 180), // Lower to allow reverse movement from more diagonal angles.
+  // Reverse lane: a *small* stick push behind the nose backs the chariot up in
+  // the stick's own direction while `player.angle` (firing, crew, ramming) stays
+  // put. Keyboard input always contributes magnitude 1, so this lane is
+  // reachable only through the touch joystick.
+  // Must stay above reverseMaxSpeed, otherwise the chariot leaves the lane the
+  // moment it accelerates and flickers between reversing and turning.
+  reverseLowSpeedThreshold: 32, // px/s; "moving slowly or standing still".
+  reverseMaxInputMagnitude: 0.45, // Joystick magnitude, i.e. 0.45 * 0.72 = 32% of the pad radius.
+  reverseAngleThreshold: 135 * (Math.PI / 180), // Lower to reverse from more diagonal angles.
   reverseAngleTolerance: 0.5 * (Math.PI / 180), // Small tolerance for joystick and angle rounding near the threshold.
-  reverseMaxSpeed: 24, // Increase for faster backward repositioning without turning.
+  reverseMaxSpeed: 24, // Below the 85 px/s ram threshold, so backing up never deals ram damage.
 });
 
 function approach(value, target, amount) {
@@ -72,6 +78,10 @@ export function createPlayerController({ player, world, keys, touchInput, moveEn
     const hasInput = inputLength > 0;
     const targetAngle = hasInput ? Math.atan2(inputY, inputX) : player.angle;
     const angleDifference = shortestAngleDifference(player.angle, targetAngle);
+    // A small stick push behind the nose reverses along the stick instead of
+    // spinning the chariot. Facing stays untouched here, so `player.angle`
+    // (firing, crew, ramming) keeps pointing where it did; the travel vector
+    // below uses `targetAngle` for this frame only.
     const isReverseWithoutTurning = hasInput
       && Math.abs(player.speed) < CHARIOT_CONTROL_CONFIG.reverseLowSpeedThreshold
       && inputMagnitude <= CHARIOT_CONTROL_CONFIG.reverseMaxInputMagnitude
