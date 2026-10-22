@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="theme-color" content="#211b16">
+    <meta name="description" data-i18n-content="app.description" content="一款以春秋战国为背景的俯视角战车战斗游戏。">
+    <title data-i18n="app.title">春秋战国-车之战</title>
+    <link rel="stylesheet" href="./styles/game.css">
+    <script type="module" src="./src/main.js"></script>
+  </head>
+  <body>
+    <main class="game-shell">
+      <header class="topbar">
+        <a class="brand" href="./" data-i18n-aria-label="app.home" aria-label="春秋战国-车之战首页">
+          <span class="brand-mark" aria-hidden="true">◆</span>
+          <span data-i18n="app.brand">春秋战国-车之战</span>
+        </a>
+        <p class="topbar-note" data-i18n="app.motto">周室衰微 · 群雄并起</p>
+        <label class="language-control">
+          <span class="sr-only" data-i18n="app.language">语言</span>
+          <select id="locale-select" data-i18n-aria-label="app.language" aria-label="语言">
+            <option value="zh-CN" data-i18n="app.language.zh-CN">简体中文</option>
+            <option value="en" data-i18n="app.language.en">English</option>
+          </select>
+        </label>
+        <button class="sound-button" id="sound-button" type="button" data-i18n-aria-label="app.sound" data-i18n-title="app.sound" aria-label="切换音效" title="切换音效">
+          <span id="sound-icon" aria-hidden="true">♫</span>
+        </button>
+      </header>
+
+      <section class="screen menu-screen" id="menu-screen">
+        <div class="menu-seal" data-i18n="menu.seal">车之战</div>
+        <p class="eyebrow"><span class="status-dot"></span><span data-i18n="menu.eyebrow">周室衰微 · 群雄并起</span></p>
+        <h1><span data-i18n="menu.title.first">逐鹿</span><span data-i18n="menu.title.second">中原</span></h1>
+        <p class="menu-lede"><span data-i18n="menu.lede.first">以战车为锋，刀戈为言。</span><br><span data-i18n="menu.lede.second">集结你的车队，在乱世中写下自己的篇章。</span></p>
+        <div class="menu-features">
+          <article><span aria-hidden="true">01</span><strong data-i18n="menu.feature.1.title">驰骋战场</strong><p data-i18n="menu.feature.1.copy">驾驶战车冲阵，以弩箭与车刺击退列国军队。</p></article>
+          <article><span aria-hidden="true">02</span><strong data-i18n="menu.feature.2.title">搜集战利</strong><p data-i18n="menu.feature.2.copy">拾取铜钱、银锭与金饼，补充军资。</p></article>
+          <article><span aria-hidden="true">03</span><strong data-i18n="menu.feature.3.title">整备再战</strong><p data-i18n="menu.feature.3.copy">调整战车属性、增购战马并招募车员，迎战新的随机战场。</p></article>
+        </div>
+        <button class="primary-action" id="menu-start" type="button"><span data-i18n="menu.start">击鼓出征</span><span aria-hidden="true">→</span></button>
+        <p class="menu-footnote" data-i18n="controls.chariot">W / ↑ 地图向上 · S / ↓ 地图向下 · A D / ← → 转向并漂移 · 空格发弩</p>
+      </section>
+
+      <section class="screen shop-screen" id="shop-screen" hidden>
+        <div class="shop-heading">
+          <div>
+            <p class="eyebrow"><span class="status-dot"></span><span data-i18n="shop.eyebrow">此役已毕</span></p>
+            <h2 data-i18n="shop.title">凯旋整备</h2>
+            <p class="shop-subtitle" id="shop-location"></p>
+          </div>
+          <div class="treasury shop-treasury"><span data-i18n="shop.treasury">军资</span><strong id="shop-gold">0</strong><span data-i18n="shop.currency">两</span></div>
+        </div>
+        <div class="shop-summary">
+          <span><span data-i18n="shop.score">本役战功</span> <strong id="shop-score">0</strong></span>
+          <span><span data-i18n="shop.kills">讨伐敌军</span> <strong id="shop-kills">0</strong></span>
+          <span><span data-i18n="shop.stage">当前战局</span> <strong id="shop-stage">1</strong></span>
+        </div>
+        <h3 class="section-title"><span data-i18n="shop.stats.title">战车属性</span> <span data-i18n="shop.stats.hint">五维雷达 · 悬停或聚焦购置项预览变化</span></h3>
+        <div class="shop-stats" id="shop-stats" aria-live="polite"></div>
+        <p class="shop-collision-note"><strong data-i18n="shop.collision.label">冲撞伤害：</strong><span data-i18n="shop.collision.description">基础为 1 点；每级轴与轮辋升级额外增加 2 点。需要高速正面冲撞；重甲步卒仍免疫冲撞伤害。机动和战马影响速度与转向，不直接增加伤害。</span></p>
+        <h3 class="section-title shop-equipment-title"><span data-i18n="shop.items.title">整装备战</span> <span data-i18n="shop.items.hint">选择类别查看可购项目</span></h3>
+        <div class="shop-items" id="shop-items"></div>
+        <div class="shop-bottom">
+          <p id="shop-message" aria-live="polite" data-i18n="shop.message">军资可在此换取更强的战车与随行将士。</p>
+          <button class="primary-action" id="next-battle" type="button"><span data-i18n="shop.next">整备完成 · 开始下一战</span><span aria-hidden="true">→</span></button>
+        </div>
+      </section>
+
+      <section class="game-layout screen" id="battle-screen" data-i18n-aria-label="battle.label" aria-label="春秋战国-车之战" hidden>
+        <div class="field-frame">
+          <div class="canvas-wrap">
+            <canvas id="game" data-i18n-aria-label="battle.aria" aria-label="春秋战国战场。战车阶段W、S沿地图上下加速，A、D转向并造成漂移，空格发射弩箭；下车后WASD移动，空格近战。"></canvas>
+            <section class="battle-hud" data-i18n-aria-label="battle.status" aria-label="战场状态">
+              <div class="stats" aria-live="polite">
+                <div class="stat battle-score">
+                  <span class="stat-label" data-i18n="battle.score">战功</span>
+                  <strong id="score">00000</strong>
+                </div>
+                <div class="treasury"><span data-i18n="shop.treasury">军资</span><strong id="gold">0</strong><span data-i18n="shop.currency">两</span></div>
+                <div class="stat">
+                  <span class="stat-label" data-i18n="battle.stage">战局</span>
+                  <strong id="wave">01</strong>
+                </div>
+              </div>
+              <div class="battle-hud-details">
+                <div class="mode-block">
+                  <span class="stat-label" data-i18n="battle.mode">作战形态</span>
+                  <strong id="party-mode" class="party-mode" data-i18n="battle.chariot">战车</strong>
+                </div>
+                <div class="hull-block">
+                  <div class="hull-caption"><span id="hull-label" class="stat-label" data-i18n="battle.hull">战车耐久</span><strong id="hull-value">100</strong></div>
+                  <div class="hull-track"><span id="hull-health"></span></div>
+                </div>
+                <div class="objective-block">
+                  <div class="hull-caption"><span class="stat-label" id="objective-label" data-i18n="battle.objective">本役目标</span><strong id="objective-count">0 / 8</strong></div>
+                  <div class="hull-track"><span id="objective-progress"></span></div>
+                </div>
+              </div>
+            </section>
+            <div class="extraction-guide" id="extraction-guide" hidden aria-live="polite">
+              <span class="extraction-arrow" id="extraction-arrow" aria-hidden="true">↑</span>
+              <span class="extraction-guide-copy"><strong data-i18n="battle.extractGuide">前往撤离点</strong><small id="extraction-distance"></small></span>
+            </div>
+            <div class="boss-warning" id="boss-warning" hidden role="alert">
+              <span class="boss-warning-mark" aria-hidden="true">!</span>
+              <span class="boss-warning-copy"><strong id="boss-warning-title"></strong><small id="boss-warning-subtitle"></small></span>
+            </div>
+            <button class="start-button" id="start-button" type="button" data-i18n-aria-label="battle.pauseLabel" aria-label="暂停战局">
+              <span id="start-label" data-i18n="battle.startLabel">整军出征</span><span aria-hidden="true">↗</span>
+            </button>
+            <div class="game-overlay" id="game-overlay">
+              <div class="overlay-card">
+                <span class="overlay-icon" id="overlay-icon">✦</span>
+                <p class="eyebrow" id="overlay-eyebrow" data-i18n="overlay.ready">整军待发</p>
+                <h2 id="overlay-title" data-i18n="overlay.title">将军，请下令</h2>
+                <p id="overlay-copy" data-i18n="overlay.copy">驾驭战车，冲破敌阵，争夺中原。</p>
+                <button class="overlay-button" id="overlay-button" type="button"><span data-i18n="menu.start">击鼓出征</span><span aria-hidden="true">→</span></button>
+              </div>
+            </div>
+            <div class="touch-controls" data-i18n-aria-label="battle.touch" aria-label="触屏操作">
+              <div class="touch-pad" id="touch-pad" role="group" data-i18n-aria-label="battle.touchDirection" aria-label="战车方向">
+                <div class="touch-joystick" id="touch-joystick" role="application" data-i18n-aria-label="battle.joystick" aria-label="方向摇杆">
+                  <span class="touch-joystick-mark touch-joystick-mark-up" aria-hidden="true"></span>
+                  <span class="touch-joystick-mark touch-joystick-mark-right" aria-hidden="true"></span>
+                  <span class="touch-joystick-mark touch-joystick-mark-down" aria-hidden="true"></span>
+                  <span class="touch-joystick-mark touch-joystick-mark-left" aria-hidden="true"></span>
+                  <span class="touch-joystick-knob" id="touch-joystick-knob" aria-hidden="true"></span>
+                </div>
+              </div>
+              <button class="touch-key touch-fire" type="button" data-control=" " data-i18n="battle.attack.short" data-i18n-aria-label="battle.attack" aria-label="弩射或近战攻击">弩 / 击</button>
+              <p class="touch-hint" id="touch-hint" data-i18n="battle.touchHint">↑ 前进 · ↓ 后退 · ← → 转向</p>
+            </div>
+          </div>
+        </div>
+      </section>
+      <footer class="page-footer">
+        <span data-i18n="app.brand">春秋战国-车之战</span>
+        <span data-i18n="app.footer">礼崩乐坏 · 群雄逐鹿</span>
+      </footer>
+    </main>
+  </body>
+</html>
