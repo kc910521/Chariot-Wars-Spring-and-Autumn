@@ -13,7 +13,7 @@ jobs:
         with:
           node-version: 22
       - name: Syntax check
-        run: find src -name '*.js' -exec node --check {} \;
+        run: find src scripts \( -name '*.js' -o -name '*.mjs' \) -print0 | xargs -0 -n1 node --check
       - name: Unit tests
         run: node scripts/unit-test.mjs
       - name: Smoke test

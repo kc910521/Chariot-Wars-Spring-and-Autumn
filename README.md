@@ -7,10 +7,11 @@
 从项目根目录启动静态服务器：
 
 ```sh
-python3 -m http.server 8000
+node scripts/serve.mjs 8000     # 推荐：只需 Node，ES module 并发加载不会掉连接
+python3 -m http.server 8000     # 备选：使用系统自带 Python
 ```
 
-随后访问 <http://localhost:8000>。
+随后访问 <http://localhost:8000>。`scripts/serve.mjs` 只用 Node 标准库，并为 `.js`、`.css` 等返回正确的内容类型且禁用缓存，改动后刷新即可生效；Python 的 `http.server` 监听队列只有 5，偶尔会在首屏并发加载模块时丢连接导致启动失败，刷新一次即可恢复。
 
 ## 游戏流程
 
@@ -91,7 +92,7 @@ h5game/
 本项目没有构建步骤或 package manifest，语法检查与测试都直接交给 Node：
 
 ```sh
-find src -name '*.js' -exec node --check {} \;   # 语法检查全部模块
+find src scripts \( -name '*.js' -o -name '*.mjs' \) -print0 | xargs -0 -n1 node --check   # 语法检查
 node scripts/unit-test.mjs                       # 规则、碰撞、弹道、血迹与随机数
 node scripts/smoke-test.mjs                      # 用 stub DOM 启动 main.js 并跑战斗帧
 H5_SEED=7 node scripts/smoke-test.mjs            # 换一个随机种子复跑同一套冒烟检查

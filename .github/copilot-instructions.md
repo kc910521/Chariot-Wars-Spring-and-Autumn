@@ -2,7 +2,7 @@
 
 ## Build and Test
 
-- Run the game from the repository root with `python3 -m http.server 8000`, then open `http://localhost:8000`. ES modules are served over HTTP; opening `index.html` directly is not the documented workflow.
+- Run the game from the repository root with `node scripts/serve.mjs 8000` (zero-dependency static server added for this repo), then open `http://localhost:8000`. `python3 -m http.server 8000` also works but its listen backlog is 5, so a cold load can occasionally drop one of the ~30 parallel module requests; a refresh recovers. ES modules are served over HTTP; opening `index.html` directly is not the documented workflow.
 - There is no build step, package manifest, or lint command. Tests run directly through Node.
 - Check one edited module with `node --check src/game/game.js` (replace the path as needed). Check all source modules with `find src -name '*.js' -exec node --check {} \;`.
 - `node scripts/unit-test.mjs` covers the pure rules: derived stats, campaign pacing, collision, ballistics, blood caps, and the seeded PRNG. Extend it when changing those modules.
