@@ -1,51 +1,67 @@
-export function getGameElements() {
-  const get = (selector) => document.querySelector(selector);
+// Single source of truth for DOM lookups. Anything the game relies on is
+// declared here so a missing/renamed id fails loudly at boot instead of
+// surfacing as a null dereference deep inside a frame.
+const SELECTORS = {
+  canvas: "#game",
+  menuScreen: "#menu-screen",
+  battleScreen: "#battle-screen",
+  shopScreen: "#shop-screen",
+  menuStartButton: "#menu-start",
+  nextBattleButton: "#next-battle",
+  shopItemsElement: "#shop-items",
+  shopStatsElement: "#shop-stats",
+  localeSelect: "#locale-select",
+  shopGoldElement: "#shop-gold",
+  shopScoreElement: "#shop-score",
+  shopKillsElement: "#shop-kills",
+  shopStageElement: "#shop-stage",
+  shopLocationElement: "#shop-location",
+  shopMessageElement: "#shop-message",
+  scoreElement: "#score",
+  waveElement: "#wave",
+  goldElement: "#gold",
+  modeElement: "#party-mode",
+  hullLabelElement: "#hull-label",
+  hullValueElement: "#hull-value",
+  hullHealthElement: "#hull-health",
+  overlay: "#game-overlay",
+  overlayEyebrow: "#overlay-eyebrow",
+  overlayTitle: "#overlay-title",
+  overlayCopy: "#overlay-copy",
+  overlayButton: "#overlay-button",
+  startButton: "#start-button",
+  startLabel: "#start-label",
+  objectiveCountElement: "#objective-count",
+  objectiveProgressElement: "#objective-progress",
+  objectiveLabelElement: "#objective-label",
+  extractionGuideElement: "#extraction-guide",
+  extractionArrowElement: "#extraction-arrow",
+  extractionDistanceElement: "#extraction-distance",
+  touchPadElement: "#touch-pad",
+  touchHintElement: "#touch-hint",
+  touchControlsElement: ".touch-controls",
+  touchJoystickElement: "#touch-joystick",
+  touchJoystickKnob: "#touch-joystick-knob",
+  bossWarningElement: "#boss-warning",
+  bossWarningTitleElement: "#boss-warning-title",
+  bossWarningSubtitleElement: "#boss-warning-subtitle",
+  soundButton: "#sound-button",
+  soundIcon: "#sound-icon",
+  fatalErrorElement: "#fatal-error",
+  fatalErrorCopyElement: "#fatal-error-copy",
+  fatalErrorReloadButton: "#fatal-error-reload",
+};
 
-  return {
-    canvas: get("#game"),
-    menuScreen: get("#menu-screen"),
-    battleScreen: get("#battle-screen"),
-    shopScreen: get("#shop-screen"),
-    menuStartButton: get("#menu-start"),
-    nextBattleButton: get("#next-battle"),
-    shopItemsElement: get("#shop-items"),
-    shopStatsElement: get("#shop-stats"),
-    localeSelect: get("#locale-select"),
-    shopGoldElement: get("#shop-gold"),
-    shopScoreElement: get("#shop-score"),
-    shopKillsElement: get("#shop-kills"),
-    shopStageElement: get("#shop-stage"),
-    shopLocationElement: get("#shop-location"),
-    shopMessageElement: get("#shop-message"),
-    scoreElement: get("#score"),
-    waveElement: get("#wave"),
-    goldElement: get("#gold"),
-    modeElement: get("#party-mode"),
-    hullLabelElement: get("#hull-label"),
-    hullValueElement: get("#hull-value"),
-    hullHealthElement: get("#hull-health"),
-    overlay: get("#game-overlay"),
-    overlayEyebrow: get("#overlay-eyebrow"),
-    overlayTitle: get("#overlay-title"),
-    overlayCopy: get("#overlay-copy"),
-    overlayButton: get("#overlay-button"),
-    startButton: get("#start-button"),
-    startLabel: get("#start-label"),
-    objectiveCountElement: get("#objective-count"),
-    objectiveProgressElement: get("#objective-progress"),
-    objectiveLabelElement: get("#objective-label"),
-    extractionGuideElement: get("#extraction-guide"),
-    extractionArrowElement: get("#extraction-arrow"),
-    extractionDistanceElement: get("#extraction-distance"),
-    touchPadElement: get("#touch-pad"),
-    touchHintElement: get("#touch-hint"),
-    touchControlsElement: get(".touch-controls"),
-    touchJoystickElement: get("#touch-joystick"),
-    touchJoystickKnob: get("#touch-joystick-knob"),
-    bossWarningElement: get("#boss-warning"),
-    bossWarningTitleElement: get("#boss-warning-title"),
-    bossWarningSubtitleElement: get("#boss-warning-subtitle"),
-    soundButton: get("#sound-button"),
-    soundIcon: get("#sound-icon"),
-  };
+export function getGameElements() {
+  const elements = {};
+  const missing = [];
+  for (const [name, selector] of Object.entries(SELECTORS)) {
+    const element = document.querySelector(selector);
+    if (!element) missing.push(`${selector} (${name})`);
+    elements[name] = element;
+  }
+  if (missing.length > 0) {
+    throw new Error(`Missing required page elements: ${missing.join(", ")}`);
+  }
+  return elements;
 }

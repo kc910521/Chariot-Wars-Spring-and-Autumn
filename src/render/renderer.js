@@ -714,6 +714,13 @@ export function createRenderer({ canvas, context, view, camera, world, player, s
     }
   }
 
+  // Culling keeps per-frame work proportional to what is on screen instead of
+  // the whole 2400x1600 world.
+  function inView(x, y, margin = 48) {
+    return x >= camera.x - margin && x <= camera.x + view.width + margin
+      && y >= camera.y - margin && y <= camera.y + view.height + margin;
+  }
+
   function draw() {
     if (!context || !canvas.width || !canvas.height) return;
     context.clearRect(0, 0, view.width, view.height);
@@ -726,6 +733,7 @@ export function createRenderer({ canvas, context, view, camera, world, player, s
     context.fillRect(camera.x, camera.y, view.width, view.height);
 
     for (const patch of getTerrain()) {
+      if (!inView(patch.x, patch.y, Math.max(patch.radiusX, patch.radiusY) + 8)) continue;
       context.save();
       context.translate(patch.x, patch.y);
       context.fillStyle = patch.type === "shallows" ? "rgba(91, 135, 129, 0.43)"
@@ -766,6 +774,7 @@ export function createRenderer({ canvas, context, view, camera, world, player, s
     for (let index = 0; index < 28; index += 1) {
       const ridgeX = index * 103 - 17;
       const ridgeY = (index * 137) % world.height;
+      if (!inView(ridgeX, ridgeY, 80)) continue;
       context.beginPath();
       context.ellipse(ridgeX, ridgeY, 54 + (index % 4) * 8, 15 + (index % 3) * 5, -0.14, 0, Math.PI * 2);
       context.fill();
@@ -800,6 +809,7 @@ export function createRenderer({ canvas, context, view, camera, world, player, s
     drawClouds();
 
     for (const stain of state.bloodStains) {
+      if (!inView(stain.x, stain.y, stain.width + 8)) continue;
       context.save();
       context.translate(stain.x, stain.y);
       context.rotate(stain.rotation);
@@ -815,9 +825,14 @@ export function createRenderer({ canvas, context, view, camera, world, player, s
       context.restore();
     }
 
-    for (const obstacle of getObstacles()) drawObstacle(obstacle);
+    for (const obstacle of getObstacles()) {
+      const margin = obstacle.type === "tree" ? obstacle.radius + 8 : Math.max(obstacle.width, obstacle.height);
+      if (!inView(obstacle.x, obstacle.y, margin)) continue;
+      drawObstacle(obstacle);
+    }
 
     for (const arrow of state.groundArrows) {
+      if (!inView(arrow.x, arrow.y, 16)) continue;
       const alpha = Math.min(1, arrow.life / 1.5);
       context.save();
       context.globalAlpha = alpha;
@@ -871,6 +886,7 @@ export function createRenderer({ canvas, context, view, camera, world, player, s
     }
 
     for (const drop of state.drops) {
+      if (!inView(drop.x, drop.y, 24)) continue;
       const bob = Math.sin(drop.phase) * 3;
       context.save();
       context.translate(drop.x, drop.y + bob);
@@ -936,6 +952,7 @@ export function createRenderer({ canvas, context, view, camera, world, player, s
     }
 
     for (const bullet of state.bullets) {
+      if (!inView(bullet.x, bullet.y, 40)) continue;
       const color = bullet.kind === "stone" ? "#5f3428"
         : bullet.owner === "enemy" ? "#a53b2b" : bullet.owner === "ally" ? "#718c56" : "#f1d28b";
       const height = bullet.z ?? 0;
@@ -968,13 +985,18 @@ export function createRenderer({ canvas, context, view, camera, world, player, s
       context.restore();
     }
 
-    for (const enemy of state.enemies) drawCombatant(enemy);
-    for (const companion of state.footCompanions) drawCombatant(companion, false, true);
+    for (const enemy of state.enemies) {
+      if (inView(enemy.x, enemy.y, enemy.radius + 60)) drawCombatant(enemy);
+    }
+    for (const companion of state.footCompanions) {
+      if (inView(companion.x, companion.y, companion.radius + 60)) drawCombatant(companion, false, true);
+    }
     if (player.invulnerable === 0 || Math.floor(player.invulnerable * 12) % 2 === 0) {
       drawCombatant(player, true);
     }
 
     for (const effect of state.meleeEffects) {
+      if (!inView(effect.x, effect.y, 120)) continue;
       const progress = 1 - effect.life / effect.duration;
       const radius = 18 + progress * 22;
       context.save();
@@ -1049,6 +1071,7 @@ export function createRenderer({ canvas, context, view, camera, world, player, s
     }
 
     for (const particle of state.particles) {
+      if (!inView(particle.x, particle.y, 4)) continue;
       context.globalAlpha = Math.max(0, particle.life / 0.52);
       context.fillStyle = particle.color;
       context.fillRect(particle.x, particle.y, 3, 3);

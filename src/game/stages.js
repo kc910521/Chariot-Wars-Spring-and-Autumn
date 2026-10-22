@@ -1,18 +1,21 @@
 import { battlefields } from "../data/battlefields.js";
-import { calculateChariotStats, emptyEquipment } from "../data/equipment.js";
+import {
+  calculateChariotStats, calculateHullHealth, calculateMobilityMultiplier, emptyEquipment,
+} from "../data/equipment.js";
+import { campaignRules } from "../data/rules.js";
 import { translate } from "../i18n/index.js";
+import { createRandomSeed, createSeededRandom } from "../utils/random.js";
 import { createBattlefield } from "./map.js";
 import { CHARIOT_CONTROL_CONFIG } from "./player.js";
 
 export function createStageManager({
   campaign, state, player, world, view, camera, equipmentShop,
   elements, circleIntersectsObstacle, updateHud, setMode, spawnBoss, announceBoss,
-  resizeCanvas, playTone,
+  resizeCanvas, playTone, hideBanner,
 }) {
   const {
-    bossWarningElement, shopGoldElement, shopScoreElement, shopKillsElement,
+    shopGoldElement, shopScoreElement, shopKillsElement,
     shopStageElement, shopLocationElement, shopMessageElement,
-    bossWarningTitleElement, bossWarningSubtitleElement,
   } = elements;
 
   function beginMission(isNewRun = false) {
@@ -28,17 +31,10 @@ export function createStageManager({
   }
 
   function createBattle() {
-    const seed = (Date.now() ^ Math.floor(Math.random() * 0xffffffff)) >>> 0;
-    campaign.random = () => {
-      let value = seedState.value += 0x6D2B79F5;
-      value = Math.imul(value ^ value >>> 15, value | 1);
-      value ^= value + Math.imul(value ^ value >>> 7, value | 61);
-      return ((value ^ value >>> 14) >>> 0) / 4294967296;
-    };
-    const seedState = { value: seed };
-    campaign.battlefieldIndex = Math.floor(Math.random() * battlefields.length);
+    campaign.random = createSeededRandom(createRandomSeed());
+    campaign.battlefieldIndex = Math.floor(campaign.random() * battlefields.length);
     if (battlefields.length > 1 && campaign.battlefieldIndex === campaign.lastBattlefieldIndex) {
-      campaign.battlefieldIndex = (campaign.battlefieldIndex + 1 + Math.floor(Math.random() * (battlefields.length - 1))) % battlefields.length;
+      campaign.battlefieldIndex = (campaign.battlefieldIndex + 1 + Math.floor(campaign.random() * (battlefields.length - 1))) % battlefields.length;
     }
     campaign.lastBattlefieldIndex = campaign.battlefieldIndex;
     const battlefield = createBattlefield(campaign.random, player, world, circleIntersectsObstacle);
@@ -46,12 +42,15 @@ export function createStageManager({
     campaign.terrain = battlefield.terrain;
     campaign.clouds = battlefield.clouds;
     resetMission();
-    state.bossStage = campaign.stage % 2 === 0 && campaign.stage >= 3;
+    state.bossStage = campaign.stage % campaignRules.bossStageInterval === 0
+      && campaign.stage >= campaignRules.bossStageMinimum;
     state.bossDefeated = false;
     state.boss = null;
     state.bossWarningTimer = 0;
-    bossWarningElement.hidden = true;
-    state.objectiveTarget = state.bossStage ? 1 : 8 + Math.min(campaign.stage - 1, 4) * 2;
+    hideBanner();
+    state.objectiveTarget = state.bossStage ? 1
+      : campaignRules.objectiveBase
+        + Math.min(campaign.stage - 1, campaignRules.objectiveStageCap) * campaignRules.objectiveStep;
     state.spawnTimer = 0.8;
     if (state.bossStage) spawnBoss();
     updateHud();
@@ -84,14 +83,14 @@ export function createStageManager({
     player.angle = -Math.PI / 2;
     player.speed = 0;
     const stats = calculateChariotStats(campaign.equipment, campaign.horseCount);
-    const mobilityMultiplier = 0.5 + stats.mobility * 0.05;
+    const mobilityMultiplier = calculateMobilityMultiplier(stats);
     player.maxSpeed = CHARIOT_CONTROL_CONFIG.maxSpeed * mobilityMultiplier;
     player.acceleration = CHARIOT_CONTROL_CONFIG.acceleration * mobilityMultiplier;
     player.deceleration = CHARIOT_CONTROL_CONFIG.deceleration * mobilityMultiplier;
     player.maxTurnRate = CHARIOT_CONTROL_CONFIG.maxTurnRate * mobilityMultiplier;
     player.cooldown = 0;
     player.invulnerable = 0;
-    player.maxHealth = stats.stability * 10;
+    player.maxHealth = calculateHullHealth(stats);
     player.health = player.maxHealth;
     player.mode = "chariot";
     player.type = "chariot";

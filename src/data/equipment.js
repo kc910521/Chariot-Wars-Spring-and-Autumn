@@ -1,3 +1,5 @@
+import { chariotRules } from "./rules.js";
+
 export const equipment = [
   {
     id: "weaponRack",
@@ -75,7 +77,7 @@ export const personnel = [
 export const emptyEquipment = () => Object.fromEntries(equipment.map((item) => [item.id, 0]));
 
 export function calculateChariotStats(equipmentLevels, horseCount) {
-  const values = { firepower: 3, protection: 3, mobility: 3, stability: 3, capacity: 2 };
+  const values = { ...chariotRules.baseStats };
 
   for (const item of equipment) {
     const level = item.levels[equipmentLevels[item.id] - 1];
@@ -85,8 +87,28 @@ export function calculateChariotStats(equipmentLevels, horseCount) {
   }
 
   values.mobility += horses.levels[horseCount - 1].mobilityBonus;
-  for (const stat of Object.keys(values)) values[stat] = Math.max(1, Math.min(10, values[stat]));
+  for (const stat of Object.keys(values)) {
+    values[stat] = Math.max(chariotRules.minimumStat, Math.min(chariotRules.maximumStat, values[stat]));
+  }
   return values;
+}
+
+// Derived combat values. Keeping the conversions here means HUD previews,
+// stage setup, and combat all agree on what a stat point is worth.
+export function calculateHullHealth(stats) {
+  return stats.stability * chariotRules.hullPerStability;
+}
+
+export function calculateMobilityMultiplier(stats) {
+  return chariotRules.mobilityMultiplierBase + stats.mobility * chariotRules.mobilityMultiplierPerPoint;
+}
+
+export function calculateProtectionChance(stats) {
+  return stats.protection * chariotRules.protectionChancePerPoint;
+}
+
+export function calculateArrowDamage(equipmentLevels, horseCount) {
+  return calculateChariotStats(equipmentLevels, horseCount).firepower * chariotRules.arrowDamagePerFirepower;
 }
 
 export function calculateChariotCollisionDamage(equipmentLevels) {

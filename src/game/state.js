@@ -1,4 +1,5 @@
 import { emptyEquipment } from "../data/equipment.js";
+import { createRandomSeed, createSeededRandom } from "../utils/random.js";
 import { CHARIOT_CONTROL_CONFIG } from "./player.js";
 
 export function createGameState() {
@@ -29,7 +30,8 @@ export function createGameState() {
     obstacles: [],
     terrain: [],
     clouds: [],
-    random: Math.random,
+    // Replaced with a fresh seeded stream at the start of every battle.
+    random: createSeededRandom(createRandomSeed()),
     battlefieldIndex: 0,
     lastBattlefieldIndex: -1,
     stage: 1,
@@ -64,6 +66,8 @@ export function createGameState() {
     boss: null,
     bossDefeated: false,
     bossWarningTimer: 0,
+    // Set by damagePlayer(), consumed by the renderer's red vignette.
+    damageFlash: 0,
     drops: [],
     footCompanions: [],
   };

@@ -1,3 +1,5 @@
+import { clamp } from "../utils/math.js";
+
 export const CHARIOT_CONTROL_CONFIG = Object.freeze({
   maxSpeed: 170, // Increase for a faster top speed.
   acceleration: 230, // Increase for quicker speed build-up.
@@ -11,10 +13,6 @@ export const CHARIOT_CONTROL_CONFIG = Object.freeze({
   reverseAngleTolerance: 0.5 * (Math.PI / 180), // Small tolerance for joystick and angle rounding near the threshold.
   reverseMaxSpeed: 24, // Increase for faster backward repositioning without turning.
 });
-
-function clamp(value, minimum, maximum) {
-  return Math.max(minimum, Math.min(maximum, value));
-}
 
 function approach(value, target, amount) {
   if (value < target) return Math.min(value + amount, target);

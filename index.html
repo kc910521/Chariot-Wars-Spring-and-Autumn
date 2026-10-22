@@ -6,6 +6,7 @@
     <meta name="theme-color" content="#211b16">
     <meta name="description" data-i18n-content="app.description" content="一款以春秋战国为背景的俯视角战车战斗游戏。">
     <title data-i18n="app.title">春秋战国-车之战</title>
+    <link rel="icon" href="data:,">
     <link rel="stylesheet" href="./styles/game.css">
     <script type="module" src="./src/main.js"></script>
   </head>
@@ -140,5 +141,10 @@
         <span data-i18n="app.footer">礼崩乐坏 · 群雄逐鹿</span>
       </footer>
     </main>
+    <div class="fatal-error" id="fatal-error" hidden role="alert" aria-live="assertive">
+      <strong data-i18n="app.error.title">战场中断</strong>
+      <p id="fatal-error-copy"></p>
+      <button type="button" id="fatal-error-reload" data-i18n="app.error.reload">刷新页面</button>
+    </div>
   </body>
 </html>

@@ -1,3 +1,6 @@
+import { calculateArrowDamage, getPlayerArrowCount } from "../data/equipment.js";
+import { projectileRules } from "../data/rules.js";
+
 export function createBallisticProjectile({
   x, y, angle, speed, elevation, gravity = 420, range, owner, damage, kind,
 }) {
@@ -101,4 +104,98 @@ export function updateProjectiles({ state, world, player, delta, circleIntersect
     }
   }
   state.bullets = state.bullets.filter((projectile) => projectile.life > 0);
+}
+
+// Owns every way a projectile enters or leaves the battle: player volleys,
+// crew/companion arrows, enemy shots, and the per-frame integration. Callers
+// only say *what* should be fired; trajectory and balance live here.
+export function createProjectileSystem({
+  state, player, world, campaign, collision, burst, playTone,
+  damageEnemy, damagePlayer, damageCompanion,
+}) {
+  function firePlayerVolley() {
+    const arrowCount = getPlayerArrowCount(campaign.equipment);
+    const rules = projectileRules.playerVolley;
+    const damage = calculateArrowDamage(campaign.equipment, campaign.horseCount);
+    for (let index = 0; index < arrowCount; index += 1) {
+      const angle = player.angle + (index - (arrowCount - 1) / 2) * rules.spread;
+      state.bullets.push(createBallisticProjectile({
+        x: player.x + Math.cos(angle) * rules.originOffset,
+        y: player.y + Math.sin(angle) * rules.originOffset,
+        angle,
+        speed: rules.speed,
+        elevation: rules.elevation,
+        gravity: rules.gravity,
+        range: rules.range,
+        owner: "player",
+        damage,
+        kind: "arrow",
+      }));
+    }
+    playTone(340, 0.09, "triangle", 0.018);
+  }
+
+  function fireAllyArrow({
+    x, y, targetX, targetY, damage, range, originOffset, index = 0, count = 1,
+  }) {
+    const rules = projectileRules.allyArrow;
+    const angle = Math.atan2(targetY - y, targetX - x);
+    const volleyAngle = angle + (index - (count - 1) / 2) * rules.spread;
+    const distance = Math.hypot(targetX - x, targetY - y);
+    state.bullets.push(createBallisticProjectile({
+      x: x + Math.cos(volleyAngle) * originOffset,
+      y: y + Math.sin(volleyAngle) * originOffset,
+      angle: volleyAngle,
+      speed: rules.speed,
+      elevation: solveBallisticElevation(distance, rules.speed, rules.gravity),
+      gravity: rules.gravity,
+      range,
+      owner: "ally",
+      damage,
+      kind: "arrow",
+    }));
+    playTone(390, 0.06, "sine", 0.01);
+  }
+
+  function fireEnemyShot(enemy, angle, target = player) {
+    const rules = projectileRules.enemyShot;
+    const distance = Math.hypot(enemy.x - target.x, enemy.y - target.y);
+    const isBossCatapult = Boolean(enemy.boss) && enemy.type === "catapult";
+    const kind = enemy.projectile ?? (isBossCatapult ? "stone" : "arrow");
+    const speed = enemy.projectileSpeed
+      ?? (isBossCatapult ? rules.bossStoneSpeed : kind === "stone" ? rules.stoneSpeed : rules.arrowSpeed);
+    const gravity = kind === "stone" ? rules.stoneGravity : rules.arrowGravity;
+    state.bullets.push(createBallisticProjectile({
+      x: enemy.x + Math.cos(angle) * 18,
+      y: enemy.y + Math.sin(angle) * 18,
+      angle,
+      speed,
+      elevation: solveBallisticElevation(distance, speed, gravity),
+      gravity,
+      range: enemy.projectileRange ?? (isBossCatapult ? rules.catapultRange : enemy.range),
+      owner: "enemy",
+      target,
+      damage: enemy.damage,
+      kind,
+    }));
+    enemy.shotCooldown = enemy.fireInterval
+      ?? (isBossCatapult ? rules.catapultCooldown : rules.cooldownBase + campaign.random() * rules.cooldownJitter);
+    playTone(250, 0.11, "triangle", 0.012);
+  }
+
+  function update(delta) {
+    updateProjectiles({
+      state,
+      world,
+      player,
+      delta,
+      circleIntersectsObstacle: collision.circleIntersectsObstacle,
+      damageEnemy,
+      damagePlayer,
+      damageCompanion,
+      burst,
+    });
+  }
+
+  return { firePlayerVolley, fireAllyArrow, fireEnemyShot, update };
 }

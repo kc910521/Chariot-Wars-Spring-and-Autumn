@@ -5,11 +5,13 @@ function getChariotTravelSpeed(player) {
 }
 
 export function createEnemies({
-  bossTypes, enemyStats, formationPatterns, state, player, world, getRandom,
+  bossTypes, enemyStats, formationPatterns, state, player, world, random,
   circleIntersectsObstacle, moveEntitySafely, getChariotCollisionDamage, playTone, updateHud,
   hasLineOfSight, fireEnemy, damagePlayer, damageCompanion,
 }) {
-  const random = () => getRandom()();
+  // `random` is late-bound by the caller so every gameplay roll (and the
+  // particle spray) draws from the PRNG of the battle in progress, keeping a
+  // battle reproducible from its seed.
 
   function dropLoot(enemy) {
     const roll = random();
@@ -84,10 +86,10 @@ export function createEnemies({
 
   function spawnFormation() {
     const pattern = formationPatterns[(state.formationsSpawned + state.wave - 1) % formationPatterns.length];
-    const formationId = state.elapsed + Math.random();
+    const formationId = state.elapsed + random();
     for (let attempt = 0; attempt < 8; attempt += 1) {
-      const heading = Math.random() * Math.PI * 2;
-      const distance = 390 + Math.random() * 170;
+      const heading = random() * Math.PI * 2;
+      const distance = 390 + random() * 170;
       const centerX = Math.max(130, Math.min(world.width - 130, player.x + Math.cos(heading) * distance));
       const centerY = Math.max(130, Math.min(world.height - 130, player.y + Math.sin(heading) * distance));
       const slotCoordinates = pattern.slots.map(([, slotX, slotY]) => ({
@@ -126,12 +128,12 @@ export function createEnemies({
           lastSeenX: slot.x,
           lastSeenY: slot.y,
           investigateTimer: 0,
-          shotCooldown: 0.8 + Math.random() * 1.5,
-          thinkTimer: Math.random() * 2,
+          shotCooldown: 0.8 + random() * 1.5,
+          thinkTimer: random() * 2,
           wanderAngle: heading,
           hitFlash: 0,
           contactCooldown: 0,
-          attackCooldown: 0.8 + Math.random() * 0.8,
+          attackCooldown: 0.8 + random() * 0.8,
           knockedDown: 0,
         });
       }
@@ -180,14 +182,14 @@ export function createEnemies({
 
   function burst(x, y, color) {
     for (let index = 0; index < 9; index += 1) {
-      const angle = Math.random() * Math.PI * 2;
-      const speed = 35 + Math.random() * 115;
+      const angle = random() * Math.PI * 2;
+      const speed = 35 + random() * 115;
       state.particles.push({
         x,
         y,
         vx: Math.cos(angle) * speed,
         vy: Math.sin(angle) * speed,
-        life: 0.2 + Math.random() * 0.32,
+        life: 0.2 + random() * 0.32,
         color,
       });
     }
@@ -378,8 +380,8 @@ export function createEnemies({
         } else {
           enemy.thinkTimer -= delta;
           if (enemy.thinkTimer <= 0) {
-            enemy.thinkTimer = 1.7 + Math.random() * 2;
-            enemy.wanderAngle += (Math.random() - 0.5) * 0.65;
+            enemy.thinkTimer = 1.7 + random() * 2;
+            enemy.wanderAngle += (random() - 0.5) * 0.65;
           }
           enemy.angle = enemy.wanderAngle;
         }

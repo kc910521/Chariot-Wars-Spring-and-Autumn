@@ -1991,3 +1991,58 @@ body.battle-focus {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* Boot/frame failure banner: stays visible even when the game loop has stopped. */
+.fatal-error {
+  position: fixed;
+  z-index: 40;
+  left: 50%;
+  bottom: max(20px, env(safe-area-inset-bottom));
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+  max-width: min(560px, calc(100% - 32px));
+  padding: 14px 18px;
+  border: 1px solid rgba(255, 156, 132, 0.7);
+  border-radius: 6px;
+  background: linear-gradient(120deg, rgba(92, 28, 22, 0.97), rgba(46, 22, 19, 0.96));
+  color: #ffe9d2;
+  box-shadow: 0 0 26px rgba(190, 62, 40, 0.4), 0 10px 30px rgba(0, 0, 0, 0.45);
+  transform: translateX(-50%);
+}
+
+.fatal-error[hidden] {
+  display: none;
+}
+
+.fatal-error strong {
+  font-size: 0.95rem;
+  letter-spacing: 0.04em;
+}
+
+.fatal-error p {
+  flex: 1 1 240px;
+  margin: 0;
+  color: #f0cdb4;
+  font-family: "DM Mono", ui-monospace, monospace;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.fatal-error button {
+  padding: 6px 14px;
+  border: 1px solid rgba(255, 196, 158, 0.6);
+  border-radius: 4px;
+  background: rgba(255, 226, 196, 0.12);
+  color: #ffe9d2;
+  font: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.fatal-error button:hover {
+  background: rgba(255, 226, 196, 0.22);
+}
+
