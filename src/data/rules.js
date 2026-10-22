@@ -27,6 +27,25 @@ export const projectileRules = Object.freeze({
   }),
 });
 
+export const effectRules = Object.freeze({
+  // The battlefield floor is painted #929d6d, so dust has to be a light, warm
+  // tone to read at all; the old #9b8b72 sat at ~1.15:1 contrast and vanished.
+  dust: Object.freeze({
+    colors: Object.freeze(["#e6dcc4", "#cdbfa1", "#ab9877"]),
+    count: 14,
+    sizeMin: 3,
+    sizeMax: 6,
+    lifeMin: 0.45,
+    lifeMax: 0.8,
+    spread: 72,
+    riseMin: 26,
+    riseMax: 70,
+    ring: Object.freeze({ color: "#d8cbb0", radius: 5, growth: 30, life: 0.34 }),
+  }),
+  // Fallback fade for particles that do not carry their own `maxLife`.
+  particleFadeSeconds: 0.52,
+});
+
 export const campaignRules = Object.freeze({
   bossStageInterval: 2,
   bossStageMinimum: 3,

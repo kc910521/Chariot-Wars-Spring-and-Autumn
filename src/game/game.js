@@ -143,11 +143,11 @@ function boot() {
     damagePlayer, damageCompanion,
   });
   const {
-    spawnFormation, spawnBoss, burst, addMeleeEffect, damageEnemy, updateUnits,
+    spawnFormation, spawnBoss, burst, dust, addMeleeEffect, damageEnemy, updateUnits,
   } = enemySystem;
 
   const projectiles = createProjectileSystem({
-    state, player, world, campaign, collision, burst, playTone, damageEnemy,
+    state, player, world, campaign, collision, burst, dust, playTone, damageEnemy,
     damagePlayer, damageCompanion,
   });
   projectileRef.current = projectiles;

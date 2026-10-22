@@ -1,4 +1,5 @@
 import { translate } from "../i18n/index.js";
+import { effectRules } from "../data/rules.js";
 
 export function createRenderer({ canvas, context, view, camera, world, player, state, getObstacles, getTerrain, getClouds, getHorseCount, getRoster }) {
   function roundedRect(x, y, width, height, radius) {
@@ -1071,10 +1072,26 @@ export function createRenderer({ canvas, context, view, camera, world, player, s
     }
 
     for (const particle of state.particles) {
-      if (!inView(particle.x, particle.y, 4)) continue;
-      context.globalAlpha = Math.max(0, particle.life / 0.52);
+      const size = particle.size ?? 3;
+      const reach = size + (particle.growth ?? 0);
+      if (!inView(particle.x, particle.y, reach + 8)) continue;
+      // Never divide by the old hard-coded 0.52s: dust lives longer, and an
+      // alpha above 1 is rejected by the canvas, which would freeze the fade.
+      const maxLife = particle.maxLife ?? effectRules.particleFadeSeconds;
+      const alpha = Math.min(1, Math.max(0, particle.life / maxLife));
+      if (particle.kind === "ring") {
+        const radius = size + (particle.growth ?? 0) * (1 - alpha);
+        context.globalAlpha = alpha * 0.55;
+        context.strokeStyle = particle.color;
+        context.lineWidth = 2;
+        context.beginPath();
+        context.ellipse(particle.x, particle.y, radius, radius * 0.6, 0, 0, Math.PI * 2);
+        context.stroke();
+        continue;
+      }
+      context.globalAlpha = alpha;
       context.fillStyle = particle.color;
-      context.fillRect(particle.x, particle.y, 3, 3);
+      context.fillRect(particle.x, particle.y, size, size);
     }
     context.globalAlpha = 1;
 

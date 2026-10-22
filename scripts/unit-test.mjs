@@ -7,12 +7,15 @@ import {
   calculateHullHealth, calculateMobilityMultiplier, calculateProtectionChance,
   emptyEquipment, equipment, horses, personnel,
 } from "../src/data/equipment.js";
-import { campaignRules, chariotRules } from "../src/data/rules.js";
+import { campaignRules, chariotRules, effectRules, projectileRules } from "../src/data/rules.js";
 import { addBloodStain } from "../src/game/blood.js";
 import { createCollisionSystem } from "../src/game/collision.js";
+import { bossTypes, enemyStats, formationPatterns } from "../src/data/formations.js";
 import {
-  createBallisticProjectile, solveBallisticElevation, updateProjectiles,
+  createBallisticProjectile, createProjectileSystem, solveBallisticElevation,
+  solveTimeToGround, updateProjectiles,
 } from "../src/game/projectiles.js";
+import { createEnemies } from "../src/game/units/enemies.js";
 import { createRandomSeed, createSeededRandom } from "../src/utils/random.js";
 
 let passed = 0;
@@ -202,6 +205,199 @@ test("projectiles damage the first enemy they intersect", () => {
   assert.equal(hits.length, 1);
   assert.equal(hits[0].damage, 5);
   assert.equal(state.bullets.length, 0, "spent projectile should be removed");
+});
+
+console.log("[unit] projectile impact effects");
+
+// Every ranged enemy fires with a fixed `projectileRange` while its aggro band
+// reaches further, so these cases sit at the far edge where shots used to be
+// culled in mid air above the grass.
+const rangedBands = [
+  ["archer", enemyStats.archer, [290, 320, 340, 358]],
+  ["chariot-archer", enemyStats["chariot-archer"], [350, 380, 410, 428]],
+  ["slinger", enemyStats.slinger, [400, 430, 460, 478]],
+];
+
+const arena = { width: 4000, height: 3000 };
+
+function createTestProjectiles({ state, player, dust = () => {}, burst = () => {}, extras = {} }) {
+  return createProjectileSystem({
+    state,
+    player,
+    world: arena,
+    campaign: { random: () => 0.5, equipment: {} },
+    collision: {
+      circleIntersectsObstacle: extras.circleIntersectsObstacle ?? (() => false),
+      hasLineOfSight: () => true,
+      moveEntitySafely: () => true,
+    },
+    burst,
+    dust,
+    playTone: () => {},
+    damageEnemy: extras.damageEnemy ?? (() => {}),
+    damagePlayer: extras.damagePlayer ?? (() => {}),
+    damageCompanion: extras.damageCompanion ?? (() => {}),
+  });
+}
+
+function emptyBattleState() {
+  return { bullets: [], groundArrows: [], enemies: [], footCompanions: [], particles: [] };
+}
+
+function fireTrackedShot(enemy, distance) {
+  const state = emptyBattleState();
+  const player = { x: 1500, y: 1500, radius: 17, mode: "chariot" };
+  const log = { bursts: [], dusts: [], damage: 0 };
+  const projectiles = createTestProjectiles({
+    state,
+    player,
+    burst: (x, y, color) => log.bursts.push(color),
+    dust: (x, y) => log.dusts.push({ x, y }),
+    extras: { damagePlayer: () => { log.damage += 1; } },
+  });
+  projectiles.fireEnemyShot({ ...enemy, x: player.x - distance, y: player.y }, 0, player);
+  for (let frame = 0; frame < 600 && state.bullets.length > 0; frame += 1) {
+    player.y += 1.6; // step aside so the shot has to come down somewhere
+    projectiles.update(1 / 60);
+  }
+  return { state, log };
+}
+
+test("ballistic lifetime is derived from the arc, not the aim distance", () => {
+  const speed = 420;
+  const gravity = 420;
+  const elevation = solveBallisticElevation(320, speed, gravity);
+  const vz = speed * Math.sin(elevation);
+  const analytic = solveTimeToGround({ z0: 8, vz, gravity });
+  const projectile = createBallisticProjectile({
+    x: 0, y: 0, angle: 0, speed, elevation, gravity,
+    range: 330, owner: "enemy", damage: 4, kind: "arrow",
+  });
+  assert.ok(projectile.life >= analytic, "the arc must outlive its own flight time");
+  assert.ok(projectile.life - analytic <= 1.001, "the remaining padding should stay small");
+  assert.equal(solveTimeToGround({ z0: 8, vz: 0, gravity: 0 }), Infinity);
+});
+
+test("enemy shots at every firing distance end in an impact, never mid air", () => {
+  for (const [name, enemy, distances] of rangedBands) {
+    for (const distance of distances) {
+      const label = `${name} at ${distance}px`;
+      const { state, log } = fireTrackedShot(enemy, distance);
+      assert.equal(state.bullets.length, 0, `${label}: projectile left behind`);
+      assert.equal(
+        log.bursts.length + log.dusts.length + log.damage, 1,
+        `${label}: ended without any impact effect`,
+      );
+      if (enemy.projectile === "stone") {
+        assert.equal(log.dusts.length, 1, `${label}: stone raised no dust`);
+        assert.equal(state.groundArrows.length, 0, `${label}: stones do not stick in the ground`);
+      } else {
+        assert.equal(log.bursts.length, 1, `${label}: arrow raised no impact puff`);
+        assert.equal(state.groundArrows.length, 1, `${label}: arrow left no ground decal`);
+      }
+    }
+  }
+});
+
+test("crew arrows land instead of expiring at their range cap", () => {
+  const state = emptyBattleState();
+  const player = { x: 200, y: 2400, radius: 17, mode: "chariot" };
+  const projectiles = createTestProjectiles({ state, player });
+  const rules = projectileRules.allyArrow;
+  projectiles.fireAllyArrow({
+    x: 1500,
+    y: 1500,
+    targetX: 1500 + rules.crewRange,
+    targetY: 1500,
+    damage: 4,
+    range: rules.crewRange,
+    originOffset: rules.crewOriginOffset,
+  });
+  for (let frame = 0; frame < 600 && state.bullets.length > 0; frame += 1) {
+    projectiles.update(1 / 60);
+  }
+  assert.equal(state.bullets.length, 0);
+  assert.equal(state.groundArrows.length, 1, "crew arrow vanished before landing");
+});
+
+test("stones raise dust on ground, obstacle and body impacts", () => {
+  function slingShot({ obstacle = () => false, standStill = false } = {}) {
+    const state = emptyBattleState();
+    const player = { x: 1500, y: 1500, radius: 17, mode: "chariot" };
+    const dusts = [];
+    let playerHits = 0;
+    const projectiles = createTestProjectiles({
+      state,
+      player,
+      dust: (x, y) => dusts.push({ x, y }),
+      extras: {
+        circleIntersectsObstacle: obstacle,
+        damagePlayer: () => { playerHits += 1; },
+      },
+    });
+    projectiles.fireEnemyShot({ ...enemyStats.slinger, x: player.x - 200, y: player.y }, 0, player);
+    for (let frame = 0; frame < 400 && state.bullets.length > 0; frame += 1) {
+      if (!standStill) player.y += 1.6;
+      projectiles.update(1 / 60);
+    }
+    return { dusts, playerHits, groundArrows: state.groundArrows.length };
+  }
+
+  const ground = slingShot();
+  assert.equal(ground.dusts.length, 1, "ground impact should raise dust");
+  assert.equal(ground.playerHits, 0);
+
+  const blocked = slingShot({ obstacle: () => true });
+  assert.equal(blocked.dusts.length, 1, "obstacle impact should raise dust");
+  assert.equal(blocked.groundArrows, 0);
+
+  const bodyHit = slingShot({ standStill: true });
+  assert.equal(bodyHit.playerHits, 1, "standing still should take the stone");
+  assert.equal(bodyHit.dusts.length, 1, "a stone that hits a body should still kick up dust");
+});
+
+test("dust particles carry their own lifetime and a palette that reads on grass", () => {
+  const state = {
+    particles: [], enemies: [], drops: [], footCompanions: [], bloodStains: [], meleeEffects: [],
+  };
+  const enemies = createEnemies({
+    bossTypes,
+    enemyStats,
+    formationPatterns,
+    state,
+    player: { x: 0, y: 0, radius: 17, mode: "chariot", angle: 0 },
+    world: arena,
+    random: () => 0.5,
+    circleIntersectsObstacle: () => false,
+    moveEntitySafely: () => {},
+    getChariotCollisionDamage: () => 5,
+    playTone: () => {},
+    updateHud: () => {},
+    hasLineOfSight: () => true,
+    fireEnemy: () => {},
+    damagePlayer: () => {},
+    damageCompanion: () => {},
+  });
+
+  enemies.dust(120, 240);
+  const rings = state.particles.filter((particle) => particle.kind === "ring");
+  const motes = state.particles.filter((particle) => particle.kind !== "ring");
+  assert.equal(rings.length, 1, "dust needs one ground ring");
+  assert.equal(motes.length, effectRules.dust.count);
+  assert.equal(state.particles.length, effectRules.dust.count + 1);
+  for (const particle of state.particles) {
+    // The renderer divides by `maxLife`, so a particle without it would fade at
+    // the old 0.52s rate, and life > maxLife would push alpha above 1.
+    assert.ok(particle.maxLife >= particle.life, "alpha would overflow 1");
+    assert.ok(
+      particle.color === effectRules.dust.ring.color || effectRules.dust.colors.includes(particle.color),
+      `unexpected dust tint ${particle.color}`,
+    );
+  }
+  for (const mote of motes) {
+    assert.ok(mote.size >= effectRules.dust.sizeMin && mote.size <= effectRules.dust.sizeMax);
+    assert.ok(mote.vy < 0, "dust should drift upwards");
+  }
 });
 
 console.log("[unit] blood decals");

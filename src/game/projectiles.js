@@ -1,21 +1,43 @@
 import { calculateArrowDamage, getPlayerArrowCount } from "../data/equipment.js";
 import { projectileRules } from "../data/rules.js";
 
+// Every projectile leaves the bow/hand at z = 8, so the arc has to be solved
+// from that height to know when it really touches the ground.
+const LAUNCH_HEIGHT = 8;
+
+// The integration below advances z with the *previous* velocity (explicit
+// Euler), so a long shot lands 3-9px later than the analytic solution. The
+// padding keeps the projectile alive until the z <= 0 test ends it; the number
+// itself is never the reason a ballistic shot stops.
+const BALLISTIC_LIFE_PADDING = 1;
+
+// A ballistic shot is only over when z reaches 0. Deriving `life` from the
+// parabola guarantees the integration loop outlives the arc: the old
+// `range / horizontalSpeed` budget expired 10-30px short of the ground, which
+// culled arrows and stones in mid air with no impact and no decal.
+export function solveTimeToGround({ z0 = LAUNCH_HEIGHT, vz = 0, gravity = 420 } = {}) {
+  if (gravity <= 0) return Infinity;
+  return (vz + Math.sqrt(vz * vz + 2 * gravity * z0)) / gravity;
+}
+
 export function createBallisticProjectile({
   x, y, angle, speed, elevation, gravity = 420, range, owner, damage, kind,
 }) {
   const horizontalSpeed = speed * Math.cos(elevation);
+  const vz = speed * Math.sin(elevation);
   return {
     x,
     y,
-    z: 8,
+    z: LAUNCH_HEIGHT,
     vx: Math.cos(angle) * horizontalSpeed,
     vy: Math.sin(angle) * horizontalSpeed,
-    vz: speed * Math.sin(elevation),
+    vz,
     gravity,
     range,
     travelled: 0,
-    life: range / horizontalSpeed,
+    life: gravity > 0
+      ? solveTimeToGround({ z0: LAUNCH_HEIGHT, vz, gravity }) + BALLISTIC_LIFE_PADDING
+      : range / horizontalSpeed,
     owner,
     damage,
     kind,
@@ -31,10 +53,20 @@ export function solveBallisticElevation(distance, speed, gravity = 420) {
   return Math.atan((speedSquared - Math.sqrt(discriminant)) / (gravity * distance));
 }
 
-export function updateProjectiles({ state, world, player, delta, circleIntersectsObstacle, damageEnemy, damagePlayer, damageCompanion, burst }) {
+export function updateProjectiles({
+  state, world, player, delta, circleIntersectsObstacle,
+  damageEnemy, damagePlayer, damageCompanion, burst, dust = () => {},
+}) {
+  // Every way a shot can stop looks the same from the outside: an effect at the
+  // impact point. Stones raise a dust cloud, arrows keep their small tinted puff.
+  function spawnImpact(projectile, arrowColor) {
+    if (projectile.kind === "stone") dust(projectile.x, projectile.y);
+    else burst(projectile.x, projectile.y, arrowColor);
+  }
+
   for (const projectile of state.bullets) {
     if (projectile.kind === undefined) {
-      projectile.z = 8;
+      projectile.z = LAUNCH_HEIGHT;
       projectile.radius ??= 3;
       projectile.vz = 0;
       projectile.gravity = 0;
@@ -56,8 +88,7 @@ export function updateProjectiles({ state, world, player, delta, circleIntersect
 
       if (projectile.z <= 0) {
         projectile.life = 0;
-        const impactColor = projectile.kind === "stone" ? "#9b8b72" : "#d1b77d";
-        burst(projectile.x, projectile.y, impactColor);
+        spawnImpact(projectile, "#d1b77d");
         if (projectile.kind === "arrow") {
           state.groundArrows.push({
             x: projectile.x,
@@ -69,7 +100,10 @@ export function updateProjectiles({ state, world, player, delta, circleIntersect
         }
         break;
       }
-      if (projectile.travelled >= projectile.range
+      // `range` only caps gravity-less shots (legacy straight bullets). A
+      // ballistic arc ends on its own at z = 0, and cutting it at `range`
+      // would kill it in mid air above the grass.
+      if ((projectile.gravity === 0 && projectile.travelled >= projectile.range)
         || projectile.x < 0 || projectile.x > world.width
         || projectile.y < 0 || projectile.y > world.height) {
         projectile.life = 0;
@@ -77,7 +111,7 @@ export function updateProjectiles({ state, world, player, delta, circleIntersect
       }
       if (projectile.z < 22 && circleIntersectsObstacle(projectile.x, projectile.y, projectile.radius)) {
         projectile.life = 0;
-        burst(projectile.x, projectile.y, "#a8a88a");
+        spawnImpact(projectile, "#a8a88a");
         break;
       }
 
@@ -89,6 +123,8 @@ export function updateProjectiles({ state, world, player, delta, circleIntersect
           && Math.hypot(projectile.x - unit.x, projectile.y - unit.y) < unit.radius + projectile.radius);
         if (target) {
           projectile.life = 0;
+          // A stone that hits a body still kicks up dust; an arrow does not.
+          if (projectile.kind === "stone") dust(projectile.x, projectile.y);
           if (target === player) damagePlayer(projectile.damage, projectile.x, projectile.y, true);
           else damageCompanion(target, projectile.damage, projectile.x, projectile.y);
         }
@@ -110,7 +146,7 @@ export function updateProjectiles({ state, world, player, delta, circleIntersect
 // crew/companion arrows, enemy shots, and the per-frame integration. Callers
 // only say *what* should be fired; trajectory and balance live here.
 export function createProjectileSystem({
-  state, player, world, campaign, collision, burst, playTone,
+  state, player, world, campaign, collision, burst, dust, playTone,
   damageEnemy, damagePlayer, damageCompanion,
 }) {
   function firePlayerVolley() {
@@ -194,6 +230,7 @@ export function createProjectileSystem({
       damagePlayer,
       damageCompanion,
       burst,
+      dust,
     });
   }
 

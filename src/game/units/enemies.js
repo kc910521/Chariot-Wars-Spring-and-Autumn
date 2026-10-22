@@ -1,4 +1,5 @@
 import { addBloodStain } from "../blood.js";
+import { effectRules } from "../../data/rules.js";
 
 function getChariotTravelSpeed(player) {
   return Math.abs(player.speed);
@@ -191,6 +192,42 @@ export function createEnemies({
         vy: Math.sin(angle) * speed,
         life: 0.2 + random() * 0.32,
         color,
+      });
+    }
+  }
+
+  function dust(x, y) {
+    const rules = effectRules.dust;
+    // One flattened ring sells the "something hit the ground here" beat, the
+    // squares around it are the loose soil kicked up by the impact.
+    state.particles.push({
+      kind: "ring",
+      x,
+      y,
+      vx: 0,
+      vy: 0,
+      size: rules.ring.radius,
+      growth: rules.ring.growth,
+      life: rules.ring.life,
+      maxLife: rules.ring.life,
+      color: rules.ring.color,
+    });
+    for (let index = 0; index < rules.count; index += 1) {
+      const angle = random() * Math.PI * 2;
+      const speed = 14 + random() * rules.spread;
+      const life = rules.lifeMin + random() * (rules.lifeMax - rules.lifeMin);
+      // Dust climbs instead of falling: it hangs in the air long enough to be
+      // noticed against the pale grass.
+      const rise = rules.riseMin + random() * (rules.riseMax - rules.riseMin);
+      state.particles.push({
+        x,
+        y,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed * 0.25 - rise,
+        life,
+        maxLife: life,
+        size: rules.sizeMin + random() * (rules.sizeMax - rules.sizeMin),
+        color: rules.colors[Math.floor(random() * rules.colors.length)],
       });
     }
   }
@@ -390,5 +427,5 @@ export function createEnemies({
     }
   }
 
-  return { resolveInfantryCollision, spawnFormation, spawnBoss, burst, addMeleeEffect, damageEnemy, updateUnits };
+  return { resolveInfantryCollision, spawnFormation, spawnBoss, burst, dust, addMeleeEffect, damageEnemy, updateUnits };
 }
