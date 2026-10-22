@@ -14,8 +14,8 @@ export const CHARIOT_CONTROL_CONFIG = Object.freeze({
   // Must stay above reverseMaxSpeed, otherwise the chariot leaves the lane the
   // moment it accelerates and flickers between reversing and turning.
   reverseLowSpeedThreshold: 32, // px/s; "moving slowly or standing still".
-  reverseMaxInputMagnitude: 0.45, // Joystick magnitude, i.e. 0.45 * 0.72 = 32% of the pad radius.
-  reverseAngleThreshold: 135 * (Math.PI / 180), // Lower to reverse from more diagonal angles.
+  reverseMaxInputMagnitude: 0.85, // Joystick magnitude, i.e. 0.45 * 0.72 = 32% of the pad radius.
+  reverseAngleThreshold: 120 * (Math.PI / 180), // Lower to reverse from more diagonal angles.
   reverseAngleTolerance: 0.5 * (Math.PI / 180), // Small tolerance for joystick and angle rounding near the threshold.
   reverseMaxSpeed: 24, // Below the 85 px/s ram threshold, so backing up never deals ram damage.
   // Tail-steering inside the lane: the stick aims the tail, the nose yaws after

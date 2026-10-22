@@ -36,23 +36,23 @@ export const formationPatterns = [
 ];
 
 export const enemyStats = {
-  chariot: { health: 9, radius: 20, speed: 72, damage: 20, range: 39, color: "#9c392b" },
+  chariot: { health: 14, radius: 21, speed: 75, damage: 20, range: 39, color: "#9c392b" },
   "chariot-archer": {
-    health: 6, radius: 21, speed: 60, damage: 9, range: 430, color: "#8b512d",
+    health: 8, radius: 21, speed: 80, damage: 9, range: 490, color: "#8b512d",
     ranged: true, projectile: "arrow", projectileSpeed: 430, projectileRange: 390, fireInterval: 2.3,
   },
-  spear: { health: 1, radius: 12, speed: 61, damage: 13, range: 27, color: "#b35a37" },
-  ge: { health: 2, radius: 13, speed: 53, damage: 18, range: 36, color: "#8e5436" },
+  spear: { health: 2, radius: 12, speed: 61, damage: 13, range: 35, color: "#b35a37" },
+  ge: { health: 3, radius: 13, speed: 53, damage: 18, range: 39, color: "#8e5436" },
   heavy: {
-    health: 4, radius: 16, speed: 36, damage: 22, range: 38, color: "#54504a",
+    health: 6, radius: 16, speed: 36, damage: 22, range: 27, color: "#54504a",
     armor: true, collisionDamage: false, collisionResistance: true,
   },
   archer: {
-    health: 1, radius: 12, speed: 45, damage: 10, range: 360, color: "#68784d",
+    health: 1, radius: 12, speed: 45, damage: 10, range: 460, color: "#68784d",
     ranged: true, projectile: "arrow", projectileSpeed: 420, projectileRange: 330, fireInterval: 2.1,
   },
   slinger: {
-    health: 2, radius: 13, speed: 47, damage: 14, range: 480, color: "#78634b",
+    health: 3, radius: 13, speed: 47, damage: 14, range: 330, color: "#78634b",
     ranged: true, projectile: "stone", projectileSpeed: 455, projectileRange: 430, fireInterval: 2.65,
   },
 };
@@ -62,7 +62,7 @@ export const bossTypes = [
     type: "elephant",
     nameKey: "boss.elephant.name",
     epithetKey: "boss.elephant.epithet",
-    health: 44,
+    health: 204,
     radius: 38,
     speed: 48,
     damage: 42,
@@ -73,7 +73,7 @@ export const bossTypes = [
     type: "lion",
     nameKey: "boss.lion.name",
     epithetKey: "boss.lion.epithet",
-    health: 38,
+    health: 78,
     radius: 31,
     speed: 85,
     damage: 32,
@@ -84,11 +84,12 @@ export const bossTypes = [
     type: "catapult",
     nameKey: "boss.catapult.name",
     epithetKey: "boss.catapult.epithet",
-    health: 25,
+    health: 45,
     radius: 36,
     speed: 34,
     damage: 96,
     range: 620,
+    projectile: "stone",
     color: "#70553a",
   },
 ];
