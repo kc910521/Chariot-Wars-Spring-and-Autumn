@@ -167,10 +167,11 @@ function angleGap(from, to) {
   return Math.abs(Math.atan2(Math.sin(to - from), Math.cos(to - from)));
 }
 
-function simulateSteering({ relativeDeg = 180, magnitude = 0.3, frames = 120, startSpeed = 0 } = {}) {
+function simulateSteering({ relativeDeg = 180, magnitude = 0.3, frames = 120, startSpeed = 0, tailFrames = 10 } = {}) {
+  const origin = { x: 600, y: 600 };
   const player = {
-    x: 600,
-    y: 600,
+    x: origin.x,
+    y: origin.y,
     radius: 17,
     angle: STEER_FACING,
     speed: startSpeed,
@@ -206,10 +207,18 @@ function simulateSteering({ relativeDeg = 180, magnitude = 0.3, frames = 120, st
     },
     state: { mode: "running" },
   });
-  for (let frame = 0; frame < frames; frame += 1) controller.readControls(1 / 60);
-  const travelled = Math.hypot(player.x - 600, player.y - 600);
-  const travelAngle = Math.atan2(player.y - 600, player.x - 600);
-  return { player, stickAngle, travelled, travelAngle };
+  const samples = [];
+  for (let frame = 0; frame < frames; frame += 1) {
+    controller.readControls(1 / 60);
+    samples.push({ x: player.x, y: player.y, angle: player.angle, speed: player.speed });
+  }
+  const travelled = Math.hypot(player.x - origin.x, player.y - origin.y);
+  const travelAngle = Math.atan2(player.y - origin.y, player.x - origin.x);
+  // Where the chariot is heading *after* the nose finished swinging: the
+  // direction of the run's last `tailFrames` instead of the whole chord.
+  const tail = samples[Math.max(0, samples.length - tailFrames)];
+  const tailAngle = Math.atan2(player.y - tail.y, player.x - tail.x);
+  return { player, stickAngle, travelled, travelAngle, tailAngle, samples, origin };
 }
 
 test("the reverse lane stays inside its own tuning bounds", () => {
@@ -227,6 +236,15 @@ test("the reverse lane stays inside its own tuning bounds", () => {
     CHARIOT_CONTROL_CONFIG.reverseMaxInputMagnitude < 1,
     "keyboard input contributes magnitude 1, so it must stay in the turning lane",
   );
+  assert.ok(
+    CHARIOT_CONTROL_CONFIG.reverseSteerFactor > 0
+      && CHARIOT_CONTROL_CONFIG.reverseSteerFactor < 1,
+    "tail-steering must actually move the nose yet stay slower than a normal turn",
+  );
+  assert.ok(
+    Math.PI - CHARIOT_CONTROL_CONFIG.reverseAngleThreshold <= Math.PI / 3,
+    "the steer window (180deg - threshold) has to stay a slight nudge, not a spin",
+  );
 });
 
 test("a small stick behind the nose backs up without turning", () => {
@@ -243,13 +261,67 @@ test("a small stick behind the nose backs up without turning", () => {
   );
 });
 
-test("backward diagonals reverse along the stick direction", () => {
+test("backward diagonals settle with the tail on the stick", () => {
   for (const relativeDeg of [135, 140, 160, 180]) {
-    const { player, stickAngle, travelAngle } = simulateSteering({ relativeDeg, magnitude: 0.3 });
-    assert.equal(player.angle, STEER_FACING, `facing rotated at ${relativeDeg}deg`);
+    const { player, stickAngle, tailAngle } = simulateSteering({
+      relativeDeg,
+      magnitude: 0.3,
+      frames: 180,
+    });
     assert.ok(
-      angleGap(travelAngle, stickAngle) < 0.02,
-      `expected travel along the stick at ${relativeDeg}deg, got ${travelAngle}`,
+      angleGap(player.angle, stickAngle + Math.PI) < 0.02,
+      `expected the nose opposite the stick at ${relativeDeg}deg, got ${player.angle}`,
+    );
+    assert.ok(
+      angleGap(tailAngle, stickAngle) < 0.02,
+      `expected the settled travel along the stick at ${relativeDeg}deg, got ${tailAngle}`,
+    );
+  }
+});
+
+test("the nose swings the whole lane offset behind a diagonal stick", () => {
+  const { player, stickAngle } = simulateSteering({ relativeDeg: 135, magnitude: 0.3, frames: 90 });
+  const swing = angleGap(player.angle, STEER_FACING);
+  assert.ok(
+    Math.abs(swing - Math.PI / 4) < Math.PI / 180,
+    `expected a 45deg tail swing at 135deg, got ${((swing * 180) / Math.PI).toFixed(1)}deg`,
+  );
+  assert.ok(
+    angleGap(player.angle, stickAngle + Math.PI) < 1e-6,
+    "the nose should settle exactly opposite the stick",
+  );
+});
+
+test("a diagonal reverse curves into the stick instead of snapping", () => {
+  const { samples, stickAngle, origin } = simulateSteering({
+    relativeDeg: 135,
+    magnitude: 0.3,
+    frames: 30,
+  });
+  const early = samples[9];
+  const earlyAngle = Math.atan2(early.y - origin.y, early.x - origin.x);
+  assert.ok(
+    angleGap(earlyAngle, STEER_FACING + Math.PI) < 10 * (Math.PI / 180),
+    `the first frames should still travel backwards, got ${earlyAngle}`,
+  );
+  assert.ok(
+    angleGap(earlyAngle, stickAngle) > 30 * (Math.PI / 180),
+    "a 135deg push must not snap the chariot onto the stick",
+  );
+});
+
+test("steering inside the lane never drops back into turning", () => {
+  const { samples, stickAngle } = simulateSteering({ relativeDeg: 135, magnitude: 0.3, frames: 150 });
+  const minimumGap = CHARIOT_CONTROL_CONFIG.reverseAngleThreshold
+    - CHARIOT_CONTROL_CONFIG.reverseAngleTolerance;
+  for (const sample of samples) {
+    assert.ok(
+      angleGap(sample.angle, stickAngle) >= minimumGap - 1e-9,
+      "the nose must never swing toward the stick far enough to leave the lane",
+    );
+    assert.ok(
+      Math.abs(sample.speed) <= CHARIOT_CONTROL_CONFIG.reverseMaxSpeed + 1e-9,
+      `reverse speed ${sample.speed} exceeded its cap`,
     );
   }
 });

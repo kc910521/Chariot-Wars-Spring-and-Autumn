@@ -18,6 +18,11 @@ export const CHARIOT_CONTROL_CONFIG = Object.freeze({
   reverseAngleThreshold: 135 * (Math.PI / 180), // Lower to reverse from more diagonal angles.
   reverseAngleTolerance: 0.5 * (Math.PI / 180), // Small tolerance for joystick and angle rounding near the threshold.
   reverseMaxSpeed: 24, // Below the 85 px/s ram threshold, so backing up never deals ram damage.
+  // Tail-steering inside the lane: the stick aims the tail, the nose yaws after
+  // it at this fraction of maxTurnRate (so mobility keeps scaling it) while the
+  // chariot travels along its rear axle. 0.35 -> 42 deg/s, i.e. the lane's
+  // widest offset (180 - reverseAngleThreshold = 45deg) swings in about 1.1s.
+  reverseSteerFactor: 0.35,
 });
 
 function approach(value, target, amount) {
@@ -78,15 +83,33 @@ export function createPlayerController({ player, world, keys, touchInput, moveEn
     const hasInput = inputLength > 0;
     const targetAngle = hasInput ? Math.atan2(inputY, inputX) : player.angle;
     const angleDifference = shortestAngleDifference(player.angle, targetAngle);
-    // A small stick push behind the nose reverses along the stick instead of
-    // spinning the chariot. Facing stays untouched here, so `player.angle`
-    // (firing, crew, ramming) keeps pointing where it did; the travel vector
-    // below uses `targetAngle` for this frame only.
+    // A small stick push behind the nose backs the chariot up instead of
+    // spinning it around. The stick aims the tail, so `player.angle` yaws after
+    // it slowly and the travel vector below rides the rear axle; firing, crew,
+    // and ramming all keep following the nose.
     const isReverseWithoutTurning = hasInput
       && Math.abs(player.speed) < CHARIOT_CONTROL_CONFIG.reverseLowSpeedThreshold
       && inputMagnitude <= CHARIOT_CONTROL_CONFIG.reverseMaxInputMagnitude
       && Math.abs(angleDifference) + CHARIOT_CONTROL_CONFIG.reverseAngleTolerance
         >= CHARIOT_CONTROL_CONFIG.reverseAngleThreshold;
+
+    if (isReverseWithoutTurning) {
+      // Rear-axle steering: the nose rotates toward the heading that puts the
+      // tail on the stick, capped so backing up curves instead of snapping.
+      // Aligning grows `angleDifference`, so steering can never push the
+      // chariot back out of the lane it just entered.
+      const tailBearing = targetAngle + Math.PI;
+      const bearingGap = shortestAngleDifference(player.angle, tailBearing);
+      const maximumYaw = player.maxTurnRate * (Math.PI / 180)
+        * CHARIOT_CONTROL_CONFIG.reverseSteerFactor * delta;
+      const yaw = clamp(bearingGap, -maximumYaw, maximumYaw);
+      // A stick exactly behind the nose leaves a sub-ulp gap; skipping the write
+      // keeps `player.angle` bit-identical for a plain straight reverse.
+      if (Math.abs(yaw) > 1e-9) {
+        player.angle = Math.atan2(Math.sin(player.angle + yaw), Math.cos(player.angle + yaw));
+      }
+    }
+
     let isTurning = false;
 
     if (hasInput && !isReverseWithoutTurning) {
@@ -108,7 +131,9 @@ export function createPlayerController({ player, world, keys, touchInput, moveEn
       : player.acceleration;
     player.speed = approach(player.speed, targetSpeed, speedChange * delta);
 
-    const movementAngle = isReverseWithoutTurning ? targetAngle : player.angle;
+    // Reverse travel follows the rear axle, so the chariot curves while the
+    // nose swings instead of snapping onto the stick.
+    const movementAngle = isReverseWithoutTurning ? player.angle + Math.PI : player.angle;
     const velocityX = Math.cos(movementAngle) * player.speed + player.knockbackX;
     const velocityY = Math.sin(movementAngle) * player.speed + player.knockbackY;
     const travelSpeed = Math.hypot(velocityX, velocityY);
