@@ -1,0 +1,40 @@
+- main [ref=f1e2]:
+  - generic [ref=f1e3]:
+    - 'link "Spring and Autumn: Chariot Wars home" [ref=f1e4] [cursor=pointer]':
+      - /url: ./
+      - generic [aria-hidden] [ref=f1e5]: ◆
+      - generic [ref=f1e6]: "Spring and Autumn: Chariot Wars"
+    - paragraph [ref=f1e7]: The Zhou court wanes · Warring lords rise
+    - generic [ref=f1e8]:
+      - text: Language
+      - combobox "Language" [ref=f1e9]:
+        - option "简体中文"
+        - option "English" [selected]
+    - button "Toggle sound" [ref=f1e10] [cursor=pointer]: ♫
+  - generic [ref=f1e11]:
+    - generic [ref=f1e12]: Chariot Wars
+    - paragraph [ref=f1e13]:
+      - generic [ref=f1e15]: The Zhou court wanes · Warring lords rise
+    - heading "Claim the Plains" [level=1] [ref=f1e16]:
+      - generic [ref=f1e17]: Claim the
+      - generic [ref=f1e18]: Plains
+    - paragraph [ref=f1e19]: Lead with chariots and speak with steel.Gather your crew and make your mark in a fractured age.
+    - generic [ref=f1e20]:
+      - article [ref=f1e21]:
+        - generic [aria-hidden] [ref=f1e22]: "01"
+        - strong [ref=f1e23]: Ride into battle
+        - paragraph [ref=f1e24]: Charge enemy lines and drive back rival states with crossbow and chariot.
+      - article [ref=f1e25]:
+        - generic [aria-hidden] [ref=f1e26]: "02"
+        - strong [ref=f1e27]: Gather spoils
+        - paragraph [ref=f1e28]: Collect coins, silver, and gold to fund your campaign.
+      - article [ref=f1e29]:
+        - generic [aria-hidden] [ref=f1e30]: "03"
+        - strong [ref=f1e31]: Prepare to return
+        - paragraph [ref=f1e32]: Improve your chariot, buy horses, and recruit crew before the next battlefield.
+    - button "Begin campaign" [ref=f1e33] [cursor=pointer]:
+      - generic [aria-hidden] [ref=f1e35]: →
+    - paragraph [ref=f1e36]: W / ↑ forward · S / ↓ reverse · A D / ← → steer · Space fire
+  - generic [ref=f1e37]:
+    - generic [ref=f1e38]: "Spring and Autumn: Chariot Wars"
+    - generic [ref=f1e39]: Rituals crumble · Lords contend

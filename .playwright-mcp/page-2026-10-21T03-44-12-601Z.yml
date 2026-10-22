@@ -1,0 +1,40 @@
+- main [ref=e2]:
+  - generic [ref=e3]:
+    - 'link "Spring and Autumn: Chariot Wars home" [ref=e4] [cursor=pointer]':
+      - /url: ./
+      - generic [aria-hidden] [ref=e5]: ◆
+      - generic [ref=e6]: "Spring and Autumn: Chariot Wars"
+    - paragraph [ref=e7]: The Zhou court wanes · Warring lords rise
+    - generic [ref=e8]:
+      - text: Language
+      - combobox "Language" [ref=e9]:
+        - option "简体中文"
+        - option "English" [selected]
+    - button "Toggle sound" [ref=e10] [cursor=pointer]: ♫
+  - generic [ref=e11]:
+    - generic [ref=e12]: Chariot Wars
+    - paragraph [ref=e13]:
+      - generic [ref=e15]: The Zhou court wanes · Warring lords rise
+    - heading "Claim the Plains" [level=1] [ref=e16]:
+      - generic [ref=e17]: Claim the
+      - generic [ref=e18]: Plains
+    - paragraph [ref=e19]: Lead with chariots and speak with steel.Gather your crew and make your mark in a fractured age.
+    - generic [ref=e20]:
+      - article [ref=e21]:
+        - generic [aria-hidden] [ref=e22]: "01"
+        - strong [ref=e23]: Ride into battle
+        - paragraph [ref=e24]: Charge enemy lines and drive back rival states with crossbow and chariot.
+      - article [ref=e25]:
+        - generic [aria-hidden] [ref=e26]: "02"
+        - strong [ref=e27]: Gather spoils
+        - paragraph [ref=e28]: Collect coins, silver, and gold to fund your campaign.
+      - article [ref=e29]:
+        - generic [aria-hidden] [ref=e30]: "03"
+        - strong [ref=e31]: Prepare to return
+        - paragraph [ref=e32]: Improve your chariot, buy horses, and recruit crew before the next battlefield.
+    - button "Begin campaign" [ref=e33] [cursor=pointer]:
+      - generic [aria-hidden] [ref=e35]: →
+    - paragraph [ref=e36]: W / ↑ forward · S / ↓ reverse · A D / ← → steer · Space fire
+  - generic [ref=e37]:
+    - generic [ref=e38]: "Spring and Autumn: Chariot Wars"
+    - generic [ref=e39]: Rituals crumble · Lords contend

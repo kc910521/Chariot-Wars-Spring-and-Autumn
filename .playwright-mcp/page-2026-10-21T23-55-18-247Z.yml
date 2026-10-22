@@ -1,0 +1,29 @@
+- main [ref=e2]:
+  - region "春秋战国-车之战" [ref=e38]:
+    - generic [ref=e40]:
+      - generic "春秋战国战场。战车阶段摇杆方向指向地图移动方向，战车平滑转向并沿车头行驶；松开摇杆后滑行减速。WASD模拟摇杆，空格发射弩箭；下车后WASD移动，空格近战。" [ref=e41]
+      - region "战场状态" [ref=e42]:
+        - generic [ref=e43]:
+          - generic [ref=e44]:
+            - generic [ref=e45]: 军资
+            - strong [ref=e46]: "0"
+            - generic [ref=e47]: 两
+          - generic [ref=e48]:
+            - generic [ref=e49]: 战局
+            - strong [ref=e50]: "01"
+        - generic [ref=e51]:
+          - generic [ref=e52]:
+            - generic [ref=e53]: 作战形态
+            - strong [ref=e54]: 战车
+          - generic [ref=e56]:
+            - generic [ref=e57]: 战车耐久
+            - strong [ref=e58]: "30"
+          - generic [ref=e62]:
+            - generic [ref=e63]: 本役目标
+            - strong [ref=e64]: 0 / 8
+      - button "暂停战局" [ref=e66] [cursor=pointer]:
+        - generic [ref=e67]: 鸣金休战
+      - generic "触屏操作":
+        - group "战车方向" [ref=e68]:
+          - application "方向摇杆" [ref=e69]
+        - button "弩射或近战攻击" [ref=e74]: 弩 / 击

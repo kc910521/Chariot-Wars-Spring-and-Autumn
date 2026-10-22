@@ -1,0 +1,35 @@
+- main [ref=f1e2]:
+  - 'region "Spring and Autumn: Chariot Wars" [ref=f1e40]':
+    - generic [ref=f1e42]:
+      - generic "Spring and Autumn battlefield. Drive with W and S, steer with A and D, and fire with Space. On foot, use WASD to move and Space to attack." [ref=f1e43]
+      - region "Battle status" [ref=f1e44]:
+        - generic [ref=f1e45]:
+          - generic [ref=f1e46]:
+            - generic [ref=f1e47]: Score
+            - strong [ref=f1e48]: "00000"
+          - generic [ref=f1e49]:
+            - generic [ref=f1e50]: Funds
+            - strong [ref=f1e51]: "0"
+            - generic [ref=f1e52]: coins
+          - generic [ref=f1e53]:
+            - generic [ref=f1e54]: Stage
+            - strong [ref=f1e55]: "01"
+        - generic [ref=f1e56]:
+          - generic [ref=f1e57]:
+            - generic [ref=f1e58]: Combat mode
+            - strong [ref=f1e59]: Chariot
+          - generic [ref=f1e61]:
+            - generic [ref=f1e62]: Chariot health
+            - strong [ref=f1e63]: "40"
+          - generic [ref=f1e67]:
+            - generic [ref=f1e68]: Objective
+            - strong [ref=f1e69]: 0 / 8
+      - button "Pause battle" [ref=f1e71] [cursor=pointer]:
+        - generic [ref=f1e72]: Pause
+      - generic "Touch controls":
+        - generic "Chariot steering":
+          - button "Forward" [ref=f1e73] [cursor=pointer]: ↑
+          - button "Turn left" [ref=f1e74] [cursor=pointer]: ←
+          - button "Reverse" [ref=f1e75] [cursor=pointer]: ↓
+          - button "Turn right" [ref=f1e76] [cursor=pointer]: →
+        - button "Fire or melee attack" [ref=f1e77] [cursor=pointer]: Fire / Hit
