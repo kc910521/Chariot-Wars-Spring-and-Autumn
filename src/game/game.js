@@ -2,6 +2,7 @@ import { bossTypes, enemyStats, formationPatterns } from "../data/formations.js"
 import { calculateChariotCollisionDamage } from "../data/equipment.js";
 import { campaignRules } from "../data/rules.js";
 import { createAudio } from "../assets/audio.js";
+import { launchQuery } from "../platform/launch.js";
 import { createEquipmentShop } from "./equipment.js";
 import { createEnemies } from "./units/enemies.js";
 import { createPlayerController } from "./player.js";
@@ -59,7 +60,9 @@ function boot() {
     soundButton, soundIcon, fatalErrorReloadButton,
   } = elements;
   const context = canvas.getContext("2d");
-  const { keys, touchInput, view, world, camera, player, campaign, state } = createGameState();
+  // Read once here so no engine module has to know about `location` (or `wx`).
+  const seedSource = () => launchQuery().seed;
+  const { keys, touchInput, view, world, camera, player, campaign, state } = createGameState({ seedSource });
   const playTone = createAudio(state).playTone;
   const equipmentShop = createEquipmentShop({
     campaign,
@@ -182,7 +185,7 @@ function boot() {
   }
 
   const stageManager = createStageManager({
-    campaign, state, player, world, view, camera, equipmentShop,
+    campaign, state, player, world, view, camera, equipmentShop, seedSource,
     elements: {
       shopGoldElement, shopScoreElement, shopKillsElement,
       shopStageElement, shopLocationElement, shopMessageElement,
@@ -301,7 +304,7 @@ function boot() {
   // Debug handle for QA probes and the browser checks: lets a script inspect a
   // live battle (enemies, hull, score) without scraping the HUD. Read-only by
   // convention — gameplay code never reads from it.
-  globalThis.__h5game = { state, player, campaign, world, view };
+  globalThis.__h5game = { state, player, campaign, world, view, camera };
 
   startGameLoop({
     state,

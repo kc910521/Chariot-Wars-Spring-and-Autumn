@@ -2,7 +2,10 @@ import { emptyEquipment } from "../data/equipment.js";
 import { createRandomSeed, createSeededRandom } from "../utils/random.js";
 import { CHARIOT_CONTROL_CONFIG } from "./player.js";
 
-export function createGameState() {
+// `seedSource` is injected by the composition root so the engine never reads the
+// launch query itself (that lives in src/platform/): `?seed=42` then pins every
+// battle of the session, which makes a run easy to reproduce.
+export function createGameState({ seedSource = () => null } = {}) {
   const world = { width: 2400, height: 1600 };
   const view = { width: 960, height: 592 };
   const camera = { x: 0, y: 0 };
@@ -31,7 +34,7 @@ export function createGameState() {
     terrain: [],
     clouds: [],
     // Replaced with a fresh seeded stream at the start of every battle.
-    random: createSeededRandom(createRandomSeed()),
+    random: createSeededRandom(createRandomSeed(seedSource())),
     battlefieldIndex: 0,
     lastBattlefieldIndex: -1,
     stage: 1,
@@ -52,7 +55,7 @@ export function createGameState() {
     meleeEffects: [],
     bloodStains: [],
     spawnTimer: 0,
-    lastTime: 0,
+    lastTime: 0, // Owned by the frame loop (src/game/loop.js) — nothing else may write it.
     sound: true,
     elapsed: 0,
     formations: [],

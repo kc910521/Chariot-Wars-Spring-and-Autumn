@@ -6,22 +6,75 @@ import { resolve } from "node:path";
 
 const projectRoot = resolve(import.meta.dirname, "..");
 
-const gradient = { addColorStop() {} };
+// A canvas call with a non-finite argument is the visible symptom of a poisoned
+// transform: nothing on a real device can rasterise NaN, and on 小游戏 it is what
+// ran the iPhone X out of memory. The stub used to answer every method with
+// `() => undefined`, which made those calls completely invisible.
+const nonFiniteDraws = [];
+
+function noteNonFinite(name, args) {
+  nonFiniteDraws.push(`${name}(${args.map((value) => String(value)).join(", ")})`);
+}
+
+function checkNumbers(name, args) {
+  for (const value of args) {
+    if (typeof value === "number" && !Number.isFinite(value)) {
+      noteNonFinite(name, args);
+      return;
+    }
+  }
+}
+
+// Geometry entry points: any coordinate here ends up in the rasteriser.
+const geometryCalls = new Set([
+  "translate", "rotate", "scale", "transform", "setTransform", "resetTransform",
+  "arc", "arcTo", "ellipse", "rect", "fillRect", "strokeRect", "clearRect",
+  "moveTo", "lineTo", "quadraticCurveTo", "bezierCurveTo",
+  "fillText", "strokeText", "drawImage",
+]);
+
+// Numeric style state: globalAlpha = NaN makes the whole draw a no-op, and a NaN
+// lineWidth is rejected by some engines outright.
+const numericStyles = new Set([
+  "globalAlpha", "lineWidth", "miterLimit", "shadowBlur", "shadowOffsetX", "shadowOffsetY",
+]);
+
+const gradient = {
+  addColorStop(offset, color) {
+    checkNumbers("addColorStop", [offset]);
+    void color;
+  },
+};
+
 const context2d = new Proxy({
   canvas: { width: 960, height: 592 },
   measureText: () => ({ width: 24 }),
-  createLinearGradient: () => gradient,
-  createRadialGradient: () => gradient,
-  setTransform() {},
+  createLinearGradient: (...args) => {
+    checkNumbers("createLinearGradient", args);
+    return gradient;
+  },
+  createRadialGradient: (...args) => {
+    checkNumbers("createRadialGradient", args);
+    return gradient;
+  },
   save() {},
   restore() {},
 }, {
   get(target, property) {
     if (property in target) return target[property];
     if (property === "globalAlpha") return 1;
+    if (geometryCalls.has(property)) {
+      return (...args) => {
+        checkNumbers(String(property), args);
+        return undefined;
+      };
+    }
     return () => undefined;
   },
   set(target, property, value) {
+    if (numericStyles.has(property) && typeof value === "number" && !Number.isFinite(value)) {
+      noteNonFinite(String(property), [value]);
+    }
     target[property] = value;
     return true;
   },
@@ -127,7 +180,20 @@ globalThis.window = {
 };
 
 globalThis.HTMLElement = class HTMLElement {};
-globalThis.performance = { now: () => nextFrameTime };
+
+// Browsers expose the frame source on the global object as well as on `window`,
+// and the loop deliberately resolves it from `globalThis` so one file can run
+// both in the browser and inside 小游戏.
+globalThis.requestAnimationFrame = globalThis.window.requestAnimationFrame;
+globalThis.cancelAnimationFrame = globalThis.window.cancelAnimationFrame;
+
+// Note what is deliberately NOT stubbed: `performance`. It used to be faked as
+// `{ now: () => nextFrameTime }`, which made it agree with the frame clock and
+// therefore hid the exact defect this harness now guards — stages.js stamped
+// `state.lastTime` with `performance.now()`, and on a runtime where that clock
+// differs from the rAF timestamp the first delta of a battle came out at about
+// -1.8e9. Node's real `performance` is a *foreign* clock, so any code that
+// reaches for it is caught by the clock-contract check below.
 
 // Pin the battle seed so the frame-for-frame outcome (and therefore the score
 // assertions below) is reproducible. Override with H5_SEED=<number> to explore
@@ -167,12 +233,39 @@ console.error = (...args) => {
 };
 
 await import(pathToFileURL(resolve(projectRoot, "src/main.js")).href);
+const game = globalThis.__h5game;
 check("boot scheduled the first frame", preRenderQueue.length > 0);
 check("boot reported no errors", loggedErrors.length === 0, loggedErrors[0]);
 
+// The camera is the first thing a poisoned clock destroys: it consumes the frame
+// delta directly, and once it is NaN every inView() is false and every translate
+// is non-finite.
+function checkCamera(label) {
+  const { camera, world, view } = game;
+  const maxX = world.width - view.width;
+  const maxY = world.height - view.height;
+  check(
+    `${label}: camera stays finite and inside the world`,
+    Number.isFinite(camera.x) && Number.isFinite(camera.y)
+      && camera.x >= -1 && camera.x <= maxX + 1
+      && camera.y >= -1 && camera.y <= maxY + 1,
+    `camera=${camera.x},${camera.y} bounds=${maxX}x${maxY}`,
+  );
+}
+
 runFrames(3);
+// The click handler runs beginMission() synchronously, so this is the one moment
+// at which a module stamping a second clock is still observable: the loop rewrites
+// state.lastTime on its very next frame. Equality with the harness's frame time is
+// the whole contract — the loop is the only writer of the time base.
 query("#menu-start").dispatch("click");
+check(
+  "beginMission leaves the loop's time base alone",
+  game.state.lastTime === nextFrameTime,
+  `lastTime=${game.state.lastTime} frameClock=${nextFrameTime}`,
+);
 check("menu start begins a battle", query("#battle-screen").hidden === false);
+checkCamera("battle start");
 
 // Roam and fire: the chariot turns, rams, and volleys so formations, projectiles,
 // collision damage, drops, and HUD updates all execute.
@@ -196,19 +289,27 @@ check("wave counter rendered", query("#wave").textContent.length > 0, `wave=${qu
 
 // The debug handle the game publishes lets the harness assert on live battle
 // state instead of trusting HUD text alone.
-const game = globalThis.__h5game;
 check("debug handle exposes the running battle", Boolean(game?.state) && game.state.mode === "running", `mode=${game?.state?.mode}`);
 check("battle time advanced", (game?.state.elapsed ?? 0) > 12, `elapsed=${(game?.state.elapsed ?? 0).toFixed(1)}`);
+check("battle clock stayed finite", Number.isFinite(game?.state.elapsed) && Number.isFinite(game?.state.lastTime),
+  `elapsed=${game?.state.elapsed} lastTime=${game?.state.lastTime}`);
 check("formations spawned enemies", (game?.state.enemies.length ?? 0) > 0, `enemies=${game?.state.enemies.length}`);
 check("enemy positions are finite", (game?.state.enemies ?? []).every((enemy) => Number.isFinite(enemy.x) && Number.isFinite(enemy.y)),
   `first=${game?.state.enemies?.[0]?.x},${game?.state.enemies?.[0]?.y}`);
 check("player state stayed finite", Number.isFinite(game?.player.x) && Number.isFinite(game?.player.y)
   && Number.isFinite(game?.player.health), `player=${game?.player.x},${game?.player.y} health=${game?.player.health}`);
+checkCamera("after the combat run");
+check("no non-finite geometry reached the canvas", nonFiniteDraws.length === 0, nonFiniteDraws.slice(0, 3).join(" | "));
 
 // Pause/resume via the in-battle button exercises the screens wiring.
 query("#start-button").dispatch("click");
 runFrames(30);
 query("#start-button").dispatch("click");
+check(
+  "resuming a battle leaves the loop's time base alone",
+  game.state.lastTime === nextFrameTime,
+  `lastTime=${game.state.lastTime} frameClock=${nextFrameTime}`,
+);
 runFrames(60);
 
 // Sound toggle + locale switch exercise the UI wiring that touches the shop.
@@ -218,5 +319,7 @@ select.dispatch("change");
 runFrames(60);
 
 check("no errors after UI interactions", loggedErrors.length === 0, loggedErrors[0]);
+checkCamera("after UI interactions");
+check("no non-finite geometry after UI interactions", nonFiniteDraws.length === 0, nonFiniteDraws.slice(0, 3).join(" | "));
 console.log(failures.length === 0 ? "\n[smoke] PASS" : `\n[smoke] FAIL: ${failures.join("; ")}`);
 process.exitCode = failures.length === 0 ? 0 : 1;

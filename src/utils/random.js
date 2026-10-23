@@ -1,23 +1,23 @@
 // Deterministic pseudo-random numbers (Mulberry32). Gameplay systems take a
 // generator instead of calling Math.random so a battle can be replayed from
 // its seed, while visual jitter can stay non-deterministic.
-export function createRandomSeed() {
-  const requestedSeed = readSeedFromUrl();
+
+// Seeds come from the launch query (`?seed=42` on the web, the `seed` field of
+// `wx.getLaunchOptionsSync().query` in 小游戏). Parsing stays pure here: the
+// platform layer reads the raw value, so nothing under src/utils touches `wx`.
+export function parseSeed(rawSeed) {
+  if (rawSeed === null || rawSeed === undefined) return null;
+  const seed = Number.parseInt(String(rawSeed), 10);
+  return Number.isFinite(seed) ? seed >>> 0 : null;
+}
+
+export function createRandomSeed(rawSeed = null) {
+  const requestedSeed = parseSeed(rawSeed);
   if (requestedSeed !== null) return requestedSeed;
   return (Date.now() ^ Math.floor(Math.random() * 0xffffffff)) >>> 0;
 }
 
-// `?seed=1234` pins every battle of the session, which makes a run easy to
-// reproduce for QA, bug reports, and the headless smoke test.
-function readSeedFromUrl() {
-  const search = globalThis.location?.search;
-  if (typeof search !== "string" || search.length === 0) return null;
-  const rawSeed = new URLSearchParams(search).get("seed");
-  if (rawSeed === null) return null;
-  const seed = Number.parseInt(rawSeed, 10);
-  return Number.isFinite(seed) ? seed >>> 0 : null;
-}
-
+// Mulberry32: 32-bit state, one arithmetic step per call, deterministic.
 export function createSeededRandom(seed) {
   let state = seed >>> 0;
   return () => {

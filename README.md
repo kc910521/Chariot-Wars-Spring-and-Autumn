@@ -75,8 +75,10 @@ h5game/
 │   │   └── units/
 │   │       └── enemies.js        # Enemy/boss spawning, AI, damage, and collision
 │   ├── render/
-│   │   ├── camera.js             # Player-follow camera
+│   │   ├── camera.js             # Player-follow camera (clamped delta, self-healing)
 │   │   └── renderer.js           # Canvas rendering for terrain, units, and effects
+│   ├── platform/
+│   │   └── launch.js             # Host seam: `launchQuery()` reads `?seed=` (小游戏 reads wx launch options)
 │   ├── assets/
 │   │   └── audio.js              # Centralized sound playback
 │   └── ui/
@@ -94,15 +96,19 @@ h5game/
 
 ```sh
 find src scripts \( -name '*.js' -o -name '*.mjs' \) -print0 | xargs -0 -n1 node --check   # 语法检查
-node scripts/unit-test.mjs                       # 规则、碰撞、弹道、血迹与随机数
+node scripts/unit-test.mjs                       # 规则、碰撞、弹道、血迹、相机与随机数
 node scripts/smoke-test.mjs                      # 用 stub DOM 启动 main.js 并跑战斗帧
 H5_SEED=7 node scripts/smoke-test.mjs            # 换一个随机种子复跑同一套冒烟检查
 ```
 
-`scripts/smoke-test.mjs` 以最小 DOM 桩启动真实的 `src/main.js`，跑数百帧并模拟移动与射击，用于在无浏览器环境下发现启动期与逐帧异常；它会固定 `?seed=1` 让每次运行逐帧一致，并通过 `window.__h5game` 校验敌军生成、坐标有限性与战局时间，而不只依赖 HUD 文本。它不能替代真实浏览器验收，最终仍需按上文通过 HTTP 服务运行游戏确认画面与手感。`.github/workflows/checks.yml` 在每次推送与合并请求时执行上述三条命令。
+`H5_SEED` 只用于探索性复跑：冒烟脚本用固定输入脚本驱动固定帧数，个别种子在这个窗口里还没打中目标，于是 `score advanced past zero` 会变红（改动前的 `main` 上同样如此，与本次时间基准修复无关）。CI 固定使用默认种子 1。
 
-在任意地址后加 `?seed=<数字>`（例如 `http://localhost:8000/?seed=7`）即可固定本局种子，战场、编队与掉落都会重演，便于复盘问题；`window.__h5game` 暴露 `state`、`player`、`campaign`，仅供调试脚本读取。
+`scripts/smoke-test.mjs` 以最小 DOM 桩启动真实的 `src/main.js`，跑数百帧并模拟移动与射击，用于在无浏览器环境下发现启动期与逐帧异常；它会固定 `?seed=1` 让每次运行逐帧一致，并通过 `window.__h5game` 校验敌军生成、坐标有限性与战局时间，而不只依赖 HUD 文本。canvas 桩会把任何非有限数字的绘制调用记录为失败，因此在没有浏览器的环境里也能发现 `NaN` 变换。它不能替代真实浏览器验收，最终仍需按上文通过 HTTP 服务运行游戏确认画面与手感。`.github/workflows/checks.yml` 在每次推送与合并请求时执行上述三条命令。
 
-Gameplay behavior is coordinated by `game/game.js`; specialized systems receive shared state and callbacks through small factories. `game/collision.js` owns obstacle/terrain queries, `game/combat.js` owns player fire and damage, `game/projectiles.js` owns ballistic flight and impacts, and `game/loop.js` owns the animation-frame loop with failure isolation. Collision lives in one factory so player, enemy, and projectile code share the same geometry rules.
+时间基准只有一个写入者：`src/game/loop.js` 用帧回调自身的时间戳维护 `state.lastTime`，并把每帧增量限制在 `[0, 0.05]` 秒、非有限值按 0 处理。其它模块（包括 `stages.js` 的开战流程）只读不写 `state.lastTime` —— 过去用 `performance.now()` 打时间戳会让首帧增量变成约 -1.8e9 秒，把相机推到 `-Infinity` 再变成 `NaN`（`inView()` 全部为假，小游戏 iPhone X 上直接内存溢出）。`src/render/camera.js` 也独立兜底：增量同样限幅，且一旦发现自己非有限就重新贴回目标位置。冒烟测试在开战/恢复点击后立即断言这条契约（晚一帧就会被循环覆盖），所以这两处回归都会立刻变红。
+
+在任意地址后加 `?seed=<数字>`（例如 `http://localhost:8000/?seed=7`）即可固定本局种子，战场、编队与掉落都会重演，便于复盘问题。启动参数由 `src/platform/launch.js` 的 `launchQuery()` 读取，`game.js` 只把 `seedSource` 注入 `createGameState()` 与 `createStageManager()`，`src/utils/random.js` 保持纯函数（`parseSeed()` / `createRandomSeed()`），因此引擎层不依赖 `location`、`URLSearchParams` 或 `wx`。`window.__h5game` 暴露 `state`、`player`、`campaign`、`world`、`view`、`camera`，仅供调试脚本读取。
+
+Gameplay behavior is coordinated by `game/game.js`; specialized systems receive shared state and callbacks through small factories. `game/collision.js` owns obstacle/terrain queries, `game/combat.js` owns player fire and damage, `game/projectiles.js` owns ballistic flight and impacts, and `game/loop.js` owns the animation-frame loop with failure isolation. The loop is also the only writer of the time base (`state.lastTime`), clamping every delta to `[0, 0.05]` seconds and treating non-finite values as zero; `render/camera.js` re-seats itself if it is ever handed a non-finite position, so no single bad frame can poison the view for the rest of the session. Collision lives in one factory so player, enemy, and projectile code share the same geometry rules.
 
 Random draws that affect gameplay go through `campaign.random`, a Mulberry32 stream seeded per battle by `src/utils/random.js`, so a battle can be replayed deterministically. Purely cosmetic jitter may still use `Math.random()`. The renderer skips terrain, decals, units, projectiles, and effects outside the camera view. Canvas-drawn art and synthesized tones remain the active rendering/audio paths.

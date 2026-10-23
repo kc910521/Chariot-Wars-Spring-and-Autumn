@@ -17,7 +17,8 @@ import {
   solveTimeToGround, updateProjectiles,
 } from "../src/game/projectiles.js";
 import { createEnemies } from "../src/game/units/enemies.js";
-import { createRandomSeed, createSeededRandom } from "../src/utils/random.js";
+import { createRandomSeed, createSeededRandom, parseSeed } from "../src/utils/random.js";
+import { updateCamera } from "../src/render/camera.js";
 
 let passed = 0;
 function test(name, run) {
@@ -95,6 +96,53 @@ test("personnel prices are positive and roles stay unique", () => {
   }
 });
 
+console.log("[unit] camera");
+
+const cameraWorld = { width: 2400, height: 1600 };
+const cameraView = { width: 960, height: 592 };
+
+function settledCamera(delta, player = { x: 1200, y: 800 }) {
+  const camera = { x: 0, y: 0 };
+  updateCamera({ player, world: cameraWorld, view: cameraView, camera }, delta);
+  return camera;
+}
+
+test("a normal frame eases the camera toward the player", () => {
+  const camera = settledCamera(1 / 60);
+  assert.ok(camera.x > 0 && camera.x < 720, `camera.x=${camera.x}`);
+  assert.ok(camera.y > 0 && camera.y < 504, `camera.y=${camera.y}`);
+});
+
+test("a negative or non-finite delta never moves the camera", () => {
+  // -1.8e9 is what the first frame of a battle saw when the clock was stamped
+  // from performance.now(); a negative easing would ease *away* from the player.
+  for (const delta of [-1.8e9, -0.016, NaN, Infinity, -Infinity, undefined]) {
+    const camera = settledCamera(delta);
+    assert.equal(camera.x, 0, `delta ${delta} moved camera.x to ${camera.x}`);
+    assert.equal(camera.y, 0, `delta ${delta} moved camera.y to ${camera.y}`);
+  }
+});
+
+test("a stalled frame is clamped instead of teleporting the camera", () => {
+  assert.deepEqual(settledCamera(5), settledCamera(0.05));
+});
+
+test("a poisoned camera re-seats instead of staying NaN", () => {
+  for (const poisoned of [NaN, Infinity, -Infinity]) {
+    const camera = { x: poisoned, y: poisoned };
+    updateCamera({ player: { x: 1200, y: 800 }, world: cameraWorld, view: cameraView, camera }, 1 / 60);
+    assert.equal(camera.x, 720, `camera.x=${camera.x}`);
+    assert.equal(camera.y, 504, `camera.y=${camera.y}`);
+  }
+});
+
+test("a non-finite player position cannot poison the camera", () => {
+  const camera = { x: 100, y: 100 };
+  updateCamera({ player: { x: NaN, y: 800 }, world: cameraWorld, view: cameraView, camera }, 1 / 60);
+  assert.ok(Number.isFinite(camera.x) && Number.isFinite(camera.y), `camera=${camera.x},${camera.y}`);
+  assert.equal(camera.x, 0);
+});
+
 console.log("[unit] seeded random");
 
 test("the same seed replays the same stream", () => {
@@ -112,19 +160,20 @@ test("different seeds diverge and values stay normalised", () => {
   for (const value of [...firstRun, ...secondRun]) assert.ok(value >= 0 && value < 1, `out of range: ${value}`);
 });
 
-test("a ?seed= url parameter pins the battle seed", () => {
-  const originalLocation = globalThis.location;
-  try {
-    globalThis.location = { search: "?seed=42" };
-    assert.equal(createRandomSeed(), 42);
-    globalThis.location = { search: "?seed=not-a-number" };
-    const fallback = createRandomSeed();
+test("the launch seed is parsed from a string or a number", () => {
+  assert.equal(parseSeed("42"), 42);
+  assert.equal(parseSeed(7), 7);
+  assert.equal(parseSeed("12abc"), 12, "a trailing suffix must not discard the seed");
+  assert.equal(parseSeed("-1"), 0xffffffff, "seeds are held as unsigned 32-bit values");
+});
+
+test("an unusable launch seed falls back to a random one", () => {
+  for (const raw of [null, undefined, "", "nope", "NaN", {}]) {
+    assert.equal(parseSeed(raw), null, `parseSeed(${String(raw)}) should be null`);
+    const fallback = createRandomSeed(raw);
     assert.ok(Number.isInteger(fallback) && fallback >= 0 && fallback <= 0xffffffff, `unexpected seed: ${fallback}`);
-    globalThis.location = { search: "" };
-    assert.ok(Number.isInteger(createRandomSeed()));
-  } finally {
-    globalThis.location = originalLocation;
   }
+  assert.equal(createRandomSeed("42"), 42, "a valid launch seed must win over the fallback");
 });
 
 console.log("[unit] collision");
@@ -242,7 +291,10 @@ test("the reverse lane stays inside its own tuning bounds", () => {
     "tail-steering must actually move the nose yet stay slower than a normal turn",
   );
   assert.ok(
-    Math.PI - CHARIOT_CONTROL_CONFIG.reverseAngleThreshold <= Math.PI / 3,
+    // 120deg of lane leaves a 60deg steer window, which is the tuning cap. Compare
+    // with a tolerance: Math.PI - 120 * (Math.PI / 180) lands 2.2e-16 above
+    // Math.PI / 3, so an exact comparison fails by one ulp on a legal value.
+    Math.PI - CHARIOT_CONTROL_CONFIG.reverseAngleThreshold <= Math.PI / 3 + 1e-9,
     "the steer window (180deg - threshold) has to stay a slight nudge, not a spin",
   );
 });

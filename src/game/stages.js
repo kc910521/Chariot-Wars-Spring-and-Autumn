@@ -9,7 +9,7 @@ import { createBattlefield } from "./map.js";
 import { CHARIOT_CONTROL_CONFIG } from "./player.js";
 
 export function createStageManager({
-  campaign, state, player, world, view, camera, equipmentShop,
+  campaign, state, player, world, view, camera, equipmentShop, seedSource = () => null,
   elements, circleIntersectsObstacle, updateHud, setMode, spawnBoss, announceBoss,
   resizeCanvas, playTone, hideBanner,
 }) {
@@ -31,7 +31,7 @@ export function createStageManager({
   }
 
   function createBattle() {
-    campaign.random = createSeededRandom(createRandomSeed());
+    campaign.random = createSeededRandom(createRandomSeed(seedSource()));
     campaign.battlefieldIndex = Math.floor(campaign.random() * battlefields.length);
     if (battlefields.length > 1 && campaign.battlefieldIndex === campaign.lastBattlefieldIndex) {
       campaign.battlefieldIndex = (campaign.battlefieldIndex + 1 + Math.floor(campaign.random() * (battlefields.length - 1))) % battlefields.length;
@@ -57,7 +57,6 @@ export function createStageManager({
     setMode("running");
     if (state.bossStage) announceBoss();
     resizeCanvas();
-    state.lastTime = performance.now();
   }
 
   function resetMission() {
