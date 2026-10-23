@@ -43,6 +43,7 @@ h5game/
 ├── index.html
 ├── README.md
 ├── scripts/
+│   ├── perf-test.mjs             # Frame-budget benchmark for the per-frame loops
 │   ├── smoke-test.mjs            # Boots main.js against a stub DOM and runs battle frames
 │   └── unit-test.mjs             # Rules, collision, ballistics, blood and RNG checks
 ├── styles/
@@ -103,14 +104,19 @@ h5game/
 find src scripts \( -name '*.js' -o -name '*.mjs' \) -print0 | xargs -0 -n1 node --check   # 语法检查
 node scripts/unit-test.mjs                       # 规则、碰撞、弹道、血迹、相机与随机数
 node scripts/smoke-test.mjs                      # 用 stub DOM 启动 main.js 并跑战斗帧
+node scripts/perf-test.mjs                       # 逐帧性能预算：敌军 AI、随从齐射、下车随从、弹道
 H5_SEED=7 node scripts/smoke-test.mjs            # 换一个随机种子复跑同一套冒烟检查
 ```
 
 `H5_SEED` 只用于探索性复跑：冒烟脚本用固定输入脚本驱动固定帧数，个别种子在这个窗口里还没打中目标，于是 `score advanced past zero` 会变红（改动前的 `main` 上同样如此，与本次时间基准修复无关）。CI 固定使用默认种子 1。
 
-`scripts/smoke-test.mjs` 以最小 DOM 桩启动真实的 `src/main.js`，跑数百帧并模拟移动与射击，用于在无浏览器环境下发现启动期与逐帧异常；它会固定 `?seed=1` 让每次运行逐帧一致，并通过 `window.__h5game` 校验敌军生成、坐标有限性与战局时间，而不只依赖 HUD 文本。canvas 桩会把任何非有限数字的绘制调用记录为失败，因此在没有浏览器的环境里也能发现 `NaN` 变换。它不能替代真实浏览器验收，最终仍需按上文通过 HTTP 服务运行游戏确认画面与手感。`.github/workflows/checks.yml` 在每次推送与合并请求时执行上述三条命令。
+`scripts/smoke-test.mjs` 以最小 DOM 桩启动真实的 `src/main.js`，跑数百帧并模拟移动与射击，用于在无浏览器环境下发现启动期与逐帧异常；它会固定 `?seed=1` 让每次运行逐帧一致，并通过 `window.__h5game` 校验敌军生成、坐标有限性与战局时间，而不只依赖 HUD 文本。canvas 桩会把任何非有限数字的绘制调用记录为失败，因此在没有浏览器的环境里也能发现 `NaN` 变换。它不能替代真实浏览器验收，最终仍需按上文通过 HTTP 服务运行游戏确认画面与手感。`.github/workflows/checks.yml` 在每次推送与合并请求时执行其中三条命令（语法检查、单元测试、冒烟测试）；`perf-test.mjs` 是本地预算闸门，不放进 CI，因为共享 runner 的耗时波动会让阈值误报。
 
-两次同种子的运行必须打印同样的摘要：`H5_TRACE=1` 把每帧模拟数值折叠成一个哈希，`H5_TRACE_DRAW=1` 折叠每一次 canvas 调用（并统计调用次数），`H5_TRACE_LOG=<path>` 写出逐帧数值以便定位第一个分歧帧。重构渲染或地图生成时，用它们区分“有意改变”与“顺手改坏”：只搬代码的改动应当摘要不变，换了生成规则（例如按战场分配地表成分）则应当只变一次，并在提交说明里记下新的基线。
+冒烟脚本最后还有一段“下车阶段”：先通过真实的“下一战”流程重开一场战局，买入一名弓手和一名长戈兵，再用真实的伤害路径把车体打空，于是 `dismountPlayer`、随从站位、随从寻敌与齐射都会真正跑起来。这段流程需要 HUD 之外的两个入口，因此 `window.__h5game` 额外暴露了 `combat` 与 `stageManager`（仍然只由测试脚本读取）。
+
+`scripts/perf-test.mjs` 用同一套种子化的战场（46 个障碍、四支编队、满编随从）给每帧循环计时，并把阈值写在文件顶部的 `budgets` 里：敌军 AI、弓手齐射、下车随从、30 发弹道，以及单次 `hasLineOfSight` 的微秒成本。阈值是棘轮 —— 每一项都紧贴当前实测值，性能改动落地后要把它调低，注释里记着实测数与目标数。
+
+两次同种子的运行必须打印同样的摘要：`H5_TRACE=1` 把每帧模拟数值折叠成一个哈希，`H5_TRACE_DRAW=1` 折叠每一次 canvas 调用（并统计调用次数），`H5_TRACE_LOG=<path>` 写出逐帧数值以便定位第一个分歧帧。重构渲染或地图生成时，用它们区分“有意改变”与“顺手改坏”：只搬代码的改动应当摘要不变，换了生成规则（例如按战场分配地表成分）则应当只变一次，并在提交说明里记下新的基线。摘要覆盖随从快照（血量、伤害、射程、冷却）、名册冷却和下车阶段，因此随从重构无法在“哈希不变”的情况下偷换数值。小游戏端 `scripts/headless-smoke.mjs` 用同一套字段、同一组 `H5_TRACE*` 变量输出摘要，两端可以互相对照。
 
 时间基准只有一个写入者：`src/game/loop.js` 用帧回调自身的时间戳维护 `state.lastTime`，并把每帧增量限制在 `[0, 0.05]` 秒、非有限值按 0 处理。其它模块（包括 `stages.js` 的开战流程）只读不写 `state.lastTime` —— 过去用 `performance.now()` 打时间戳会让首帧增量变成约 -1.8e9 秒，把相机推到 `-Infinity` 再变成 `NaN`（`inView()` 全部为假，小游戏 iPhone X 上直接内存溢出）。`src/render/camera.js` 也独立兜底：增量同样限幅，且一旦发现自己非有限就重新贴回目标位置。冒烟测试在开战/恢复点击后立即断言这条契约（晚一帧就会被循环覆盖），所以这两处回归都会立刻变红。
 

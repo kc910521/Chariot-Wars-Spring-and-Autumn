@@ -259,6 +259,13 @@ const TRACE_STATE_NUMBERS = [
   "bossWarningTimer", "objectiveTarget", "shake",
 ];
 const TRACE_UNIT_NUMBERS = ["x", "y", "angle", "speed", "health", "cooldown", "invulnerable"];
+// The dismounted companion carries its own snapshot of the personnel row, and
+// every one of those numbers decides where its next arrow goes: without them a
+// crew refactor that mixed up rows would still hash identically.
+const TRACE_COMPANION_NUMBERS = [
+  "x", "y", "angle", "health", "damage", "range", "cooldown", "attackCooldown",
+  "invulnerable", "hitFlash", "knockedDown",
+];
 const TRACE_ENEMY_NUMBERS = [
   "x", "y", "angle", "health", "knockedDown", "idleTimer", "idleTarget",
   "investigateTimer", "attackCooldown", "shotCooldown", "contactCooldown",
@@ -272,7 +279,7 @@ function pushNumbers(parts, object, keys) {
 function frameFingerprint() {
   const game = globalThis.__h5game;
   if (!game) return "boot";
-  const { state, player } = game;
+  const { state, player, campaign } = game;
   const parts = [state.mode, state.phase, player.mode];
   pushNumbers(parts, state, TRACE_STATE_NUMBERS);
   pushNumbers(parts, player, TRACE_UNIT_NUMBERS);
@@ -283,7 +290,16 @@ function frameFingerprint() {
   for (const formation of state.formations) parts.push(formation.id, formation.x, formation.y);
   for (const drop of state.drops) parts.push(drop.type, drop.x, drop.y, drop.value, drop.life);
   for (const bullet of state.bullets) parts.push(bullet.kind, bullet.x, bullet.y, bullet.z);
-  for (const companion of state.footCompanions) parts.push(companion.x, companion.y, companion.health);
+  for (const companion of state.footCompanions) {
+    parts.push(companion.type, companion.destroyed);
+    pushNumbers(parts, companion, TRACE_COMPANION_NUMBERS);
+  }
+  // The roster is the mounted crew: its cooldowns are the only state the volley
+  // keeps between frames.
+  for (const member of campaign.roster) {
+    parts.push(member.id, member.role, member.alive);
+    pushNumbers(parts, member, ["cooldown"]);
+  }
   for (const particle of state.particles) parts.push(particle.x, particle.y, particle.life);
   return parts.join(",");
 }
@@ -487,6 +503,74 @@ check("player state stayed finite", Number.isFinite(game?.player.x) && Number.is
   && Number.isFinite(game?.player.health), `player=${game?.player.x},${game?.player.y} health=${game?.player.health}`);
 checkCamera("after the combat run");
 check("no non-finite geometry reached the canvas", nonFiniteDraws.length === 0, nonFiniteDraws.slice(0, 3).join(" | "));
+
+// Foot phase ---------------------------------------------------------------
+// Everything above runs in the chariot, so the trace never reached the dismount,
+// the companion build, or their per-frame loop - which is exactly the code a
+// player/crew refactor rewrites. Roll a fresh battle through the production
+// "next battle" path, hire one archer and one halberdier (one of each row, so the
+// volley fan is measured over the archers alone), and die through the real
+// damage path so `dismountPlayer` runs rather than being called directly.
+game.stageManager.rollForNextBattle();
+game.campaign.roster.push({ id: 9001, role: "archer" }, { id: 9002, role: "halberdier" });
+game.campaign.nextPersonnelId = 9003;
+game.player.health = 1;
+game.player.invulnerable = 0;
+game.combat.damagePlayer(5, game.player.x + 24, game.player.y);
+const footCompanions = game.state.footCompanions;
+check("a lethal hit dismounts the chariot", game.player.mode === "foot", `mode=${game.player.mode}`);
+check("the crew deploys beside the dismounted player", footCompanions.length === 2,
+  `companions=${footCompanions.length} roster=${game.campaign.roster.length}`);
+check("each companion carries its own row's numbers",
+  footCompanions[0]?.damage === 2 && footCompanions[1]?.damage === 5,
+  `damage=${footCompanions.map((companion) => companion.damage).join(",")}`);
+
+// The hull drops to 35 on foot, which one volley ends: hold it up so the segment
+// traces the companion loop instead of finishing on the defeat screen.
+game.player.maxHealth = 400;
+game.player.health = 400;
+
+const footPhase = { allyShots: 0, seen: new WeakSet(), closest: Infinity, nonFinite: null };
+function sampleFootPhase() {
+  const state = game?.state;
+  if (!state) return;
+  for (const bullet of state.bullets) {
+    if (bullet.owner !== "ally" || footPhase.seen.has(bullet)) continue;
+    footPhase.seen.add(bullet);
+    footPhase.allyShots += 1;
+  }
+  for (const companion of state.footCompanions) {
+    if (!Number.isFinite(companion.x) || !Number.isFinite(companion.y)
+      || !Number.isFinite(companion.health) || !Number.isFinite(companion.angle)) {
+      footPhase.nonFinite ??= `${companion.type}@${companion.x},${companion.y}`;
+      continue;
+    }
+    // A fallen companion is left where it fell, which is the whole point of the
+    // follow check: only the ones still on their feet have to keep up. The metric
+    // is the *closest* companion rather than the farthest - the follow loop walks
+    // straight at its slot with no pathfinding, so one companion can snag on a
+    // wall corner while the group is fine. A broken loop would strand them all.
+    if (companion.destroyed) continue;
+    footPhase.closest = Math.min(
+      footPhase.closest,
+      Math.hypot(companion.x - game.player.x, companion.y - game.player.y),
+    );
+  }
+}
+
+// Walk the dismounted group into the lines that spawn on the fresh battle. The
+// sword also runs `firePlayer`'s foot branch, which no other block reaches.
+for (const [frameBlock, key] of [[240, "w"], [240, "d"], [240, "w"]]) {
+  dispatchWindow("keydown", { key });
+  dispatchWindow("keydown", { key: " " });
+  runFrames(frameBlock, sampleFootPhase);
+  dispatchWindow("keyup", { key });
+}
+check("the dismounted crew fired", footPhase.allyShots > 0, `ally shots=${footPhase.allyShots}`);
+check("the companions stayed with the player", footPhase.closest < 90,
+  `closest follow=${footPhase.closest.toFixed(1)}px`);
+check("companion state stayed finite", footPhase.nonFinite === null, `went ${footPhase.nonFinite}`);
+check("the foot fight did not end the battle", game.state.mode === "running", `mode=${game.state.mode}`);
 
 // Pause/resume via the in-battle button exercises the screens wiring.
 query("#start-button").dispatch("click");

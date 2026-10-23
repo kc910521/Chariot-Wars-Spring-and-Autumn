@@ -303,8 +303,12 @@ function boot() {
 
   // Debug handle for QA probes and the browser checks: lets a script inspect a
   // live battle (enemies, hull, score) without scraping the HUD. Read-only by
-  // convention — gameplay code never reads from it.
-  globalThis.__h5game = { state, player, campaign, world, view, camera };
+  // convention — gameplay code never reads from it. `combat` and `stageManager`
+  // are on it so a harness can drive a real dismount and a real next battle
+  // instead of reaching into module internals.
+  globalThis.__h5game = {
+    state, player, campaign, world, view, camera, combat, stageManager,
+  };
 
   startGameLoop({
     state,
