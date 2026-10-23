@@ -1,7 +1,14 @@
 import { translate } from "../i18n/index.js";
 import { effectRules } from "../data/rules.js";
+import { cloudDrift, elementCullMargin } from "../game/elements.js";
+import { createElementRenderer } from "./elements.js";
 
 export function createRenderer({ canvas, context, view, camera, world, player, state, getObstacles, getTerrain, getClouds, getHorseCount, getRoster }) {
+  // Obstacles, terrain patches and clouds are catalog art (src/render/elements.js):
+  // the renderer keeps the camera and the culling, the element layer keeps the
+  // silhouettes and their palettes.
+  const elements = createElementRenderer({ context });
+
   function roundedRect(x, y, width, height, radius) {
     context.beginPath();
     context.roundRect(x, y, width, height, radius);
@@ -581,164 +588,6 @@ export function createRenderer({ canvas, context, view, camera, world, player, s
     context.restore();
   }
 
-  function drawObstacle(obstacle) {
-    if (obstacle.type === "wall") {
-      context.fillStyle = "rgba(62, 41, 24, 0.2)";
-      roundedRect(obstacle.x + 5, obstacle.y + 6, obstacle.width, obstacle.height, 4);
-      context.fillStyle = "#74604a";
-      roundedRect(obstacle.x, obstacle.y, obstacle.width, obstacle.height, 4);
-      context.fillStyle = "rgba(238, 213, 164, 0.28)";
-      context.fillRect(obstacle.x + 5, obstacle.y + 5, obstacle.width - 10, 3);
-      context.strokeStyle = "rgba(55, 40, 27, 0.25)";
-      context.lineWidth = 2;
-      for (let x = obstacle.x + 24; x < obstacle.x + obstacle.width; x += 34) {
-        context.beginPath();
-        context.moveTo(x, obstacle.y + 4);
-        context.lineTo(x, obstacle.y + obstacle.height - 4);
-        context.stroke();
-      }
-    } else {
-      const { x, y, radius } = obstacle;
-      context.fillStyle = "rgba(43, 37, 25, 0.22)";
-      context.beginPath();
-      context.ellipse(x + 7, y + radius * 0.58, radius * 1.08, radius * 0.55, -0.08, 0, Math.PI * 2);
-      context.fill();
-
-      const trunkGradient = context.createLinearGradient(x - radius * 0.2, y - radius * 0.3, x + radius * 0.3, y + radius * 0.5);
-      trunkGradient.addColorStop(0, "#9a7546");
-      trunkGradient.addColorStop(0.42, "#62452e");
-      trunkGradient.addColorStop(1, "#332a20");
-      context.fillStyle = trunkGradient;
-      context.beginPath();
-      context.moveTo(x - radius * 0.28, y + radius * 0.48);
-      context.lineTo(x - radius * 0.18, y - radius * 0.36);
-      context.lineTo(x + radius * 0.2, y - radius * 0.42);
-      context.lineTo(x + radius * 0.32, y + radius * 0.48);
-      context.closePath();
-      context.fill();
-      context.strokeStyle = "rgba(42, 34, 24, 0.55)";
-      context.lineWidth = 2;
-      context.beginPath();
-      context.moveTo(x, y + radius * 0.2);
-      context.lineTo(x - radius * 0.55, y - radius * 0.3);
-      context.moveTo(x + radius * 0.05, y + radius * 0.05);
-      context.lineTo(x + radius * 0.58, y - radius * 0.48);
-      context.stroke();
-
-      const canopyGradient = context.createRadialGradient(
-        x - radius * 0.32, y - radius * 0.4, radius * 0.08,
-        x, y, radius * 1.08,
-      );
-      canopyGradient.addColorStop(0, "#a1ae78");
-      canopyGradient.addColorStop(0.42, "#728755");
-      canopyGradient.addColorStop(0.82, "#526d47");
-      canopyGradient.addColorStop(1, "#344934");
-      context.fillStyle = canopyGradient;
-      const lobes = 14;
-      const canopyPoints = Array.from({ length: lobes }, (_, index) => {
-        const angle = index * Math.PI * 2 / lobes;
-        const variation = 0.82 + ((index * 7 + Math.floor(x * 0.17) + Math.floor(y * 0.13)) % 7) * 0.045;
-        return {
-          x: x + Math.cos(angle) * radius * variation,
-          y: y + Math.sin(angle) * radius * variation * 0.8,
-        };
-      });
-      context.beginPath();
-      const first = canopyPoints[0];
-      context.moveTo((first.x + canopyPoints[lobes - 1].x) / 2, (first.y + canopyPoints[lobes - 1].y) / 2);
-      for (let index = 0; index < lobes; index += 1) {
-        const point = canopyPoints[index];
-        const next = canopyPoints[(index + 1) % lobes];
-        context.quadraticCurveTo(point.x, point.y, (point.x + next.x) / 2, (point.y + next.y) / 2);
-      }
-      context.closePath();
-      context.fill();
-      context.strokeStyle = "rgba(43, 61, 39, 0.28)";
-      context.lineWidth = 1;
-      context.stroke();
-
-      const foliageClusters = [
-        [-0.43, -0.26, 0.43, 0.31], [-0.12, -0.48, 0.42, 0.36], [0.29, -0.38, 0.44, 0.32],
-        [0.48, -0.02, 0.39, 0.34], [0.13, 0.22, 0.49, 0.35], [-0.34, 0.2, 0.4, 0.33],
-      ];
-      foliageClusters.forEach(([offsetX, offsetY, width, height], index) => {
-        const clusterX = x + (offsetX + Math.sin(index * 2 + x) * 0.035) * radius;
-        const clusterY = y + (offsetY + Math.cos(index * 1.7 + y) * 0.035) * radius;
-        const clusterWidth = width * radius;
-        const clusterHeight = height * radius;
-        const clusterGradient = context.createRadialGradient(
-          clusterX - clusterWidth * 0.24, clusterY - clusterHeight * 0.3, clusterHeight * 0.03,
-          clusterX, clusterY, clusterWidth,
-        );
-        clusterGradient.addColorStop(0, index % 2 ? "rgba(163, 179, 111, 0.78)" : "rgba(183, 188, 118, 0.72)");
-        clusterGradient.addColorStop(0.58, index % 2 ? "rgba(104, 132, 79, 0.66)" : "rgba(83, 119, 70, 0.72)");
-        clusterGradient.addColorStop(1, "rgba(49, 77, 48, 0)");
-        context.fillStyle = clusterGradient;
-        context.beginPath();
-        context.ellipse(clusterX, clusterY, clusterWidth, clusterHeight, index * 0.29, 0, Math.PI * 2);
-        context.fill();
-      });
-
-      for (let leaf = 0; leaf < 24; leaf += 1) {
-        const angle = leaf * 2.399 + x * 0.013 + y * 0.009;
-        const distance = radius * (0.12 + ((leaf * 5 + Math.floor(x + y)) % 9) * 0.072);
-        const leafX = x + Math.cos(angle) * distance;
-        const leafY = y + Math.sin(angle) * distance * 0.72;
-        context.fillStyle = leaf % 4 === 0 ? "rgba(208, 201, 139, 0.48)"
-          : leaf % 4 === 1 ? "rgba(38, 62, 42, 0.24)"
-            : leaf % 4 === 2 ? "rgba(137, 157, 97, 0.38)" : "rgba(76, 107, 63, 0.4)";
-        context.beginPath();
-        context.ellipse(leafX, leafY, radius * 0.085, radius * 0.045, angle, 0, Math.PI * 2);
-        context.fill();
-      }
-
-      context.strokeStyle = "rgba(45, 40, 29, 0.58)";
-      context.lineWidth = Math.max(1.4, radius * 0.075);
-      context.beginPath();
-      context.moveTo(x, y + radius * 0.22);
-      context.quadraticCurveTo(x + radius * 0.1, y - radius * 0.08, x - radius * 0.34, y - radius * 0.42);
-      context.moveTo(x + radius * 0.03, y + radius * 0.08);
-      context.quadraticCurveTo(x + radius * 0.14, y - radius * 0.16, x + radius * 0.42, y - radius * 0.38);
-      context.stroke();
-    }
-  }
-
-  function drawClouds() {
-    for (const cloud of getClouds()) {
-      const drift = state.elapsed * cloud.speed;
-      const x = ((cloud.x + drift) % world.width + world.width) % world.width;
-      if (x < camera.x - cloud.width || x > camera.x + view.width + cloud.width
-        || cloud.y < camera.y - cloud.height || cloud.y > camera.y + view.height + cloud.height) continue;
-      const breathe = 0.9 + Math.sin(state.elapsed * 0.35 + cloud.phase) * 0.1;
-      context.save();
-      context.globalAlpha = cloud.opacity * breathe;
-      const shadowGradient = context.createRadialGradient(x, cloud.y + cloud.height * 0.12, cloud.height * 0.08,
-        x, cloud.y + cloud.height * 0.12, cloud.width * 0.7);
-      shadowGradient.addColorStop(0, "rgba(56, 66, 52, 0.72)");
-      shadowGradient.addColorStop(0.58, "rgba(67, 75, 58, 0.38)");
-      shadowGradient.addColorStop(1, "rgba(77, 80, 62, 0)");
-      context.fillStyle = shadowGradient;
-      context.beginPath();
-      context.ellipse(x, cloud.y + cloud.height * 0.1, cloud.width * 0.68, cloud.height * 0.62, -0.06, 0, Math.PI * 2);
-      context.fill();
-      context.globalAlpha = cloud.opacity * breathe * 0.7;
-      context.fillStyle = "#e0deca";
-      context.beginPath();
-      context.ellipse(x - cloud.width * 0.28, cloud.y + cloud.height * 0.03, cloud.width * 0.3, cloud.height * 0.34, -0.12, 0, Math.PI * 2);
-      context.ellipse(x - cloud.width * 0.04, cloud.y - cloud.height * 0.1, cloud.width * 0.34, cloud.height * 0.48, -0.06, 0, Math.PI * 2);
-      context.ellipse(x + cloud.width * 0.24, cloud.y, cloud.width * 0.31, cloud.height * 0.37, 0.08, 0, Math.PI * 2);
-      context.ellipse(x + cloud.width * 0.02, cloud.y + cloud.height * 0.12, cloud.width * 0.43, cloud.height * 0.28, 0, 0, Math.PI * 2);
-      context.fill();
-      context.globalAlpha = cloud.opacity * breathe * 0.24;
-      context.strokeStyle = "#fff3d4";
-      context.lineWidth = Math.max(2, cloud.height * 0.065);
-      context.beginPath();
-      context.ellipse(x - cloud.width * 0.04, cloud.y - cloud.height * 0.1, cloud.width * 0.34, cloud.height * 0.48, -0.06, Math.PI * 1.08, Math.PI * 1.9);
-      context.stroke();
-      context.restore();
-    }
-  }
-
   // Culling keeps per-frame work proportional to what is on screen instead of
   // the whole 2400x1600 world.
   function inView(x, y, margin = 48) {
@@ -759,40 +608,7 @@ export function createRenderer({ canvas, context, view, camera, world, player, s
 
     for (const patch of getTerrain()) {
       if (!inView(patch.x, patch.y, Math.max(patch.radiusX, patch.radiusY) + 8)) continue;
-      context.save();
-      context.translate(patch.x, patch.y);
-      context.fillStyle = patch.type === "shallows" ? "rgba(91, 135, 129, 0.43)"
-        : patch.type === "sand" ? "rgba(190, 153, 92, 0.38)" : "rgba(105, 121, 67, 0.32)";
-      context.beginPath();
-      context.ellipse(0, 0, patch.radiusX, patch.radiusY, 0, 0, Math.PI * 2);
-      context.fill();
-      context.strokeStyle = patch.type === "shallows" ? "rgba(188, 218, 200, 0.38)"
-        : patch.type === "sand" ? "rgba(235, 205, 146, 0.36)" : "rgba(189, 198, 128, 0.32)";
-      context.lineWidth = 2;
-      if (patch.type === "shallows") {
-        for (let line = -2; line <= 2; line += 1) {
-          context.beginPath();
-          context.ellipse(0, line * patch.radiusY * 0.24, patch.radiusX * 0.72, patch.radiusY * 0.12, 0, 0.1, Math.PI - 0.1);
-          context.stroke();
-        }
-      } else if (patch.type === "sand") {
-        for (let line = -2; line <= 2; line += 1) {
-          context.beginPath();
-          context.moveTo(-patch.radiusX * 0.55, line * 13);
-          context.lineTo(patch.radiusX * 0.55, line * 13 - 7);
-          context.stroke();
-        }
-      } else {
-        for (let blade = 0; blade < 18; blade += 1) {
-          const x = Math.sin(blade * 17.1) * patch.radiusX * 0.7;
-          const y = Math.cos(blade * 9.7) * patch.radiusY * 0.6;
-          context.beginPath();
-          context.moveTo(x, y + 4);
-          context.lineTo(x - 2, y - 4);
-          context.stroke();
-        }
-      }
-      context.restore();
+      elements.drawTerrain(patch);
     }
 
     context.fillStyle = "rgba(75, 83, 52, 0.055)";
@@ -831,7 +647,12 @@ export function createRenderer({ canvas, context, view, camera, world, player, s
       }
     }
 
-    drawClouds();
+    for (const cloud of getClouds()) {
+      const x = cloudDrift(cloud, state.elapsed, world.width);
+      if (x < camera.x - cloud.width || x > camera.x + view.width + cloud.width
+        || cloud.y < camera.y - cloud.height || cloud.y > camera.y + view.height + cloud.height) continue;
+      elements.drawCloud(cloud, x, state.elapsed);
+    }
 
     for (const stain of state.bloodStains) {
       if (!inView(stain.x, stain.y, stain.width + 8)) continue;
@@ -851,9 +672,8 @@ export function createRenderer({ canvas, context, view, camera, world, player, s
     }
 
     for (const obstacle of getObstacles()) {
-      const margin = obstacle.type === "tree" ? obstacle.radius + 8 : Math.max(obstacle.width, obstacle.height);
-      if (!inView(obstacle.x, obstacle.y, margin)) continue;
-      drawObstacle(obstacle);
+      if (!inView(obstacle.x, obstacle.y, elementCullMargin(obstacle))) continue;
+      elements.drawObstacle(obstacle);
     }
 
     for (const arrow of state.groundArrows) {

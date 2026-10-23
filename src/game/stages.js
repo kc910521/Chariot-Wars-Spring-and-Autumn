@@ -37,7 +37,10 @@ export function createStageManager({
       campaign.battlefieldIndex = (campaign.battlefieldIndex + 1 + Math.floor(campaign.random() * (battlefields.length - 1))) % battlefields.length;
     }
     campaign.lastBattlefieldIndex = campaign.battlefieldIndex;
-    const battlefield = createBattlefield(campaign.random, player, world, circleIntersectsObstacle);
+    const definition = battlefields[campaign.battlefieldIndex];
+    const battlefield = createBattlefield(
+      campaign.random, player, world, circleIntersectsObstacle, definition.mix,
+    );
     campaign.obstacles = battlefield.obstacles;
     campaign.terrain = battlefield.terrain;
     campaign.clouds = battlefield.clouds;
@@ -145,6 +148,7 @@ export function createStageManager({
     shopStageElement.textContent = String(campaign.stage);
     shopLocationElement.textContent = translate("shop.location", {
       battlefield: translate(battlefields[campaign.battlefieldIndex].nameKey),
+      terrain: translate(battlefields[campaign.battlefieldIndex].terrainKey),
     });
     shopMessageElement.textContent = translate("shop.message");
     equipmentShop.render();

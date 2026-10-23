@@ -1,8 +1,9 @@
 import { addBloodStain } from "../blood.js";
 import { effectRules } from "../../data/rules.js";
 import { clamp, shortestAngleDifference } from "../../utils/math.js";
+import { rectHitsAnyObstacle, rectTerrain } from "../elements.js";
 import { createBehaviours } from "./behaviours.js";
-import { FORMATION_MARGIN, leashPoint, updateFormationAlerts } from "./formations.js";
+import { formationExtent, formationGroundExtent, leashPoint, updateFormationAlerts } from "./formations.js";
 
 const SEPARATION_MIN_OVERLAP = 2;
 // How many sweeps `separateEnemies` may take to settle a crowd: one sweep only
@@ -23,12 +24,18 @@ const IDLE_THINK_MIN = 2.6; // Seconds between new headings: longer than the old
 const IDLE_THINK_SPAN = 3.2; // 1.7-3.7s, i.e. a new heading every 2.6-5.8s.
 const IDLE_TURN_RATE = 1.7; // rad/s cap, so a full scan swings in ~0.4s.
 
+// How many places a formation looks at before settling. The scan keeps the best
+// ground it has seen instead of taking the first clear patch, so this is a search
+// budget rather than a retry count: a wall in the annulus it searches costs an
+// attempt, not the spawn.
+const FORMATION_SPAWN_ATTEMPTS = 96;
+
 function getChariotTravelSpeed(player) {
   return Math.abs(player.speed);
 }
 
 export function createEnemies({
-  bossTypes, enemyStats, formationPatterns, state, player, world, random,
+  bossTypes, enemyStats, formationPatterns, state, player, world, campaign, random,
   circleIntersectsObstacle, moveEntitySafely, getChariotCollisionDamage, playTone, updateHud,
   hasLineOfSight, fireEnemy, damagePlayer, damageCompanion,
 }) {
@@ -107,73 +114,117 @@ export function createEnemies({
     }
   }
 
+  function layoutSlots(pattern, centerX, centerY, heading) {
+    return pattern.slots.map(([, slotX, slotY]) => ({
+      x: centerX + slotX * Math.cos(heading) - slotY * Math.sin(heading),
+      y: centerY + slotX * Math.sin(heading) + slotY * Math.cos(heading),
+    }));
+  }
+
+  // A formation spawns on the best ground its attempt budget finds, not on the
+  // first patch that looks clear: dry beats uniform beats merely clear, and the old
+  // slot-centre rule - which accepts a palisade standing *between* two ranks - is
+  // the last rung, kept only so that a pathological map still spawns something.
   function spawnFormation() {
     const pattern = formationPatterns[(state.formationsSpawned + state.wave - 1) % formationPatterns.length];
     const formationId = state.elapsed + random();
-    // The rect is both the renderer's footprint and the ground this formation
-    // reserves, so it spans the leash envelope its units may occupy.
-    const halfWidth = Math.max(...pattern.slots.map(([, slotX]) => Math.abs(slotX))) + FORMATION_MARGIN;
-    const halfHeight = Math.max(...pattern.slots.map(([, , slotY]) => Math.abs(slotY))) + FORMATION_MARGIN;
-    for (let attempt = 0; attempt < 8; attempt += 1) {
+    // Two rects on purpose: the wider one is what the renderer dashes and what a
+    // new formation reserves, the tighter one is the ground the ranks stand on.
+    const { halfWidth, halfHeight } = formationExtent(pattern);
+    const clearance = formationGroundExtent(pattern);
+    let uniform = null;
+    let clear = null;
+    let legacy = null;
+    for (let attempt = 0; attempt < FORMATION_SPAWN_ATTEMPTS; attempt += 1) {
       const heading = random() * Math.PI * 2;
       const distance = 390 + random() * 170;
       const centerX = Math.max(130, Math.min(world.width - 130, player.x + Math.cos(heading) * distance));
       const centerY = Math.max(130, Math.min(world.height - 130, player.y + Math.sin(heading) * distance));
-      const slotCoordinates = pattern.slots.map(([, slotX, slotY]) => ({
-        x: centerX + slotX * Math.cos(heading) - slotY * Math.sin(heading),
-        y: centerY + slotX * Math.sin(heading) + slotY * Math.cos(heading),
-      }));
-      if (slotCoordinates.some((slot) => circleIntersectsObstacle(slot.x, slot.y, 20))) continue;
+      const slotCoordinates = layoutSlots(pattern, centerX, centerY, heading);
       if (slotCoordinates.some((slot) => Math.hypot(slot.x - player.x, slot.y - player.y) < 310)) continue;
       // Two formations spawned on the same ground interpenetrate for their whole
       // lifetime, which reads as infantry flickering over each other.
       if (state.formations.some((other) => Math.abs(other.x - centerX) < other.halfWidth + halfWidth
         && Math.abs(other.y - centerY) < other.halfHeight + halfHeight)) continue;
 
-      const formation = {
-        id: formationId,
-        nameKey: pattern.nameKey,
-        x: centerX,
-        y: centerY,
-        heading,
-        halfWidth,
-        halfHeight,
-        color: "#a74732",
-        // Latched by `updateFormationAlerts` before the first unit thinks.
-        alerted: false,
+      const candidate = {
+        pattern, formationId, centerX, centerY, heading, halfWidth, halfHeight, slotCoordinates,
+        groundTier: "dry",
       };
-      state.formations.push(formation);
-      state.formationsSpawned += 1;
-      for (const [index, [type, slotX, slotY]] of pattern.slots.entries()) {
-        const slot = slotCoordinates[index];
-        const stats = { ...enemyStats[type] };
-        state.enemies.push({
-          ...stats,
-          type,
-          maxHealth: stats.health,
-          x: slot.x,
-          y: slot.y,
-          angle: heading,
-          homeX: slot.x,
-          homeY: slot.y,
-          formationId,
-          seesPlayer: false,
-          lastSeenX: slot.x,
-          lastSeenY: slot.y,
-          investigateTimer: 0,
-          shotCooldown: 0.8 + random() * 1.5,
-          homeAngle: heading,
-          // A full-strength random phase, so a formation does not re-roll every
-          // unit's heading on the same frame and twitch in unison.
-          idleTarget: heading,
-          idleTimer: random() * (IDLE_THINK_MIN + IDLE_THINK_SPAN),
-          hitFlash: 0,
-          contactCooldown: 0,
-          attackCooldown: 0.8 + random() * 0.8,
-          knockedDown: 0,
-        });
+      // The ranks, not the leash envelope: a wall at the outer edge of the dashed
+      // border touches nothing a unit stands on.
+      if (!rectHitsAnyObstacle(centerX, centerY, clearance.halfWidth, clearance.halfHeight, heading, campaign.obstacles)) {
+        const footing = rectTerrain(centerX, centerY, clearance.halfWidth, clearance.halfHeight, heading, campaign.terrain);
+        if (footing.dry) {
+          commitFormation(candidate);
+          return;
+        }
+        // A seam under the line means two ranks moving at two speeds, so it is kept
+        // only if nothing better turns up: one dry patch is worth the rest of the
+        // budget.
+        candidate.groundTier = footing.uniform ? "uniform" : "clear";
+        if (footing.uniform) uniform ??= candidate;
+        else clear ??= candidate;
+        continue;
       }
-      return;
+      // The old rule: every slot centre is free, even if a wall between two slots
+      // is not. Nothing has needed this rung since the footprint test landed.
+      if (slotCoordinates.some((slot) => circleIntersectsObstacle(slot.x, slot.y, 20))) continue;
+      candidate.groundTier = "legacy";
+      legacy ??= candidate;
+    }
+    const chosen = uniform ?? clear ?? legacy;
+    if (chosen) commitFormation(chosen);
+  }
+
+  function commitFormation({
+    pattern, formationId, centerX, centerY, heading, halfWidth, halfHeight, slotCoordinates, groundTier,
+  }) {
+    const formation = {
+      id: formationId,
+      nameKey: pattern.nameKey,
+      x: centerX,
+      y: centerY,
+      heading,
+      halfWidth,
+      halfHeight,
+      color: "#a74732",
+      // Latched by `updateFormationAlerts` before the first unit thinks.
+      alerted: false,
+      // Which rung of the spawn ladder placed this line; the tests pin the count of
+      // `legacy` spawns at zero.
+      groundTier,
+    };
+    state.formations.push(formation);
+    state.formationsSpawned += 1;
+    for (const [index, [type, slotX, slotY]] of pattern.slots.entries()) {
+      const slot = slotCoordinates[index];
+      const stats = { ...enemyStats[type] };
+      state.enemies.push({
+        ...stats,
+        type,
+        maxHealth: stats.health,
+        x: slot.x,
+        y: slot.y,
+        angle: heading,
+        homeX: slot.x,
+        homeY: slot.y,
+        formationId,
+        seesPlayer: false,
+        lastSeenX: slot.x,
+        lastSeenY: slot.y,
+        investigateTimer: 0,
+        shotCooldown: 0.8 + random() * 1.5,
+        homeAngle: heading,
+        // A full-strength random phase, so a formation does not re-roll every
+        // unit's heading on the same frame and twitch in unison.
+        idleTarget: heading,
+        idleTimer: random() * (IDLE_THINK_MIN + IDLE_THINK_SPAN),
+        hitFlash: 0,
+        contactCooldown: 0,
+        attackCooldown: 0.8 + random() * 0.8,
+        knockedDown: 0,
+      });
     }
   }
 

@@ -23,6 +23,32 @@ const GUARD_BRACE_RANGE = 200;
 // span the whole leash envelope or units legitimately poke out of their border.
 export const FORMATION_MARGIN = 54;
 
+// Ground clearance: the ranks have to stand on clear, uniform footing, so the box
+// tested at spawn time is the slots themselves plus a margin for the bodies
+// standing on them - not the wider leash envelope the renderer dashes, which a
+// wall at its very edge may legitimately touch.
+export const FORMATION_GROUND_MARGIN = 26;
+
+function slotExtent(pattern, margin) {
+  return {
+    halfWidth: Math.max(...pattern.slots.map(([, slotX]) => Math.abs(slotX))) + margin,
+    halfHeight: Math.max(...pattern.slots.map(([, , slotY]) => Math.abs(slotY))) + margin,
+  };
+}
+
+// The rect a formation reserves, in its own frame: the farthest slot in each
+// direction plus the leash envelope. Both the renderer's border and the ground
+// test use this one function, so a line can never be drawn wider than the ground
+// it was cleared for.
+export function formationExtent(pattern) {
+  return slotExtent(pattern, FORMATION_MARGIN);
+}
+
+// The rect the spawner asks about: everything the ranks themselves occupy.
+export function formationGroundExtent(pattern) {
+  return slotExtent(pattern, FORMATION_GROUND_MARGIN);
+}
+
 // How far a leashed unit may stray from the slot it spawned on. It widens a
 // little as the player closes in, so the line braces forward instead of
 // standing still, and it is measured from the slot rather than from the unit:

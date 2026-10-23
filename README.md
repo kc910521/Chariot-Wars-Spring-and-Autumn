@@ -56,7 +56,8 @@ h5game/
 │   │   ├── math.js               # Shared clamp and distance helpers
 │   │   └── random.js             # Seeded PRNG for reproducible battles
 │   ├── data/
-│   │   ├── battlefields.js       # Battlefield names and terrain
+│   │   ├── battlefields.js       # Battlefield names, ground labels and per-map element mixes
+│   │   ├── elements.js           # Map element catalog: one row per obstacle, terrain and cloud kind
 │   │   ├── equipment.js          # Equipment, horse and personnel values; derived stat helpers
 │   │   ├── formations.js         # Formation patterns and unit/boss stats
 │   │   └── rules.js              # Balance constants for stats, projectiles, impact effects and campaign pacing
@@ -64,9 +65,10 @@ h5game/
 │   │   ├── game.js               # Composition root: wires systems and owns the frame loop
 │   │   ├── loop.js               # requestAnimationFrame loop with failure isolation
 │   │   ├── state.js              # Player, campaign, and battle state creation
-│   │   ├── map.js                # Procedural battlefield generation
+│   │   ├── map.js                # Procedural battlefield scatter, driven by the element catalog
 │   │   ├── stages.js             # Campaign stages, objectives, extraction, progression
 │   │   ├── collision.js          # Obstacle/terrain collision, movement clamping, line of sight
+│   │   ├── elements.js           # Element runtime: shapes, sight, movement cost, drift, footprint queries
 │   │   ├── combat.js             # Player fire, crew attacks, damage, dismounting
 │   │   ├── player.js             # Steering and player movement
 │   │   ├── projectiles.js        # Ballistic projectile creation, arcs, and collision
@@ -78,6 +80,7 @@ h5game/
 │   │       └── formations.js     # Formation geometry: slot leash, alert footprint, chase envelope
 │   ├── render/
 │   │   ├── camera.js             # Player-follow camera (clamped delta, self-healing)
+│   │   ├── elements.js           # Element art: palisades, canopies, terrain patterns, cloud puffs
 │   │   └── renderer.js           # Canvas rendering for terrain, units, and effects
 │   ├── platform/
 │   │   └── launch.js             # Host seam: `launchQuery()` reads `?seed=` (小游戏 reads wx launch options)
@@ -107,10 +110,16 @@ H5_SEED=7 node scripts/smoke-test.mjs            # 换一个随机种子复跑�
 
 `scripts/smoke-test.mjs` 以最小 DOM 桩启动真实的 `src/main.js`，跑数百帧并模拟移动与射击，用于在无浏览器环境下发现启动期与逐帧异常；它会固定 `?seed=1` 让每次运行逐帧一致，并通过 `window.__h5game` 校验敌军生成、坐标有限性与战局时间，而不只依赖 HUD 文本。canvas 桩会把任何非有限数字的绘制调用记录为失败，因此在没有浏览器的环境里也能发现 `NaN` 变换。它不能替代真实浏览器验收，最终仍需按上文通过 HTTP 服务运行游戏确认画面与手感。`.github/workflows/checks.yml` 在每次推送与合并请求时执行上述三条命令。
 
+两次同种子的运行必须打印同样的摘要：`H5_TRACE=1` 把每帧模拟数值折叠成一个哈希，`H5_TRACE_DRAW=1` 折叠每一次 canvas 调用（并统计调用次数），`H5_TRACE_LOG=<path>` 写出逐帧数值以便定位第一个分歧帧。重构渲染或地图生成时，用它们区分“有意改变”与“顺手改坏”：只搬代码的改动应当摘要不变，换了生成规则（例如按战场分配地表成分）则应当只变一次，并在提交说明里记下新的基线。
+
 时间基准只有一个写入者：`src/game/loop.js` 用帧回调自身的时间戳维护 `state.lastTime`，并把每帧增量限制在 `[0, 0.05]` 秒、非有限值按 0 处理。其它模块（包括 `stages.js` 的开战流程）只读不写 `state.lastTime` —— 过去用 `performance.now()` 打时间戳会让首帧增量变成约 -1.8e9 秒，把相机推到 `-Infinity` 再变成 `NaN`（`inView()` 全部为假，小游戏 iPhone X 上直接内存溢出）。`src/render/camera.js` 也独立兜底：增量同样限幅，且一旦发现自己非有限就重新贴回目标位置。冒烟测试在开战/恢复点击后立即断言这条契约（晚一帧就会被循环覆盖），所以这两处回归都会立刻变红。
 
 在任意地址后加 `?seed=<数字>`（例如 `http://localhost:8000/?seed=7`）即可固定本局种子，战场、编队与掉落都会重演，便于复盘问题。启动参数由 `src/platform/launch.js` 的 `launchQuery()` 读取，`game.js` 只把 `seedSource` 注入 `createGameState()` 与 `createStageManager()`，`src/utils/random.js` 保持纯函数（`parseSeed()` / `createRandomSeed()`），因此引擎层不依赖 `location`、`URLSearchParams` 或 `wx`。`window.__h5game` 暴露 `state`、`player`、`campaign`、`world`、`view`、`camera`，仅供调试脚本读取。
 
 Gameplay behavior is coordinated by `game/game.js`; specialized systems receive shared state and callbacks through small factories. `game/collision.js` owns obstacle/terrain queries, `game/combat.js` owns player fire and damage, `game/projectiles.js` owns ballistic flight and impacts, and `game/loop.js` owns the animation-frame loop with failure isolation. The loop is also the only writer of the time base (`state.lastTime`), clamping every delta to `[0, 0.05]` seconds and treating non-finite values as zero; `render/camera.js` re-seats itself if it is ever handed a non-finite position, so no single bad frame can poison the view for the rest of the session. Collision lives in one factory so player, enemy, and projectile code share the same geometry rules.
+
+Map elements follow the same shape as units, one layer down: `data/elements.js` holds one row per kind (shape, whether it blocks movement and sight, its size ranges and its palette), `game/elements.js` is the runtime half that answers questions about an instance, and `render/elements.js` owns the silhouettes. Instances stay plain data - `{ type, x, y, radius }` for circles, `{ type, x, y, width, height }` for axis-aligned walls - and are resolved by `type` at query time, so a new kind is a row plus, only if the silhouette is genuinely new, one draw function. Rows are deep-frozen, and an instance whose type matches no row falls back on its own fields, which is what keeps hand-built test fixtures and older saves working.
+
+Each battlefield narrows the catalog with a `mix`: obstacle entries are shares of the same 46-obstacle target, terrain entries replace the default patch counts, and a kind a mix leaves out never spawns there - that is the whole difference between a flooded crossing and a fortified pass. The obstacle budget is a target rather than a count of tries, because a tree that would touch another tree is dropped: a tree-heavy marsh therefore lands the same number of obstacles as a wall-heavy pass instead of thinning out. Formations spawn through a ground ladder - dry, then uniform, then merely clear, then the old slot-centre rule - and the rung that placed a line is recorded as `groundTier`. The test is `rectHitsObstacle` against the rank box (`formationGroundExtent`), not against slot centres, so a 28px palisade standing between two ranks now rejects the ground; the last rung is pinned at zero spawns.
 
 Random draws that affect gameplay go through `campaign.random`, a Mulberry32 stream seeded per battle by `src/utils/random.js`, so a battle can be replayed deterministically. Purely cosmetic jitter may still use `Math.random()`. The renderer skips terrain, decals, units, projectiles, and effects outside the camera view. Canvas-drawn art and synthesized tones remain the active rendering/audio paths.

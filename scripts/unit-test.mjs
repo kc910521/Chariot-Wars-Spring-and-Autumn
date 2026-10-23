@@ -9,7 +9,15 @@ import {
 } from "../src/data/equipment.js";
 import { campaignRules, chariotRules, effectRules, projectileRules } from "../src/data/rules.js";
 import { addBloodStain } from "../src/game/blood.js";
+import { battlefields } from "../src/data/battlefields.js";
 import { createCollisionSystem } from "../src/game/collision.js";
+import { cloudKinds, elementRules, obstacleKinds, terrainKinds } from "../src/data/elements.js";
+import {
+  clearsSight, cloudDrift, elementBoundingRadius, elementCullMargin, elementGap, elementIntersects,
+  elementSpeedAt, obstacleShape, rectHitsAnyObstacle, rectTerrain,
+} from "../src/game/elements.js";
+import { createBattlefield } from "../src/game/map.js";
+import { createElementRenderer } from "../src/render/elements.js";
 import { CHARIOT_CONTROL_CONFIG, createPlayerController } from "../src/game/player.js";
 import { bossTypes, enemyStats, formationPatterns } from "../src/data/formations.js";
 import {
@@ -17,7 +25,9 @@ import {
   solveTimeToGround, updateProjectiles,
 } from "../src/game/projectiles.js";
 import { createEnemies } from "../src/game/units/enemies.js";
-import { chasePoint, isInsideFormation, updateFormationAlerts } from "../src/game/units/formations.js";
+import {
+  chasePoint, formationExtent, formationGroundExtent, isInsideFormation, updateFormationAlerts,
+} from "../src/game/units/formations.js";
 import { clamp, shortestAngleDifference } from "../src/utils/math.js";
 import { createRandomSeed, createSeededRandom, parseSeed } from "../src/utils/random.js";
 import { updateCamera } from "../src/render/camera.js";
@@ -233,7 +243,235 @@ test("terrain slows movement", () => {
   assert.ok(entity.x > 100 && entity.x < 200, `expected slowed travel, got ${entity.x}`);
 });
 
+console.log("[unit] map elements");
+
+// The catalog is the contract: an instance carries only `type` and geometry, so a
+// row that is missing a range or a silhouette would fail silently at runtime.
+test("every element row declares the shape and the size ranges its instances use", () => {
+  assert.ok(Object.keys(obstacleKinds).length > 0 && Object.keys(terrainKinds).length > 0);
+  for (const [type, row] of Object.entries(obstacleKinds)) {
+    assert.ok(row.weight > 0 && row.weight <= 1, `${type} has no placement weight`);
+    assert.ok(["circle", "rect"].includes(row.shape), `${type} has an unknown shape`);
+    assert.equal(typeof row.blocksMovement, "boolean", `${type} does not say whether it blocks movement`);
+    assert.equal(typeof row.blocksSight, "boolean", `${type} does not say whether it blocks sight`);
+    if (row.shape === "circle") {
+      assert.equal(row.size.orient, undefined, `${type} is a circle but sizes an axis rect`);
+      assert.ok(row.size.radius[0] > 0 && row.size.radius[0] < row.size.radius[1], `${type} radius range is empty or reversed`);
+    } else {
+      assert.equal(row.size.orient, "axis", `${type} is a rect with no layout`);
+      assert.ok(row.size.long[0] < row.size.long[1], `${type} long side range is empty or reversed`);
+      assert.ok(row.size.thin[0] < row.size.thin[1], `${type} thin side range is empty or reversed`);
+      assert.ok(row.size.thin[1] < row.size.long[0], `${type} thin and long ranges overlap`);
+    }
+  }
+  for (const [type, row] of Object.entries(terrainKinds)) {
+    assert.ok(row.speed > 0 && row.speed < 1, `${type} is not a slowdown`);
+    assert.ok(["min", "multiply"].includes(row.combine), `${type} has an unknown combine rule`);
+    assert.ok(row.placement.count >= 1, `${type} never spawns`);
+    assert.ok(row.size.radius[0] > 0 && row.size.radius[0] < row.size.radius[1], `${type} radius range is empty or reversed`);
+    assert.ok(row.size.aspectX[0] < row.size.aspectX[1], `${type} has a flat aspectX range`);
+    assert.ok(row.size.aspectY[0] < row.size.aspectY[1], `${type} has a flat aspectY range`);
+  }
+  const sky = cloudKinds.sky;
+  assert.ok(sky.count >= 1, "no clouds will ever spawn");
+  assert.ok(sky.size.width[0] < sky.size.width[1] && sky.size.height[0] < sky.size.height[1], "cloud size range is flat");
+  assert.ok(sky.drift.speed[0] < sky.drift.speed[1], "cloud speed range is flat");
+  assert.ok(sky.opacity[0] > 0 && sky.opacity[0] < sky.opacity[1], "cloud opacity range is empty or reversed");
+  assert.ok(elementRules.obstacleTarget > 0 && elementRules.obstacleEdgeMargin > 0);
+});
+
+test("every row's visual.kind has a silhouette, and its palettes are full", () => {
+  const { artKinds } = createElementRenderer({ context: {} });
+  for (const [type, row] of Object.entries(obstacleKinds)) {
+    assert.ok(artKinds.obstacle.includes(row.visual.kind), `${type} draws with an unknown silhouette "${row.visual.kind}"`);
+  }
+  for (const [type, row] of Object.entries(terrainKinds)) {
+    assert.ok(artKinds.terrain.includes(row.visual.kind), `${type} draws with an unknown pattern "${row.visual.kind}"`);
+  }
+  for (const [type, row] of Object.entries(cloudKinds)) {
+    assert.ok(artKinds.cloud.includes(row.visual.kind), `${type} draws with an unknown silhouette "${row.visual.kind}"`);
+  }
+  // Gradients read their stops positionally, so a short list paints `undefined`.
+  for (const [type, row] of Object.entries(obstacleKinds)) {
+    for (const [key, value] of Object.entries(row.visual)) {
+      if (!Array.isArray(value) || key === "clusters" || key === "shadeOffset") continue;
+      assert.ok(value.length > 0, `${type}.${key} is empty`);
+      assert.ok(value.every((entry) => typeof entry === "string" && entry.length > 0), `${type}.${key} has a hole in it`);
+    }
+  }
+  assert.equal(obstacleKinds.tree.visual.trunk.length, 3, "the trunk gradient reads three stops");
+  assert.equal(obstacleKinds.tree.visual.canopy.length, 4, "the canopy gradient reads four stops");
+  assert.equal(cloudKinds.sky.visual.shade.length, 3, "the cloud shadow reads three stops");
+});
+
+console.log("[unit] battlefield scatter");
+
+const battlefieldWorld = { width: 2800, height: 1800 };
+
+function scatter(seed, hits = () => false) {
+  const player = { x: 0, y: 0, radius: 17 };
+  return createBattlefield(createSeededRandom(seed), player, battlefieldWorld, hits);
+}
+
+test("the scatter is a pure function of its seed", () => {
+  assert.deepEqual(scatter(9), scatter(9), "the same seed produced two different battlefields");
+  assert.notDeepEqual(scatter(9), scatter(10), "two different seeds produced the same battlefield");
+  // Nothing may leak between runs: a battlefield generated second must look like
+  // the one generated first.
+  scatter(11);
+  assert.deepEqual(scatter(12), scatter(12));
+});
+
+test("every scattered instance resolves to a row and keeps the instance shape", () => {
+  const field = scatter(5);
+  const centre = { x: battlefieldWorld.width / 2, y: battlefieldWorld.height / 2, radius: 17 };
+  assert.equal(field.obstacles.length, elementRules.obstacleTarget,
+    "a rejected attempt must not shrink the field");
+  const terrainBudget = Object.values(terrainKinds).reduce((sum, row) => sum + row.placement.count, 0);
+  assert.ok(field.terrain.length > 0 && field.terrain.length <= terrainBudget,
+    `${field.terrain.length} patches from a budget of ${terrainBudget}`);
+  assert.equal(field.clouds.length, cloudKinds.sky.count);
+
+  for (const obstacle of field.obstacles) {
+    const row = obstacleKinds[obstacle.type];
+    assert.ok(row, `obstacle "${obstacle.type}" has no catalog row`);
+    assert.equal(obstacleShape(obstacle), row.shape, `${obstacle.type} instance and row disagree about its shape`);
+    assert.ok(Math.hypot(obstacle.x - centre.x, obstacle.y - centre.y) >= elementRules.obstacleSafeRadius - 1,
+      "an obstacle was scattered onto the spawn point");
+    if (row.shape === "circle") {
+      assert.equal(typeof obstacle.radius, "number");
+      assert.equal(obstacle.width, undefined, "a circle instance carries rect fields");
+    } else {
+      assert.ok(obstacle.width > 0 && obstacle.height > 0);
+      assert.equal(obstacle.radius, undefined, "a rect instance carries a radius");
+    }
+  }
+  for (const patch of field.terrain) {
+    assert.ok(terrainKinds[patch.type], `terrain "${patch.type}" has no catalog row`);
+    assert.ok(patch.radiusX > 0 && patch.radiusY > 0);
+  }
+  for (const cloud of field.clouds) {
+    assert.ok(cloudKinds[cloud.type], `cloud "${cloud.type}" has no catalog row`);
+    assert.ok(cloud.width > 0 && cloud.height > 0 && cloud.speed > 0);
+  }
+});
+
+test("both obstacle kinds are reachable from the weighted table", () => {
+  const seen = {};
+  for (let seed = 0; seed < 12; seed += 1) {
+    for (const obstacle of scatter(seed).obstacles) seen[obstacle.type] = (seen[obstacle.type] ?? 0) + 1;
+  }
+  for (const type of Object.keys(obstacleKinds)) {
+    assert.ok(seen[type] > 0, `${type} never spawned in 12 seeds`);
+  }
+  // The weight is a share of the attempts, so a 58/42 split cannot come out
+  // wildly lopsided over 12 maps.
+  const total = Object.values(seen).reduce((sum, count) => sum + count, 0);
+  for (const [type, row] of Object.entries(obstacleKinds)) {
+    const share = seen[type] / total;
+    assert.ok(Math.abs(share - row.weight) < 0.2, `${type} took ${(share * 100).toFixed(0)}% of ${total} attempts`);
+  }
+});
+
+test("each battlefield's mix narrows the catalog without thinning or fattening the field", () => {
+  for (const definition of battlefields) {
+    const { obstacles: kinds, terrain: patches } = definition.mix;
+    assert.ok(kinds && patches, `${definition.nameKey} carries no mix`);
+    const share = Object.values(kinds).reduce((sum, weight) => sum + weight, 0);
+    assert.ok(Math.abs(share - 1) < 1e-9, `${definition.nameKey}'s obstacle shares sum to ${share}`);
+    for (const type of Object.keys(kinds)) {
+      assert.ok(obstacleKinds[type], `${definition.nameKey} mixes unknown obstacle "${type}"`);
+    }
+    for (const [type, count] of Object.entries(patches)) {
+      assert.ok(terrainKinds[type], `${definition.nameKey} mixes unknown terrain "${type}"`);
+      assert.ok(count > 0, `${definition.nameKey} asks for ${count} ${type} patches`);
+    }
+
+    for (let seed = 0; seed < 6; seed += 1) {
+      const field = createBattlefield(
+        createSeededRandom(seed), { x: 0, y: 0, radius: 17 }, battlefieldWorld, () => false, definition.mix,
+      );
+      // Density is a property of the target, not of the mix: a tree-heavy map
+      // rejects more attempts but still fills the field.
+      assert.equal(field.obstacles.length, elementRules.obstacleTarget,
+        `${definition.nameKey} scattered ${field.obstacles.length} obstacles on seed ${seed}`);
+      for (const obstacle of field.obstacles) {
+        assert.ok(kinds[obstacle.type] > 0, `${definition.nameKey} emitted "${obstacle.type}", which its mix excludes`);
+      }
+      for (const patch of field.terrain) {
+        assert.ok(patches[patch.type] > 0, `${definition.nameKey} emitted "${patch.type}", which its mix excludes`);
+      }
+    }
+  }
+});
+
+test("a mix changes the ground, not just the numbers", () => {
+  const scatterAs = (nameKey, seed = 3) => {
+    const definition = battlefields.find((entry) => entry.nameKey === nameKey);
+    return createBattlefield(
+      createSeededRandom(seed), { x: 0, y: 0, radius: 17 }, battlefieldWorld, () => false, definition.mix,
+    );
+  };
+  const walls = (field) => field.obstacles.filter((obstacle) => obstacle.type === "wall").length;
+  const pass = scatterAs("battlefield.hangu.name");
+  const marsh = scatterAs("battlefield.yunmeng.name");
+  assert.ok(walls(pass) > walls(marsh) * 2, "the fortified pass does not read wallier than the marsh");
+  assert.equal(pass.terrain.some((patch) => patch.type === "shallows"), false, "the pass has standing water in it");
+  assert.equal(marsh.terrain.some((patch) => patch.type === "sand"), false, "the marsh has a dust bank in it");
+  assert.ok(marsh.terrain.some((patch) => patch.type === "shallows"), "the marsh has no water");
+  // A battlefield with no mix keeps the whole catalog: the fallback is what every
+  // script and test that calls createBattlefield by hand relies on.
+  const plain = createBattlefield(createSeededRandom(3), { x: 0, y: 0, radius: 17 }, battlefieldWorld, () => false);
+  assert.equal(plain.obstacles.length, elementRules.obstacleTarget);
+  assert.deepEqual(scatterAs("battlefield.hangu.name"), scatterAs("battlefield.hangu.name"));
+});
+
+console.log("[unit] element geometry");
+
+test("a hand-built obstacle keeps the shape its own fields describe", () => {
+  // scripts and older saves still build instances by hand, and the collision test
+  // above does exactly that: the type may be unknown, the fields never lie.
+  assert.equal(obstacleShape({ type: "tree", x: 0, y: 0, radius: 40 }), "circle");
+  assert.equal(obstacleShape({ type: "wall", x: 0, y: 0, width: 60, height: 28 }), "rect");
+  assert.equal(obstacleShape({ type: "boulder", x: 0, y: 0, radius: 12 }), "circle", "an unknown type lost its radius");
+  assert.equal(obstacleShape({ type: "boulder", x: 0, y: 0, width: 60, height: 28 }), "rect");
+  assert.equal(clearsSight({ type: "boulder", radius: 12 }), true, "an unknown type must still block sight");
+  assert.equal(elementIntersects(510, 405, 1, { type: "wall", x: 500, y: 400, width: 60, height: 28 }), true);
+  assert.equal(elementIntersects(570, 405, 1, { type: "wall", x: 500, y: 400, width: 60, height: 28 }), false);
+  assert.equal(elementIntersects(500, 430, 12, { type: "tree", x: 500, y: 400, radius: 40 }), true);
+  assert.equal(elementIntersects(500, 460, 12, { type: "tree", x: 500, y: 400, radius: 40 }), false);
+});
+
+test("spacing helpers measure between silhouettes, not between anchors", () => {
+  const tree = { type: "tree", x: 0, y: 0, radius: 40 };
+  const wall = { type: "wall", x: 100, y: 0, width: 60, height: 28 };
+  assert.equal(elementBoundingRadius(tree), 40);
+  assert.equal(elementBoundingRadius(wall), Math.hypot(60, 28) / 2, "a rect's reach is its half-diagonal");
+  assert.equal(elementGap(tree, { type: "tree", x: 100, y: 0, radius: 10 }), 50);
+  assert.ok(elementGap(tree, wall) < elementGap(tree, { type: "tree", x: 100, y: 0, radius: 0 }));
+  assert.equal(elementCullMargin(tree), 48, "a centred element needs slack past its radius");
+  assert.equal(elementCullMargin(wall), 60, "a rect is anchored on its corner, so its own extent is the margin");
+});
+
+test("movement cost comes from the patch row, and the worst ground wins", () => {
+  const shallows = { type: "shallows", x: 100, y: 100, radiusX: 120, radiusY: 90 };
+  assert.equal(elementSpeedAt(100, 100, [shallows]), terrainKinds.shallows.speed);
+  assert.equal(elementSpeedAt(500, 500, [shallows]), 1, "open ground is not slowed");
+  assert.equal(elementSpeedAt(100, 100, [{ type: "mud", x: 100, y: 100, radiusX: 50, radiusY: 50 }]), 1,
+    "an unknown patch must not slow anything");
+  const grass = { type: "grass", x: 100, y: 100, radiusX: 120, radiusY: 90 };
+  assert.equal(elementSpeedAt(100, 100, [shallows, grass]), Math.min(terrainKinds.shallows.speed, terrainKinds.grass.speed),
+    "overlapping patches must not compound");
+});
+
+test("clouds drift and wrap instead of flying off the map", () => {
+  const cloud = { x: 2790, y: 10, speed: 4, width: 100, height: 50 };
+  assert.equal(cloudDrift(cloud, 0, 2800), 2790);
+  assert.equal(cloudDrift(cloud, 5, 2800), 10, "a cloud that leaves the right edge must come back on the left");
+});
+
 console.log("[unit] chariot steering");
+
 
 // Drives the real controller with a bare player object: no DOM, no collision
 // system, and a joystick vector expressed relative to where the nose points.
@@ -696,28 +934,32 @@ console.log("[unit] enemy formations");
 // A minimal battlefield that runs the real spawner and the real per-frame AI.
 // `moveEntitySafely` actually moves (- the dust test stubs it out) so positions
 // are observable, and the PRNG is seeded so a failure is reproducible.
-function formationRig({ sight = { on: true }, seed = 11 } = {}) {
+function formationRig({ sight = { on: true }, seed = 11, obstacles = [], terrain = [], world = arena } = {}) {
   const state = {
     enemies: [], particles: [], drops: [], footCompanions: [], formations: [],
     formationsSpawned: 0, wave: 1, elapsed: 0, mode: "running", score: 0, kills: 0,
     bloodStains: [], meleeEffects: [], bullets: [], groundArrows: [], shake: 0,
   };
   const player = {
-    x: arena.width / 2, y: arena.height / 2, radius: 17, mode: "chariot", angle: 0, speed: 0,
+    x: world.width / 2, y: world.height / 2, radius: 17, mode: "chariot", angle: 0, speed: 0,
     knockbackX: 0, knockbackY: 0, invulnerable: 0, swarmDamageCooldown: 0,
   };
+  // The spawner reads the ground from the campaign, exactly like the collision
+  // system does, so the rig hands it a battlefield instead of a stub predicate.
+  const campaign = { obstacles, terrain };
   const enemies = createEnemies({
     bossTypes,
     enemyStats,
     formationPatterns,
     state,
     player,
-    world: arena,
+    world,
+    campaign,
     random: createSeededRandom(seed),
-    circleIntersectsObstacle: () => false,
+    circleIntersectsObstacle: (x, y, radius) => obstacles.some((obstacle) => elementIntersects(x, y, radius, obstacle)),
     moveEntitySafely: (entity, dx, dy) => {
-      entity.x = clamp(entity.x + dx, 0, arena.width);
-      entity.y = clamp(entity.y + dy, 0, arena.height);
+      entity.x = clamp(entity.x + dx, 0, world.width);
+      entity.y = clamp(entity.y + dy, 0, world.height);
     },
     getChariotCollisionDamage: () => 5,
     playTone: () => {},
@@ -727,7 +969,7 @@ function formationRig({ sight = { on: true }, seed = 11 } = {}) {
     damagePlayer: () => {},
     damageCompanion: () => {},
   });
-  return { state, player, enemies, sight };
+  return { state, player, enemies, sight, campaign, world };
 }
 
 // Slots are laid out in the pattern's own frame, where local -Y is the front.
@@ -1146,6 +1388,92 @@ test("a new formation is not spawned on ground another formation holds", () => {
   const overlaps = Math.abs(first.x - second.x) < first.halfWidth + second.halfWidth
     && Math.abs(first.y - second.y) < first.halfHeight + second.halfHeight;
   assert.equal(overlaps, false, "the two formations interpenetrate");
+});
+
+console.log("[unit] formation ground");
+
+// A rig standing on a real scattered battlefield: the spawner reads the same
+// obstacle and terrain lists the collision system does.
+function battlefieldRig(definition, seed) {
+  const field = createBattlefield(
+    createSeededRandom(seed), { x: 0, y: 0, radius: 17 }, battlefieldWorld, () => false, definition.mix,
+  );
+  return formationRig({ seed, obstacles: field.obstacles, terrain: field.terrain, world: battlefieldWorld });
+}
+
+test("a formation never spawns with a wall inside its own ranks", () => {
+  for (const definition of battlefields) {
+    const rig = battlefieldRig(definition, 7);
+    for (let spawn = 0; spawn < 30; spawn += 1) {
+      // One live line at a time: the game caps the crowd, so each spawn only has
+      // to clear the map, not a pile of older reservations.
+      rig.state.formations = [];
+      rig.state.enemies = [];
+      rig.state.wave = 1 + (spawn % formationPatterns.length);
+      rig.enemies.spawnFormation();
+      assert.equal(rig.state.formations.length, 1, `${definition.nameKey} found no ground on spawn ${spawn}`);
+      const formation = rig.state.formations[0];
+      assert.notEqual(formation.groundTier, "legacy",
+        `${definition.nameKey} fell back to the slot-centre rule on spawn ${spawn}`);
+      const clearance = formationGroundExtent(formationPatterns.find((entry) => entry.nameKey === formation.nameKey));
+      assert.equal(
+        rectHitsAnyObstacle(formation.x, formation.y, clearance.halfWidth, clearance.halfHeight,
+          formation.heading, rig.campaign.obstacles),
+        false, `${definition.nameKey} put a ${formation.nameKey} line across an obstacle`,
+      );
+      const footing = rectTerrain(formation.x, formation.y, clearance.halfWidth, clearance.halfHeight,
+        formation.heading, rig.campaign.terrain);
+      assert.equal(footing.dry || footing.uniform, true,
+        `${definition.nameKey} put a line across a terrain seam`);
+    }
+  }
+});
+
+test("a wall the old slot-centre rule accepted rejects the ground now", () => {
+  const pattern = formationPatterns[0];
+  const clearance = formationGroundExtent(pattern);
+  // A palisade sitting 22px in front of the front rank: every slot centre clears
+  // the old 20px rule, while the rank itself walks straight into it.
+  const wall = { type: "wall", x: -120, y: -104, width: 240, height: 28 };
+  const distanceToWall = (x, y) => Math.hypot(
+    x - clamp(x, wall.x, wall.x + wall.width),
+    y - clamp(y, wall.y, wall.y + wall.height),
+  );
+  const nearestSlot = Math.min(...pattern.slots.map(([, slotX, slotY]) => distanceToWall(slotX, slotY)));
+  assert.ok(nearestSlot > 20, `the test wall is only ${nearestSlot.toFixed(1)}px from a slot: the old rule would have caught it`);
+  assert.equal(rectHitsAnyObstacle(0, 0, clearance.halfWidth, clearance.halfHeight, 0, [wall]), true,
+    "a wall inside the rank box was accepted");
+});
+
+test("the ground test measures the ranks, not the dashed leash envelope", () => {
+  const pattern = formationPatterns[3];
+  const extent = formationExtent(pattern);
+  const clearance = formationGroundExtent(pattern);
+  // Tucked between the rank box and the drawn border: it may touch the dashes -
+  // no unit stands out there - but it must not reach a slot.
+  const wall = { type: "wall", x: extent.halfWidth - 20, y: -10, width: 18, height: 20 };
+  assert.equal(rectHitsAnyObstacle(0, 0, clearance.halfWidth, clearance.halfHeight, 0, [wall]), false);
+  assert.equal(rectHitsAnyObstacle(0, 0, extent.halfWidth, extent.halfHeight, 0, [wall]), true);
+  assert.ok(extent.halfWidth > clearance.halfWidth && extent.halfHeight > clearance.halfHeight);
+});
+
+test("a flooded battlefield still places its line, on uniform footing", () => {
+  // Every candidate is wet, so the ladder settles on the second rung instead of
+  // refusing to spawn: one speed under the whole line is what that rung is for.
+  const shallows = { type: "shallows", x: 0, y: 0, radiusX: 4000, radiusY: 4000 };
+  const rig = formationRig({ terrain: [shallows] });
+  rig.enemies.spawnFormation();
+  assert.equal(rig.state.formations.length, 1, "a flooded map refused to spawn a formation");
+  assert.equal(rig.state.formations[0].groundTier, "uniform");
+});
+
+test("a wet patch the ladder could avoid does not end up under the line", () => {
+  // One patch beside the spawn ring, so the ladder must walk past it rather than
+  // settle for a wet rank it could avoid.
+  const shallows = { type: "shallows", x: 500 + 470, y: 400, radiusX: 240, radiusY: 240 };
+  const rig = formationRig({ terrain: [shallows] });
+  rig.enemies.spawnFormation();
+  assert.equal(rig.state.formations[0].groundTier, "dry");
 });
 
 console.log(`\n[unit] PASS (${passed} checks)`);

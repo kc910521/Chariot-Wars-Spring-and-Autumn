@@ -134,7 +134,7 @@ function boot() {
   const damageCompanion = defer(() => combatRef.current, "damageCompanion");
 
   const enemySystem = createEnemies({
-    bossTypes, enemyStats, formationPatterns, state, player, world,
+    bossTypes, enemyStats, formationPatterns, state, player, world, campaign,
     // Resolved on every roll: createBattle re-seeds campaign.random, so the AI
     // must never capture the generator at wiring time.
     random: () => campaign.random(),

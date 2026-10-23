@@ -1,71 +1,136 @@
-export function createBattlefield(random, player, world, circleIntersectsObstacle) {
-  const obstacles = [];
-  const terrain = [];
-  const clouds = Array.from({ length: 16 }, () => ({
-    x: random() * world.width,
-    y: random() * world.height,
-    width: 130 + random() * 150,
-    height: 55 + random() * 52,
-    speed: 2 + random() * 4,
-    opacity: 0.14 + random() * 0.07,
-    phase: random() * Math.PI * 2,
-  }));
-  const safeX = world.width / 2;
-  const safeY = world.height / 2;
+import { cloudKinds, elementRules, obstacleKinds, terrainKinds } from "../data/elements.js";
 
-  for (const [type, count, minRadius, maxRadius] of [
-    ["shallows", 3, 85, 145],
-    ["sand", 4, 90, 160],
-    ["grass", 7, 55, 110],
-  ]) {
+// Every number and every kind lives in src/data/elements.js; this file only
+// decides *where* things go. The draw order below is load-bearing: a battle's
+// `random` is a seeded stream, so changing the order or the number of rolls
+// changes every map that follows from a `?seed=` run.
+
+function randomIn([min, max], random) {
+  return min + random() * (max - min);
+}
+
+// Weighted pick over a table of `{ type, row, weight }`: one draw, and the first
+// entry whose cumulative weight covers the roll wins.
+function rollObstacle(table, random) {
+  const total = table.reduce((sum, entry) => sum + entry.weight, 0);
+  const roll = random() * total;
+  let cursor = 0;
+  for (const entry of table) {
+    cursor += entry.weight;
+    if (roll < cursor) return entry;
+  }
+  return table[table.length - 1];
+}
+
+// A battlefield's mix narrows the catalog; without one, every row competes at
+// its catalog weight and every terrain kind spawns its default count. Kinds the
+// mix leaves out, or names with a zero, never spawn.
+function obstacleTableFor(mix) {
+  const entries = mix?.obstacles
+    ? Object.entries(mix.obstacles)
+    : Object.entries(obstacleKinds).map(([type, row]) => [type, row.weight]);
+  return entries
+    .filter(([type, weight]) => obstacleKinds[type] && weight > 0)
+    .map(([type, weight]) => ({ type, row: obstacleKinds[type], weight }));
+}
+
+function terrainTableFor(mix) {
+  const entries = mix?.terrain
+    ? Object.entries(mix.terrain)
+    : Object.entries(terrainKinds).map(([type, row]) => [type, row.placement.count]);
+  return entries
+    .filter(([type, count]) => terrainKinds[type] && count > 0)
+    .map(([type, count]) => ({ type, row: terrainKinds[type], count: Math.floor(count) }));
+}
+
+// A wall: one long side and one thin side, on whichever axis the roll picks, so
+// the field gets both horizontal and vertical palisades.
+function placeAxisRect(type, row, x, y, random) {
+  const horizontal = random() < 0.5;
+  // Width consumes the first size roll and height the second, whichever way the
+  // wall is laid out: that is the order the old object literal evaluated in, and
+  // a seeded stream must not see the two rolls swap.
+  const width = randomIn(horizontal ? row.size.long : row.size.thin, random);
+  const height = randomIn(horizontal ? row.size.thin : row.size.long, random);
+  return { type, x, y, width, height };
+}
+
+export function createBattlefield(random, player, world, circleIntersectsObstacle, mix = null) {
+  const { width, height } = world;
+  const safeX = width / 2;
+  const safeY = height / 2;
+
+  // A mix that names no known kind would leave the map bare, so it falls back to
+  // the whole catalog instead.
+  let obstacleTable = obstacleTableFor(mix);
+  if (obstacleTable.length === 0) obstacleTable = obstacleTableFor(null);
+  let terrainTable = terrainTableFor(mix);
+  if (terrainTable.length === 0) terrainTable = terrainTableFor(null);
+
+  const sky = cloudKinds.sky;
+  const clouds = [];
+  for (let index = 0; index < sky.count; index += 1) {
+    clouds.push({
+      type: "sky",
+      x: random() * width,
+      y: random() * height,
+      width: randomIn(sky.size.width, random),
+      height: randomIn(sky.size.height, random),
+      speed: randomIn(sky.drift.speed, random),
+      opacity: randomIn(sky.opacity, random),
+      phase: random() * Math.PI * 2,
+    });
+  }
+
+  const terrain = [];
+  const terrainEdge = elementRules.terrainEdgeMargin;
+  for (const { type, row, count } of terrainTable) {
     for (let index = 0; index < count; index += 1) {
-      const radius = minRadius + random() * (maxRadius - minRadius);
-      const x = 110 + random() * (world.width - 220);
-      const y = 110 + random() * (world.height - 220);
-      if (Math.hypot(x - safeX, y - safeY) < 300) continue;
-      terrain.push({ type, x, y, radiusX: radius * (0.9 + random() * 0.5), radiusY: radius * (0.55 + random() * 0.45) });
+      const radius = randomIn(row.size.radius, random);
+      const x = terrainEdge + random() * (width - terrainEdge * 2);
+      const y = terrainEdge + random() * (height - terrainEdge * 2);
+      if (Math.hypot(x - safeX, y - safeY) < elementRules.terrainSafeRadius) continue;
+      terrain.push({
+        type,
+        x,
+        y,
+        radiusX: radius * randomIn(row.size.aspectX, random),
+        radiusY: radius * randomIn(row.size.aspectY, random),
+      });
     }
   }
 
-  for (let index = 0; index < 46; index += 1) {
-    const x = 90 + random() * (world.width - 180);
-    const y = 90 + random() * (world.height - 180);
-    if (Math.hypot(x - safeX, y - safeY) < 280) continue;
+  const obstacles = [];
+  const edge = elementRules.edgeMargin;
+  // The budget is a target, not a count of tries: a rejected tree does not eat a
+  // slot, so a tree-heavy mix still ends up with the same obstacle count as a
+  // wall-heavy one.
+  for (let attempt = 0; attempt < elementRules.obstacleAttemptCap
+    && obstacles.length < elementRules.obstacleTarget; attempt += 1) {
+    const x = edge + random() * (width - edge * 2);
+    const y = edge + random() * (height - edge * 2);
+    if (Math.hypot(x - safeX, y - safeY) < elementRules.obstacleSafeRadius) continue;
 
-    if (random() < 0.58) {
-      const horizontal = random() < 0.5;
-      const obstacle = {
-        type: "wall",
-        x,
-        y,
-        width: horizontal ? 90 + random() * 150 : 28 + random() * 18,
-        height: horizontal ? 28 + random() * 18 : 90 + random() * 150,
-      };
-      if (x + obstacle.width > world.width - 35 || y + obstacle.height > world.height - 35) continue;
-      obstacles.push(obstacle);
-    } else {
-      const obstacle = { type: "tree", x, y, radius: 22 + random() * 18 };
-      if (circleIntersectsObstacle(x, y, obstacle.radius, obstacles)) continue;
-      obstacles.push(obstacle);
-    }
+    const { type, row } = rollObstacle(obstacleTable, random);
+    const obstacle = row.size.orient === "axis"
+      ? placeAxisRect(type, row, x, y, random)
+      : { type, x, y, radius: randomIn(row.size.radius, random) };
+    // A palisade that runs off the map would be clipped by the border, so it is
+    // dropped instead. Circles cannot overflow: they already spawn inside the
+    // edge margin.
+    if (x + (obstacle.width ?? 0) > width - elementRules.obstacleEdgeMargin
+      || y + (obstacle.height ?? 0) > height - elementRules.obstacleEdgeMargin) continue;
+    // Only the rows that look wrong when they touch ask for this: two walls read
+    // as one longer palisade, two trees read as a clipped canopy.
+    if (row.rejectExisting && circleIntersectsObstacle(x, y, obstacle.radius, obstacles)) continue;
+    obstacles.push(obstacle);
   }
 
   player.x = safeX;
   player.y = safeY;
+  // The spawn point is the one place the player must never start inside geometry.
   if (circleIntersectsObstacle(player.x, player.y, player.radius, obstacles)) {
     obstacles.splice(0, obstacles.length);
   }
   return { obstacles, terrain, clouds };
-}
-
-export function terrainSpeedMultiplier(x, y, terrain) {
-  let multiplier = 1;
-  for (const patch of terrain) {
-    const dx = (x - patch.x) / patch.radiusX;
-    const dy = (y - patch.y) / patch.radiusY;
-    if (dx * dx + dy * dy > 1) continue;
-    const patchMultiplier = patch.type === "shallows" ? 0.55 : patch.type === "sand" ? 0.7 : 0.92;
-    multiplier = Math.min(multiplier, patchMultiplier);
-  }
-  return multiplier;
 }
