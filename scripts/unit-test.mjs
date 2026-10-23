@@ -1,6 +1,8 @@
 // Pure-logic regression tests for the gameplay rules that have no DOM
 // dependency. Usage: node scripts/unit-test.mjs
+import "./dom-stub.mjs";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 
 import {
   calculateArrowDamage, calculateChariotCollisionDamage, calculateChariotStats,
@@ -11,6 +13,7 @@ import { campaignRules, chariotRules, effectRules, projectileRules } from "../sr
 import { addBloodStain } from "../src/game/blood.js";
 import { battlefields } from "../src/data/battlefields.js";
 import { createCollisionSystem } from "../src/game/collision.js";
+import { createCombatSystem } from "../src/game/combat.js";
 import { cloudKinds, elementRules, obstacleKinds, terrainKinds } from "../src/data/elements.js";
 import {
   clearsSight, cloudDrift, elementBoundingRadius, elementCullMargin, elementGap, elementIntersects,
@@ -910,6 +913,153 @@ test("dust particles carry their own lifetime and a palette that reads on grass"
     assert.ok(mote.size >= effectRules.dust.sizeMin && mote.size <= effectRules.dust.sizeMax);
     assert.ok(mote.vy < 0, "dust should drift upwards");
   }
+});
+
+console.log("[unit] crew");
+
+// Drives the real combat system with stubbed allies: arrows and melee hits are
+// recorded instead of resolved, so a test can read exactly what the crew aimed at
+// and what it would have dealt.
+function crewRig({ roster = [], enemies = [], mode = "chariot" } = {}) {
+  const shots = [];
+  const melee = [];
+  const state = { enemies, bullets: [], footCompanions: [], groundArrows: [] };
+  const player = {
+    mode,
+    x: 100,
+    y: 100,
+    angle: 0,
+    radius: 20,
+    speed: 120,
+    health: 40,
+    maxHealth: 40,
+    knockbackX: 0,
+    knockbackY: 0,
+    invulnerable: 0,
+    cooldown: 0,
+  };
+  const campaign = { roster, equipment: emptyEquipment(), horseCount: 1, random: () => 0.5 };
+  const combat = createCombatSystem({
+    state,
+    player,
+    campaign,
+    collision: {
+      hasLineOfSight: () => true,
+      moveEntitySafely: (entity, dx, dy) => {
+        entity.x += dx;
+        entity.y += dy;
+      },
+    },
+    projectiles: { fireAllyArrow: (options) => shots.push(options) },
+    damageEnemy: (enemy, amount) => melee.push({ enemy, amount }),
+    addMeleeEffect: () => {},
+    burst: () => {},
+    playTone: () => {},
+    updateHud: () => {},
+    announceBanner: () => {},
+    onDefeat: () => {},
+  });
+  return { combat, state, player, campaign, shots, melee };
+}
+
+const archerRow = personnel.find((person) => person.id === "archer");
+const halberdierRow = personnel.find((person) => person.id === "halberdier");
+
+test("crew arrows carry the firing member's own row damage", () => {
+  // `personnel[0]` happened to be the archer row, so the wrong expression produced
+  // the right number. The value, the cooldown and the lane all come from the row.
+  const rig = crewRig({
+    roster: [{ id: 1, role: "archer" }],
+    enemies: [{ x: 460, y: 100, radius: 16, health: 10, destroyed: false }],
+  });
+  rig.combat.updateCrew(1 / 60);
+  assert.equal(rig.shots.length, 1);
+  assert.equal(rig.shots[0].damage, archerRow.damage);
+  assert.equal(rig.shots[0].index, 0);
+  assert.equal(rig.shots[0].count, 1);
+  assert.equal(rig.campaign.roster[0].cooldown, archerRow.cooldown);
+});
+
+test("the crew volley fans over the archers, not over the whole crew", () => {
+  // One archer behind three halberdiers used to fire as lane 0 of 4: a quarter-turn
+  // of the 0.055 rad spread, i.e. 33px wide of a 19px target at 400px.
+  const rig = crewRig({
+    roster: [
+      { id: 1, role: "archer" },
+      { id: 2, role: "halberdier" },
+      { id: 3, role: "halberdier" },
+      { id: 4, role: "halberdier" },
+    ],
+    enemies: [{ x: 500, y: 100, radius: 16, health: 200, destroyed: false }],
+  });
+  rig.combat.updateCrew(1 / 60);
+  assert.deepEqual(rig.shots.map((shot) => [shot.index, shot.count]), [[0, 1]], "a lone archer fired off-centre");
+});
+
+test("archers keep their lanes when a neighbouring bow is reloading", () => {
+  const rig = crewRig({
+    roster: [
+      { id: 1, role: "archer" },
+      { id: 2, role: "halberdier" },
+      { id: 3, role: "archer" },
+    ],
+    enemies: [{ x: 500, y: 100, radius: 16, health: 200, destroyed: false }],
+  });
+  rig.combat.updateCrew(1 / 60);
+  assert.deepEqual(rig.shots.map((shot) => [shot.index, shot.count]), [[0, 2], [1, 2]]);
+  // The first bow reloads, the second does not: the firing lane must stay lane 1.
+  rig.campaign.roster[0].cooldown = 5;
+  rig.campaign.roster[2].cooldown = 0;
+  rig.combat.updateCrew(1 / 60);
+  assert.deepEqual(rig.shots.map((shot) => [shot.index, shot.count]), [[0, 2], [1, 2], [1, 2]]);
+});
+
+test("crew halberdiers deal their own row damage in melee", () => {
+  const rig = crewRig({
+    roster: [{ id: 1, role: "halberdier" }],
+    enemies: [{ x: 140, y: 100, radius: 16, health: 100, destroyed: false }],
+  });
+  rig.combat.updateCrew(1 / 60);
+  assert.deepEqual(rig.melee.map((hit) => hit.amount), [halberdierRow.damage]);
+  assert.equal(rig.campaign.roster[0].cooldown, halberdierRow.cooldown);
+});
+
+test("the crew stands down while the player is on foot", () => {
+  const rig = crewRig({
+    roster: [{ id: 1, role: "archer" }, { id: 2, role: "halberdier" }],
+    enemies: [{ x: 140, y: 100, radius: 16, health: 100, destroyed: false }],
+    mode: "foot",
+  });
+  rig.combat.updateCrew(1 / 60);
+  assert.equal(rig.shots.length, 0);
+  assert.equal(rig.melee.length, 0);
+});
+
+test("dismounted companions fight with their own row's numbers", () => {
+  const rig = crewRig({
+    roster: [{ id: 1, role: "archer" }, { id: 2, role: "halberdier" }],
+    enemies: [
+      { x: 300, y: 140, radius: 16, health: 100, destroyed: false },
+      { x: 70, y: 80, radius: 16, health: 100, destroyed: false },
+    ],
+  });
+  rig.combat.dismountPlayer();
+  assert.equal(rig.state.footCompanions.length, 2);
+  const [bowman, axeman] = rig.state.footCompanions;
+  assert.equal(bowman.damage, archerRow.damage);
+  assert.equal(bowman.range, archerRow.range);
+  assert.equal(axeman.damage, halberdierRow.damage);
+  rig.combat.updateFootCompanions(1);
+  assert.deepEqual(rig.shots.map((shot) => shot.damage), [archerRow.damage]);
+  assert.deepEqual(rig.melee.map((hit) => hit.amount), [halberdierRow.damage]);
+  assert.equal(axeman.attackCooldown, halberdierRow.cooldown);
+});
+
+test("no module reads the personnel table by array position", () => {
+  // The bug above is invisible in a value assertion while the archer stays first in
+  // the table, so pin the shape of the access instead.
+  const source = readFileSync(new URL("../src/game/combat.js", import.meta.url), "utf8");
+  assert.equal(/personnel\s*\[\s*\d+\s*\]\s*\./.test(source), false, "combat.js indexes personnel by position");
 });
 
 console.log("[unit] blood decals");

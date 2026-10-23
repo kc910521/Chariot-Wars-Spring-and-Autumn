@@ -46,16 +46,21 @@ export function createCombatSystem({
   function updateCrew(delta) {
     if (player.mode === "foot") return;
     const members = campaign.roster.filter((member) => member.alive !== false);
-    for (const [index, member] of members.entries()) {
+    // The volley fan is measured over the archers alone. `fireAllyArrow` turns
+    // `index`/`count` into a bearing offset, so counting the halberdiers in either
+    // number pushes every archer's arrow off the target it actually aimed at.
+    const archers = members.filter((member) => member.role === "archer");
+    for (const member of members) {
       const config = personnel.find((person) => person.id === member.role);
       if (!config) continue;
       member.cooldown = Math.max(0, (member.cooldown ?? 0) - delta);
+      if (member.cooldown > 0) continue;
       const target = state.enemies
         .filter((enemy) => !enemy.destroyed)
         .filter((enemy) => distanceBetween(player.x, player.y, enemy.x, enemy.y) <= config.range)
         .filter((enemy) => member.role !== "archer" || collision.hasLineOfSight(player.x, player.y, enemy.x, enemy.y))
         .sort((first, second) => distanceBetween(player.x, player.y, first.x, first.y) - distanceBetween(player.x, player.y, second.x, second.y))[0];
-      if (!target || member.cooldown > 0) continue;
+      if (!target) continue;
 
       if (member.role === "archer") {
         projectiles.fireAllyArrow({
@@ -65,13 +70,15 @@ export function createCombatSystem({
           targetY: target.y,
           originOffset: projectileRules.allyArrow.crewOriginOffset,
           range: projectileRules.allyArrow.crewRange,
-          damage: personnel[0].damage,
-          index,
-          count: members.length,
+          // The firing member's own row. `personnel[0]` only happens to be the
+          // archer row, so it tied crew damage to the order of the roster table.
+          damage: config.damage,
+          // `indexOf` rather than a firing counter: an archer waiting on cooldown
+          // must not shift the lanes of the ones that do fire.
+          index: archers.indexOf(member),
+          count: archers.length,
         });
       } else {
-        const distance = distanceBetween(player.x, player.y, target.x, target.y);
-        if (distance > config.range) continue;
         const angle = Math.atan2(target.y - player.y, target.x - player.x);
         addMeleeEffect(target.x, target.y, angle, "dagger-axe");
         damageEnemy(target, config.damage);
@@ -83,12 +90,12 @@ export function createCombatSystem({
 
   function dismountPlayer() {
     player.mode = "foot";
-    player.type = "spear";
-    player.radius = 12;
-    player.maxHealth = 80;
+    player.type = "ge";
+    player.radius = 18;
+    player.maxHealth = 35;
     player.health = player.maxHealth;
     player.speed = 0;
-    player.maxSpeed = 108;
+    player.maxSpeed = 78;
     player.invulnerable = 1.8;
     player.knockbackX = 0;
     player.knockbackY = 0;
@@ -111,6 +118,11 @@ export function createCombatSystem({
         color: isArcher ? "#398b63" : "#b28b4d",
         health: config.health,
         maxHealth: config.health,
+        // Snapshotted like health: the dismounted companion fights on its own row's
+        // numbers instead of reaching back into the table by array position.
+        damage: config.damage,
+        range: config.range,
+        cooldown: config.cooldown,
         hitFlash: 0,
         knockedDown: 0,
         invulnerable: 0.65,
@@ -157,7 +169,7 @@ export function createCombatSystem({
 
       companion.attackCooldown = Math.max(0, companion.attackCooldown - delta);
       if (companion.type === "archer") {
-        const range = personnel[0].range;
+        const range = companion.range;
         const target = state.enemies
           .filter((enemy) => !enemy.destroyed && distanceBetween(companion.x, companion.y, enemy.x, enemy.y) < range)
           .filter((enemy) => collision.hasLineOfSight(companion.x, companion.y, enemy.x, enemy.y))
@@ -171,9 +183,9 @@ export function createCombatSystem({
           targetY: target.y,
           originOffset: projectileRules.allyArrow.footOriginOffset,
           range,
-          damage: personnel[0].damage,
+          damage: companion.damage,
         });
-        companion.attackCooldown = personnel[0].cooldown;
+        companion.attackCooldown = companion.cooldown;
       } else {
         const target = state.enemies
           .filter((enemy) => !enemy.destroyed && distanceBetween(companion.x, companion.y, enemy.x, enemy.y) < enemy.radius + 28)
@@ -182,9 +194,9 @@ export function createCombatSystem({
         const angle = Math.atan2(target.y - companion.y, target.x - companion.x);
         companion.angle = angle;
         addMeleeEffect(target.x, target.y, angle, "dagger-axe");
-        damageEnemy(target, personnel[1].damage);
+        damageEnemy(target, companion.damage);
         burst(target.x, target.y, "#d9bb79");
-        companion.attackCooldown = personnel[1].cooldown;
+        companion.attackCooldown = companion.cooldown;
       }
     }
   }
