@@ -70,8 +70,8 @@ export const horses = {
 };
 
 export const personnel = [
-  { id: "archer", nameKey: "personnel.archer.name", descriptionKey: "personnel.archer.description", icon: "➶", price: 150, health: 3, damage: 1, range: 330, cooldown: 1.9 },
-  { id: "halberdier", nameKey: "personnel.halberdier.name", descriptionKey: "personnel.halberdier.description", icon: "⚔", price: 120, health: 6, damage: 2, range: 58, cooldown: 1.5 },
+  { id: "archer", nameKey: "personnel.archer.name", descriptionKey: "personnel.archer.description", icon: "➶", price: 150, health: 9, damage: 2, range: 400, cooldown: 1.9 },
+  { id: "halberdier", nameKey: "personnel.halberdier.name", descriptionKey: "personnel.halberdier.description", icon: "⚔", price: 120, health: 13, damage: 5, range: 58, cooldown: 1.5 },
 ];
 
 export const emptyEquipment = () => Object.fromEntries(equipment.map((item) => [item.id, 0]));

@@ -3,6 +3,8 @@
 //   node scripts/smoke-test.mjs
 import { pathToFileURL } from "node:url";
 import { resolve } from "node:path";
+import { createHash } from "node:crypto";
+import { writeFileSync } from "node:fs";
 
 const projectRoot = resolve(import.meta.dirname, "..");
 
@@ -39,9 +41,37 @@ const numericStyles = new Set([
   "globalAlpha", "lineWidth", "miterLimit", "shadowBlur", "shadowOffsetX", "shadowOffsetY",
 ]);
 
+// Moving a draw branch is as easy to get wrong as moving an AI branch, and the
+// assertions above cannot see it: a helmet drawn after the spear instead of
+// before still passes every check. With H5_TRACE_DRAW=1 every canvas call and
+// every style write is folded into one digest, so a refactor that is supposed to
+// be pure code motion can be proven byte-identical (same seed, same frames).
+const drawHash = process.env.H5_TRACE_DRAW === "1" ? createHash("sha256") : null;
+const drawLog = [];
+let drawCalls = 0;
+function recordDraw(text) {
+  if (!drawHash) return;
+  drawHash.update(`${text}\n`);
+  drawCalls += 1;
+  if (process.env.H5_TRACE_DRAW_LOG) drawLog.push(text);
+}
+
+// The screen shake is the one value in the game that is deliberately random
+// (`Math.random`, so two hull hits never jitter identically). A byte-for-byte
+// draw comparison needs it reproducible, so a traced run swaps in one fixed
+// sequence - the game itself is untouched.
+if (drawHash) {
+  let shakeSeed = 0x9e3779b9;
+  Math.random = () => {
+    shakeSeed = (shakeSeed * 1664525 + 1013904223) >>> 0;
+    return shakeSeed / 0x100000000;
+  };
+}
+
 const gradient = {
   addColorStop(offset, color) {
     checkNumbers("addColorStop", [offset]);
+    recordDraw(`addColorStop(${offset},${color})`);
     void color;
   },
 };
@@ -66,15 +96,20 @@ const context2d = new Proxy({
     if (geometryCalls.has(property)) {
       return (...args) => {
         checkNumbers(String(property), args);
+        recordDraw(`${String(property)}(${args.join(",")})`);
         return undefined;
       };
     }
-    return () => undefined;
+    return (...args) => {
+      recordDraw(`${String(property)}(${args.join(",")})`);
+      return undefined;
+    };
   },
   set(target, property, value) {
     if (numericStyles.has(property) && typeof value === "number" && !Number.isFinite(value)) {
       noteNonFinite(String(property), [value]);
     }
+    recordDraw(`${String(property)}=${value}`);
     target[property] = value;
     return true;
   },
@@ -205,12 +240,66 @@ function dispatchWindow(type, event) {
   for (const handler of listeners.window.get(type) ?? []) handler({ preventDefault() {}, target: {}, ...event });
 }
 
-function runFrames(frameCount) {
+// A behaviour refactor can only be called behaviour-preserving if the simulation
+// is bit-identical before and after, and "the checks still pass" cannot show that:
+// a moved branch that rounds one coordinate differently still passes every
+// assertion. With H5_TRACE=1 the harness therefore folds every value the
+// simulation owns into one hash, frame by frame. Two runs of the same seed must
+// print the same digest; H5_TRACE_LOG=<path> also writes the per-frame values so
+// the first divergent frame can be diffed field by field.
+//
+// Values are stringified with their shortest round-trip form, so the comparison is
+// exact rather than rounded: `toFixed` would hide the sub-pixel drift this is
+// meant to catch.
+const traceEnabled = process.env.H5_TRACE === "1";
+const traceHash = traceEnabled ? createHash("sha256") : null;
+const traceLog = [];
+const TRACE_STATE_NUMBERS = [
+  "elapsed", "score", "kills", "wave", "spawnTimer", "formationsSpawned",
+  "bossWarningTimer", "objectiveTarget", "shake",
+];
+const TRACE_UNIT_NUMBERS = ["x", "y", "angle", "speed", "health", "cooldown", "invulnerable"];
+const TRACE_ENEMY_NUMBERS = [
+  "x", "y", "angle", "health", "knockedDown", "idleTimer", "idleTarget",
+  "investigateTimer", "attackCooldown", "shotCooldown", "contactCooldown",
+  "lastSeenX", "lastSeenY",
+];
+
+function pushNumbers(parts, object, keys) {
+  for (const key of keys) parts.push(object?.[key]);
+}
+
+function frameFingerprint() {
+  const game = globalThis.__h5game;
+  if (!game) return "boot";
+  const { state, player } = game;
+  const parts = [state.mode, state.phase, player.mode];
+  pushNumbers(parts, state, TRACE_STATE_NUMBERS);
+  pushNumbers(parts, player, TRACE_UNIT_NUMBERS);
+  for (const enemy of state.enemies) {
+    parts.push(enemy.type, enemy.seesPlayer);
+    pushNumbers(parts, enemy, TRACE_ENEMY_NUMBERS);
+  }
+  for (const formation of state.formations) parts.push(formation.id, formation.x, formation.y);
+  for (const drop of state.drops) parts.push(drop.type, drop.x, drop.y, drop.value, drop.life);
+  for (const bullet of state.bullets) parts.push(bullet.kind, bullet.x, bullet.y, bullet.z);
+  for (const companion of state.footCompanions) parts.push(companion.x, companion.y, companion.health);
+  for (const particle of state.particles) parts.push(particle.x, particle.y, particle.life);
+  return parts.join(",");
+}
+
+function runFrames(frameCount, afterFrame = null) {
   for (let frameIndex = 0; frameIndex < frameCount; frameIndex += 1) {
     nextFrameTime += 16.7;
     const callbacks = preRenderQueue.splice(0);
     if (callbacks.length === 0) throw new Error(`Game loop stopped scheduling frames after ${frameIndex} frames.`);
     for (const callback of callbacks) callback(nextFrameTime);
+    if (traceHash) {
+      const fingerprint = frameFingerprint();
+      traceHash.update(`${fingerprint}\n`);
+      if (process.env.H5_TRACE_LOG) traceLog.push(fingerprint);
+    }
+    if (afterFrame) afterFrame();
   }
 }
 
@@ -267,13 +356,95 @@ check(
 check("menu start begins a battle", query("#battle-screen").hidden === false);
 checkCamera("battle start");
 
+// Sampled after every frame of the combat run. Two units in the same pixel is
+// the visible symptom of the guard-post collapse (a whole column used to walk
+// onto one post), and a non-finite `angle` is what the boss idle branch wrote
+// before `spawnBoss` gave it a facing to fall back on.
+const enemyGap = { worst: Infinity, nonFiniteAngle: null };
+// Idle units look around their formation's front. Two live invariants: a settled
+// unit never leaves the scan band, and the scan actually runs here (not just in
+// the focused unit test). A unit that just lost sight spends up to ~1.9s easing
+// round from its combat heading, so each unit is latched as settled once it is
+// first inside the band and only checked from then on.
+const idleScan = { states: new WeakMap(), widest: 0, bandBreak: null, settled: 0, drifters: 0, quietClearance: 0 };
+function sampleIdleScan() {
+  for (const enemy of game?.state?.enemies ?? []) {
+    if (enemy.destroyed) continue;
+    let entry = idleScan.states.get(enemy);
+    if (!entry) idleScan.states.set(enemy, entry = { settled: false, widest: 0 });
+    const idle = !enemy.seesPlayer && !(enemy.investigateTimer > 0)
+      && Math.hypot(enemy.homeX - enemy.x, enemy.homeY - enemy.y) <= 8;
+    if (!idle) {
+      entry.settled = false;
+      entry.widest = 0;
+      continue;
+    }
+    // Signed distance from the spawn front, wrapped into [0, pi].
+    const raw = (enemy.angle - enemy.homeAngle) % (Math.PI * 2);
+    const drift = Math.min(Math.abs(raw), Math.PI * 2 - Math.abs(raw));
+    if (!entry.settled) {
+      if (drift > 0.34 + 0.02) continue;
+      entry.settled = true;
+      idleScan.settled += 1;
+    }
+    if (drift > entry.widest) entry.widest = drift;
+    if (!entry.drifted && drift > 0.05) {
+      entry.drifted = true;
+      idleScan.drifters += 1;
+    }
+    if (drift > idleScan.widest) idleScan.widest = drift;
+    if (drift > 0.34 + 0.02 && !idleScan.bandBreak) idleScan.bandBreak = `${enemy.type} ${drift.toFixed(3)}rad`;
+  }
+}
+function sampleEnemies() {
+  sampleIdleScan();
+  const enemies = game?.state?.enemies ?? [];
+  for (let first = 0; first < enemies.length; first += 1) {
+    const left = enemies[first];
+    if (left.destroyed) continue;
+    if (!Number.isFinite(left.angle) && !enemyGap.nonFiniteAngle) enemyGap.nonFiniteAngle = left.type;
+    for (let second = first + 1; second < enemies.length; second += 1) {
+      const right = enemies[second];
+      if (right.destroyed) continue;
+      const gap = Math.hypot(left.x - right.x, left.y - right.y) - (left.radius + right.radius);
+      enemyGap.worst = Math.min(enemyGap.worst, gap);
+    }
+  }
+}
+
 // Roam and fire: the chariot turns, rams, and volleys so formations, projectiles,
 // collision damage, drops, and HUD updates all execute.
 for (const [frameBlock, key] of [[120, "w"], [120, "a"], [120, "w"], [120, "d"], [120, "s"], [120, "w"], [180, "d"]]) {
   dispatchWindow("keydown", { key });
   dispatchWindow("keydown", { key: " " });
-  runFrames(frameBlock);
+  runFrames(frameBlock, sampleEnemies);
   dispatchWindow("keyup", { key });
+}
+
+// Quiet watch: park the chariot in the emptiest corner and let the formations
+// that are still standing carry on. The roam above drives straight through them,
+// so no unit there gets more than a frame or two of quiet, and the idle scan is
+// the one behaviour that only shows itself when nothing is happening.
+{
+  const inset = 140;
+  const corners = [
+    [inset, inset],
+    [game.world.width - inset, inset],
+    [inset, game.world.height - inset],
+    [game.world.width - inset, game.world.height - inset],
+  ];
+  const standing = game.state.enemies.filter((enemy) => !enemy.destroyed);
+  let best = corners[0];
+  let clearance = -Infinity;
+  for (const [x, y] of corners) {
+    const nearest = standing.length === 0 ? Infinity : Math.min(...standing.map((enemy) => Math.hypot(enemy.x - x, enemy.y - y)));
+    if (nearest > clearance) { clearance = nearest; best = [x, y]; }
+  }
+  idleScan.quietClearance = clearance;
+  game.player.health = game.player.maxHealth;
+  game.player.x = best[0];
+  game.player.y = best[1];
+  runFrames(420, sampleEnemies);
 }
 
 check("game loop still schedules frames", preRenderQueue.length > 0);
@@ -296,6 +467,22 @@ check("battle clock stayed finite", Number.isFinite(game?.state.elapsed) && Numb
 check("formations spawned enemies", (game?.state.enemies.length ?? 0) > 0, `enemies=${game?.state.enemies.length}`);
 check("enemy positions are finite", (game?.state.enemies ?? []).every((enemy) => Number.isFinite(enemy.x) && Number.isFinite(enemy.y)),
   `first=${game?.state.enemies?.[0]?.x},${game?.state.enemies?.[0]?.y}`);
+const formations = game?.state?.formations ?? [];
+let footprintOverlap = false;
+for (let first = 0; first < formations.length; first += 1) {
+  for (let second = first + 1; second < formations.length; second += 1) {
+    const left = formations[first];
+    const right = formations[second];
+    if (Math.abs(left.x - right.x) < left.halfWidth + right.halfWidth
+      && Math.abs(left.y - right.y) < left.halfHeight + right.halfHeight) footprintOverlap = true;
+  }
+}
+check("no two formation footprints overlap", !footprintOverlap, `formations=${formations.length}`);
+check("no two enemies occupy the same pixel", enemyGap.worst > -6, `worst body gap=${enemyGap.worst.toFixed(1)}px`);
+check("every enemy kept a finite facing", enemyGap.nonFiniteAngle === null, `angle went ${enemyGap.nonFiniteAngle}`);
+check("idle enemies looked around inside their scan band",
+  idleScan.bandBreak === null && idleScan.settled > 0 && idleScan.drifters > 0,
+  `settled=${idleScan.settled} drifters=${idleScan.drifters} widest=${idleScan.widest.toFixed(3)}rad clearance=${idleScan.quietClearance.toFixed(0)}px ${idleScan.bandBreak ?? ""}`);
 check("player state stayed finite", Number.isFinite(game?.player.x) && Number.isFinite(game?.player.y)
   && Number.isFinite(game?.player.health), `player=${game?.player.x},${game?.player.y} health=${game?.player.health}`);
 checkCamera("after the combat run");
@@ -322,4 +509,10 @@ check("no errors after UI interactions", loggedErrors.length === 0, loggedErrors
 checkCamera("after UI interactions");
 check("no non-finite geometry after UI interactions", nonFiniteDraws.length === 0, nonFiniteDraws.slice(0, 3).join(" | "));
 console.log(failures.length === 0 ? "\n[smoke] PASS" : `\n[smoke] FAIL: ${failures.join("; ")}`);
+if (traceHash) {
+  console.log(`[smoke] trace=${traceHash.digest("hex")} frames=${traceLog.length ? traceLog.length : "hashed"}`);
+  if (process.env.H5_TRACE_LOG) writeFileSync(process.env.H5_TRACE_LOG, `${traceLog.join("\n")}\n`);
+}
+if (drawHash) console.log(`[smoke] draw=${drawHash.digest("hex")} calls=${drawCalls}`);
+if (process.env.H5_TRACE_DRAW_LOG) writeFileSync(process.env.H5_TRACE_DRAW_LOG, `${drawLog.join("\n")}\n`);
 process.exitCode = failures.length === 0 ? 0 : 1;

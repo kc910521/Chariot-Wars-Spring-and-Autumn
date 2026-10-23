@@ -8,6 +8,160 @@ export function createRenderer({ canvas, context, view, camera, world, player, s
     context.fill();
   }
 
+  // A row lists the weapon and armour pieces its silhouette wears, in draw order
+  // (armour first, weapon over it), so "heavy" is plate + sword in the data table
+  // instead of an `if (type === "heavy")` down here.
+  function drawWeaponShaft() {
+    context.strokeStyle = "#493421";
+    context.lineWidth = 3;
+    context.beginPath();
+    context.moveTo(4, 0);
+    context.lineTo(25, 0);
+    context.stroke();
+  }
+
+  const FOOT_OVERLAYS = {
+    plate(unit) {
+      const armorGradient = context.createLinearGradient(-12, -8, 10, 9);
+      armorGradient.addColorStop(0, unit.hitFlash > 0 ? "#fff0c7" : "#aab8bc");
+      armorGradient.addColorStop(0.45, unit.hitFlash > 0 ? "#fff0c7" : "#778da0");
+      armorGradient.addColorStop(1, "#3e4e5c");
+      context.fillStyle = armorGradient;
+      roundedRect(-12, -8, 20, 17, 4);
+      context.strokeStyle = "#d5e2e8";
+      context.lineWidth = 2;
+      context.strokeRect(-12, -8, 20, 17);
+      context.strokeStyle = "rgba(42, 49, 54, 0.7)";
+      context.lineWidth = 1;
+      for (let row = 0; row < 3; row += 1) {
+        context.beginPath();
+        context.moveTo(-9, -4 + row * 5);
+        context.lineTo(5, -4 + row * 5);
+        context.stroke();
+      }
+      context.fillStyle = "#d6bc79";
+      for (const rivetX of [-9, 5]) {
+        for (const rivetY of [-5, 5]) {
+          context.beginPath();
+          context.arc(rivetX, rivetY, 1, 0, Math.PI * 2);
+          context.fill();
+        }
+      }
+      context.fillStyle = "#d9cda9";
+      context.beginPath();
+      context.ellipse(-13, 0, 5, 10, 0, 0, Math.PI * 2);
+      context.fill();
+      context.strokeStyle = "#655d4e";
+      context.lineWidth = 1.5;
+      context.stroke();
+      context.fillStyle = "#57534c";
+      context.beginPath();
+      context.arc(2, -8, 6, Math.PI, Math.PI * 2);
+      context.fill();
+      context.fillStyle = "#d5e2e8";
+      context.fillRect(-8, -3, 13, 2);
+    },
+    bow() {
+      context.strokeStyle = "#59412d";
+      context.lineWidth = 2;
+      context.beginPath();
+      context.moveTo(-8, -4);
+      context.lineTo(-12, 2);
+      context.stroke();
+      context.strokeStyle = "#4f3425";
+      context.lineWidth = 2.5;
+      context.beginPath();
+      context.arc(8, 0, 8, -1.15, 1.15);
+      context.stroke();
+      context.strokeStyle = "#d5c294";
+      context.lineWidth = 1;
+      context.beginPath();
+      context.moveTo(11, -7);
+      context.lineTo(11, 7);
+      context.stroke();
+      context.strokeStyle = "#59422d";
+      context.lineWidth = 1.5;
+      context.beginPath();
+      context.moveTo(4, 0);
+      context.lineTo(17, 0);
+      context.stroke();
+    },
+    sling() {
+      context.strokeStyle = "#8a6238";
+      context.lineWidth = 2;
+      context.beginPath();
+      context.moveTo(-8, -4);
+      context.lineTo(-12, 2);
+      context.stroke();
+      context.strokeStyle = "#4f3425";
+      context.lineWidth = 2.5;
+      context.beginPath();
+      context.arc(7, 0, 7, -1.15, 1.15);
+      context.stroke();
+      context.strokeStyle = "#d5c294";
+      context.lineWidth = 1;
+      context.beginPath();
+      context.moveTo(10, -6);
+      context.lineTo(10, 6);
+      context.moveTo(9, -5);
+      context.lineTo(14, -9);
+      context.stroke();
+    },
+    sword() {
+      drawWeaponShaft();
+      context.fillStyle = "#f0d89b";
+      context.beginPath();
+      context.moveTo(28, 0);
+      context.lineTo(20, -5);
+      context.lineTo(19, 0);
+      context.lineTo(20, 5);
+      context.closePath();
+      context.fill();
+      context.strokeStyle = "#493421";
+      context.lineWidth = 1.5;
+      context.stroke();
+    },
+    "dagger-axe"() {
+      drawWeaponShaft();
+      context.fillStyle = "#f0d89b";
+      context.strokeStyle = "#493421";
+      context.lineWidth = 1.5;
+      context.beginPath();
+      context.moveTo(23, -3);
+      context.lineTo(31, -9);
+      context.lineTo(30, -1);
+      context.lineTo(35, 2);
+      context.lineTo(29, 5);
+      context.lineTo(23, 2);
+      context.closePath();
+      context.fill();
+      context.stroke();
+    },
+  };
+
+  // The one piece of chariot kit that comes off a row rather than off the art.
+  const CHARIOT_OVERLAYS = {
+    bow() {
+      context.fillStyle = "#d6b47c";
+      context.beginPath();
+      context.arc(1, -5, 4, 0, Math.PI * 2);
+      context.fill();
+      context.fillStyle = "#5b4934";
+      context.fillRect(-3, -9, 9, 2);
+      context.strokeStyle = "#4f3425";
+      context.lineWidth = 2;
+      context.beginPath();
+      context.arc(10, -5, 7, -1.1, 1.1);
+      context.stroke();
+      context.strokeStyle = "#d5c294";
+      context.lineWidth = 1;
+      context.beginPath();
+      context.moveTo(12, -11);
+      context.lineTo(12, 1);
+      context.stroke();
+    },
+  };
+
   function drawCombatant(unit, isPlayer = false, isAlly = false) {
     if (unit.destroyed) return;
     const knockedDown = !isPlayer && unit.knockedDown > 0;
@@ -16,7 +170,9 @@ export function createRenderer({ canvas, context, view, camera, world, player, s
     context.rotate(unit.angle + (knockedDown ? Math.PI / 2 : 0));
     if (knockedDown) context.scale(1.25, 0.55);
     else {
-      const scale = unit.boss ? 1.08 : unit.type === "chariot" || unit.type === "chariot-archer" || isPlayer ? 1.2 : 1.3;
+      // The player is not a data row, so both he and any unit without a
+      // descriptor keep the pre-dispatch scale the art was tuned at.
+      const scale = unit.visual?.scale ?? (isPlayer ? 1.2 : 1.3);
       context.scale(scale, scale);
     }
 
@@ -29,7 +185,11 @@ export function createRenderer({ canvas, context, view, camera, world, player, s
     context.ellipse(0, 8, (unit.radius || 14) * 1.25, (unit.radius || 14) * 0.82, 0, 0, Math.PI * 2);
     context.fill();
 
-    if (unit.boss && unit.type === "elephant") {
+    // Which silhouette to draw is the row's `visual.kind`, so a new unit type
+    // chooses its art in the data table instead of by editing this chain. The
+    // player has no row: he rides the chariot art while mounted, walks otherwise.
+    const kind = unit.visual?.kind ?? (isPlayer && player.mode !== "foot" ? "chariot" : "foot");
+    if (kind === "elephant") {
       context.fillStyle = "rgba(44, 32, 21, 0.3)";
       context.beginPath();
       context.ellipse(0, 11, 43, 31, 0, 0, Math.PI * 2);
@@ -40,7 +200,7 @@ export function createRenderer({ canvas, context, view, camera, world, player, s
           context.fillRect(legX - 7, legY, 14, 27);
         }
       }
-      context.fillStyle = unit.hitFlash > 0 ? "#d0b895" : unit.color;
+      context.fillStyle = unit.hitFlash > 0 ? "#d0b895" : unit.visual.robe;
       context.beginPath();
       context.ellipse(0, 0, 36, 27, 0, 0, Math.PI * 2);
       context.fill();
@@ -74,7 +234,7 @@ export function createRenderer({ canvas, context, view, camera, world, player, s
       context.strokeStyle = "#d0b06e";
       context.lineWidth = 2;
       context.strokeRect(-8, -13, 25, 22);
-    } else if (unit.boss && unit.type === "lion") {
+    } else if (kind === "lion") {
       context.fillStyle = "rgba(44, 32, 21, 0.3)";
       context.beginPath();
       context.ellipse(2, 10, 40, 24, 0, 0, Math.PI * 2);
@@ -83,7 +243,7 @@ export function createRenderer({ canvas, context, view, camera, world, player, s
       for (const legX of [-22, 18]) {
         for (const legY of [-15, 15]) context.fillRect(legX, legY, 9, 23);
       }
-      context.fillStyle = unit.hitFlash > 0 ? "#e6c59a" : unit.color;
+      context.fillStyle = unit.hitFlash > 0 ? "#e6c59a" : unit.visual.robe;
       context.beginPath();
       context.ellipse(0, 0, 34, 22, 0, 0, Math.PI * 2);
       context.fill();
@@ -117,7 +277,7 @@ export function createRenderer({ canvas, context, view, camera, world, player, s
       context.moveTo(-25, -4);
       context.lineTo(-38, -11);
       context.stroke();
-    } else if (unit.boss && unit.type === "catapult") {
+    } else if (kind === "catapult") {
       context.fillStyle = "rgba(44, 32, 21, 0.3)";
       context.beginPath();
       context.ellipse(0, 12, 42, 28, 0, 0, Math.PI * 2);
@@ -164,8 +324,8 @@ export function createRenderer({ canvas, context, view, camera, world, player, s
       context.fill();
       context.fillStyle = "#c8a36b";
       context.fillRect(25, 3, 13, 3);
-    } else if (unit.type === "chariot" || unit.type === "chariot-archer" || (isPlayer && player.mode !== "foot")) {
-      const robeColor = isPlayer ? "#17796f" : unit.type === "chariot-archer" ? "#a65b2c" : "#b33d32";
+    } else if (kind === "chariot") {
+      const robeColor = isPlayer ? "#17796f" : unit.visual.robe;
       context.fillStyle = "rgba(30, 28, 22, 0.42)";
       context.beginPath();
       context.ellipse(18, 3, 34, 18, 0, 0, Math.PI * 2);
@@ -299,24 +459,9 @@ export function createRenderer({ canvas, context, view, camera, world, player, s
       context.lineTo(-12, -15);
       context.closePath();
       context.fill();
-      if (!isPlayer && unit.type === "chariot-archer") {
-        context.fillStyle = "#d6b47c";
-        context.beginPath();
-        context.arc(1, -5, 4, 0, Math.PI * 2);
-        context.fill();
-        context.fillStyle = "#5b4934";
-        context.fillRect(-3, -9, 9, 2);
-        context.strokeStyle = "#4f3425";
-        context.lineWidth = 2;
-        context.beginPath();
-        context.arc(10, -5, 7, -1.1, 1.1);
-        context.stroke();
-        context.strokeStyle = "#d5c294";
-        context.lineWidth = 1;
-        context.beginPath();
-        context.moveTo(12, -11);
-        context.lineTo(12, 1);
-        context.stroke();
+      // Crew kit the row asks for: the chariot archer carries a bow.
+      if (!isPlayer) {
+        for (const overlay of unit.visual?.overlays ?? []) CHARIOT_OVERLAYS[overlay]();
       }
       if (isPlayer) {
         const roster = getRoster().filter((member) => member.alive !== false);
@@ -342,15 +487,9 @@ export function createRenderer({ canvas, context, view, camera, world, player, s
         }
       }
     } else {
-      const unitColors = {
-        spear: "#c75a3b",
-        ge: "#8e4b82",
-        heavy: "#566778",
-        archer: "#4f8b55",
-        slinger: "#cc8b37",
-      };
+      // Foot silhouette - the default, shared by the ranks and by anyone walking.
       const robeColor = knockedDown ? "#806c55" : unit.hitFlash > 0 ? "#fff0c7"
-        : isPlayer ? "#17796f" : isAlly ? "#398b63" : unitColors[unit.type] || unit.color;
+        : isPlayer ? "#17796f" : isAlly ? "#398b63" : (unit.visual?.robe ?? "#a74732");
       context.fillStyle = "#493729";
       context.beginPath();
       context.ellipse(-4, 8, 3.2, 5.5, -0.12, 0, Math.PI * 2);
@@ -419,125 +558,10 @@ export function createRenderer({ canvas, context, view, camera, world, player, s
       context.fillStyle = "#f2d276";
       context.fillRect(-8, 1, 12, 2);
 
-      if (unit.type === "heavy") {
-        const armorGradient = context.createLinearGradient(-12, -8, 10, 9);
-        armorGradient.addColorStop(0, unit.hitFlash > 0 ? "#fff0c7" : "#aab8bc");
-        armorGradient.addColorStop(0.45, unit.hitFlash > 0 ? "#fff0c7" : "#778da0");
-        armorGradient.addColorStop(1, "#3e4e5c");
-        context.fillStyle = armorGradient;
-        roundedRect(-12, -8, 20, 17, 4);
-        context.strokeStyle = "#d5e2e8";
-        context.lineWidth = 2;
-        context.strokeRect(-12, -8, 20, 17);
-        context.strokeStyle = "rgba(42, 49, 54, 0.7)";
-        context.lineWidth = 1;
-        for (let row = 0; row < 3; row += 1) {
-          context.beginPath();
-          context.moveTo(-9, -4 + row * 5);
-          context.lineTo(5, -4 + row * 5);
-          context.stroke();
-        }
-        context.fillStyle = "#d6bc79";
-        for (const rivetX of [-9, 5]) {
-          for (const rivetY of [-5, 5]) {
-            context.beginPath();
-            context.arc(rivetX, rivetY, 1, 0, Math.PI * 2);
-            context.fill();
-          }
-        }
-        context.fillStyle = "#d9cda9";
-        context.beginPath();
-        context.ellipse(-13, 0, 5, 10, 0, 0, Math.PI * 2);
-        context.fill();
-        context.strokeStyle = "#655d4e";
-        context.lineWidth = 1.5;
-        context.stroke();
-        context.fillStyle = "#57534c";
-        context.beginPath();
-        context.arc(2, -8, 6, Math.PI, Math.PI * 2);
-        context.fill();
-        context.fillStyle = "#d5e2e8";
-        context.fillRect(-8, -3, 13, 2);
-      }
-      if (unit.type === "archer") {
-        context.strokeStyle = "#59412d";
-        context.lineWidth = 2;
-        context.beginPath();
-        context.moveTo(-8, -4);
-        context.lineTo(-12, 2);
-        context.stroke();
-        context.strokeStyle = "#4f3425";
-        context.lineWidth = 2.5;
-        context.beginPath();
-        context.arc(8, 0, 8, -1.15, 1.15);
-        context.stroke();
-        context.strokeStyle = "#d5c294";
-        context.lineWidth = 1;
-        context.beginPath();
-        context.moveTo(11, -7);
-        context.lineTo(11, 7);
-        context.stroke();
-        context.strokeStyle = "#59422d";
-        context.lineWidth = 1.5;
-        context.beginPath();
-        context.moveTo(4, 0);
-        context.lineTo(17, 0);
-        context.stroke();
-      } else if (unit.type === "slinger") {
-        context.strokeStyle = "#8a6238";
-        context.lineWidth = 2;
-        context.beginPath();
-        context.moveTo(-8, -4);
-        context.lineTo(-12, 2);
-        context.stroke();
-        context.strokeStyle = "#4f3425";
-        context.lineWidth = 2.5;
-        context.beginPath();
-        context.arc(7, 0, 7, -1.15, 1.15);
-        context.stroke();
-        context.strokeStyle = "#d5c294";
-        context.lineWidth = 1;
-        context.beginPath();
-        context.moveTo(10, -6);
-        context.lineTo(10, 6);
-        context.moveTo(9, -5);
-        context.lineTo(14, -9);
-        context.stroke();
-      } else {
-        context.strokeStyle = "#493421";
-        context.lineWidth = 3;
-        context.beginPath();
-        context.moveTo(4, 0);
-        context.lineTo(25, 0);
-        context.stroke();
-        if (unit.type === "ge") {
-          context.fillStyle = "#f0d89b";
-          context.strokeStyle = "#493421";
-          context.lineWidth = 1.5;
-          context.beginPath();
-          context.moveTo(23, -3);
-          context.lineTo(31, -9);
-          context.lineTo(30, -1);
-          context.lineTo(35, 2);
-          context.lineTo(29, 5);
-          context.lineTo(23, 2);
-          context.closePath();
-          context.fill();
-          context.stroke();
-        } else {
-          context.fillStyle = "#f0d89b";
-          context.beginPath();
-          context.moveTo(28, 0);
-          context.lineTo(20, -5);
-          context.lineTo(19, 0);
-          context.lineTo(20, 5);
-          context.closePath();
-          context.fill();
-          context.strokeStyle = "#493421";
-          context.lineWidth = 1.5;
-          context.stroke();
-        }
-      }
+      // Armour and weapon are the row's `overlays`, drawn in the order it lists
+      // them: heavy is ["plate", "sword"], an archer just ["bow"]. The default is
+      // the unarmoured kit the player and his companions walk in.
+      for (const overlay of unit.visual?.overlays ?? ["sword"]) FOOT_OVERLAYS[overlay](unit);
     }
 
     if (!isPlayer && (unit.boss || unit.health < unit.maxHealth)) {
@@ -955,7 +979,7 @@ export function createRenderer({ canvas, context, view, camera, world, player, s
     for (const bullet of state.bullets) {
       if (!inView(bullet.x, bullet.y, 40)) continue;
       const color = bullet.kind === "stone" ? "#5f3428"
-        : bullet.owner === "enemy" ? "#a53b2b" : bullet.owner === "ally" ? "#718c56" : "#f1d28b";
+        : bullet.owner === "enemy" ? "#a53b2b" : bullet.owner === "ally" ? "#888c56" : "#f1d28b";
       const height = bullet.z ?? 0;
       context.fillStyle = "rgba(48, 38, 26, 0.2)";
       context.beginPath();

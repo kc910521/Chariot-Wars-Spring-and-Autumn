@@ -6,7 +6,7 @@ import { CHARIOT_CONTROL_CONFIG } from "./player.js";
 // launch query itself (that lives in src/platform/): `?seed=42` then pins every
 // battle of the session, which makes a run easy to reproduce.
 export function createGameState({ seedSource = () => null } = {}) {
-  const world = { width: 2400, height: 1600 };
+  const world = { width: 2800, height: 1800 };
   const view = { width: 960, height: 592 };
   const camera = { x: 0, y: 0 };
   const player = {

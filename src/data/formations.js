@@ -35,28 +35,84 @@ export const formationPatterns = [
   },
 ];
 
+// Everything the simulation and the renderer need to know about a unit type
+// lives in one row. The columns that used to be `type === "..."` branches:
+//
+//   behaviour     which brain answers "the target is in sight"
+//                 (see src/game/units/behaviours.js)
+//   sightRange    how far it can spot a target at all
+//   score         points awarded for the kill
+//   deathBurst    particle tint of the death burst
+//   holdsRank     melee line that defends its spawn slot instead of charging
+//   chaseSeconds  how long a holdRank unit pursues once its line is alerted
+//                 (its travel in that time is the span it may leave the slot)
+//   weapon / attackInterval
+//                 what the melee swing draws and how often it lands
+//   kite          ranged unit: back off inside `retreat`, only loose a shot
+//                 beyond `minFire`
+//   vehicle       the player's hull pushes foot units aside, never these
+//   visual        renderer descriptor: which silhouette to draw, at what scale,
+//                 in what colour, with which weapon/armour overlays
+//
+// `ranged` is not a brain: it predates one and still means "shoots, and therefore
+// does not walk to a remembered sighting" - which is why the catapult (a boss
+// that lobs stones and does go looking) deliberately omits it.
 export const enemyStats = {
-  chariot: { health: 14, radius: 21, speed: 75, damage: 20, range: 39, color: "#9c392b" },
-  "chariot-archer": {
-    health: 8, radius: 21, speed: 80, damage: 9, range: 490, color: "#8b512d",
-    ranged: true, projectile: "arrow", projectileSpeed: 430, projectileRange: 390, fireInterval: 2.3,
+  chariot: {
+    health: 14, radius: 21, speed: 75, damage: 20, range: 39,
+    behaviour: "cavalry", sightRange: 450, score: 180, deathBurst: "#db9d55",
+    holdsRank: false, vehicle: true,
+    visual: { kind: "chariot", scale: 1.2, robe: "#b33d32", overlays: [] },
   },
-  spear: { health: 2, radius: 12, speed: 61, damage: 13, range: 35, color: "#b35a37" },
-  ge: { health: 3, radius: 13, speed: 53, damage: 18, range: 39, color: "#8e5436" },
+  "chariot-archer": {
+    health: 8, radius: 21, speed: 80, damage: 9, range: 490,
+    ranged: true, projectile: "arrow", projectileSpeed: 430, projectileRange: 390, fireInterval: 2.3,
+    behaviour: "ranged", sightRange: 620, score: 100, deathBurst: "#a74732",
+    holdsRank: false, vehicle: true,
+    kite: { retreat: 210, minFire: 120 },
+    visual: { kind: "chariot", scale: 1.2, robe: "#a65b2c", overlays: ["bow"] },
+  },
+  spear: {
+    health: 2, radius: 12, speed: 61, damage: 13, range: 35,
+    behaviour: "infantry", sightRange: 450, score: 100, deathBurst: "#a74732",
+    holdsRank: true, chaseSeconds: 1.2, weapon: "sword", attackInterval: 1.15,
+    visual: { kind: "foot", scale: 1.3, robe: "#c75a3b", overlays: ["sword"] },
+  },
+  ge: {
+    health: 3, radius: 13, speed: 53, damage: 18, range: 39,
+    behaviour: "infantry", sightRange: 450, score: 100, deathBurst: "#a74732",
+    holdsRank: true, chaseSeconds: 1.2, weapon: "dagger-axe", attackInterval: 1.4,
+    visual: { kind: "foot", scale: 1.3, robe: "#8e4b82", overlays: ["dagger-axe"] },
+  },
   heavy: {
-    health: 6, radius: 16, speed: 36, damage: 22, range: 27, color: "#54504a",
+    health: 6, radius: 16, speed: 36, damage: 22, range: 27,
     armor: true, collisionDamage: false, collisionResistance: true,
+    behaviour: "infantry", sightRange: 450, score: 100, deathBurst: "#a74732",
+    holdsRank: true, chaseSeconds: 1.2, weapon: "sword", attackInterval: 1.15,
+    visual: { kind: "foot", scale: 1.3, robe: "#566778", overlays: ["plate", "sword"] },
   },
   archer: {
-    health: 1, radius: 12, speed: 45, damage: 10, range: 460, color: "#68784d",
+    health: 1, radius: 12, speed: 45, damage: 10, range: 460,
     ranged: true, projectile: "arrow", projectileSpeed: 420, projectileRange: 330, fireInterval: 2.1,
+    behaviour: "ranged", sightRange: 620, score: 120, deathBurst: "#a74732",
+    holdsRank: true,
+    kite: { retreat: 210, minFire: 120 },
+    visual: { kind: "foot", scale: 1.3, robe: "#4f8b55", overlays: ["bow"] },
   },
   slinger: {
-    health: 3, radius: 13, speed: 47, damage: 14, range: 330, color: "#78634b",
+    health: 3, radius: 13, speed: 47, damage: 14, range: 330,
     ranged: true, projectile: "stone", projectileSpeed: 455, projectileRange: 430, fireInterval: 2.65,
+    behaviour: "ranged", sightRange: 620, score: 100, deathBurst: "#a74732",
+    holdsRank: true,
+    kite: { retreat: 210, minFire: 120 },
+    visual: { kind: "foot", scale: 1.3, robe: "#cc8b37", overlays: ["sling"] },
   },
 };
 
+// Bosses share the columns of the rank-and-file rows, plus the two that make a
+// boss fight read differently: `band` (the [near, far] distances it fights in,
+// so the catapult backs off inside 260 instead of standing in the melee) and
+// `attack` (how its swing lands, if it swings at all).
 export const bossTypes = [
   {
     type: "elephant",
@@ -67,7 +123,11 @@ export const bossTypes = [
     speed: 48,
     damage: 42,
     range: 58,
-    color: "#55493a",
+    behaviour: "boss", sightRange: 900, score: 1200, deathBurst: "#d9a34f",
+    holdsRank: false,
+    band: [0, 58],
+    attack: { kind: "melee", interval: 2.2, effect: "stomp" },
+    visual: { kind: "elephant", scale: 1.08, robe: "#55493a", overlays: [] },
   },
   {
     type: "lion",
@@ -78,7 +138,11 @@ export const bossTypes = [
     speed: 85,
     damage: 32,
     range: 52,
-    color: "#a85c32",
+    behaviour: "boss", sightRange: 900, score: 1200, deathBurst: "#d9a34f",
+    holdsRank: false,
+    band: [0, 52],
+    attack: { kind: "melee", interval: 1.05, effect: "claw" },
+    visual: { kind: "lion", scale: 1.08, robe: "#a85c32", overlays: [] },
   },
   {
     type: "catapult",
@@ -90,6 +154,10 @@ export const bossTypes = [
     damage: 96,
     range: 620,
     projectile: "stone",
-    color: "#70553a",
+    behaviour: "boss", sightRange: 900, score: 1200, deathBurst: "#d9a34f",
+    holdsRank: false,
+    band: [260, 420],
+    attack: { kind: "shot" },
+    visual: { kind: "catapult", scale: 1.08, robe: "#70553a", overlays: [] },
   },
 ];

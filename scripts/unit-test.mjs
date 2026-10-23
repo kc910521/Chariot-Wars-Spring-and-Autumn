@@ -17,6 +17,8 @@ import {
   solveTimeToGround, updateProjectiles,
 } from "../src/game/projectiles.js";
 import { createEnemies } from "../src/game/units/enemies.js";
+import { chasePoint, isInsideFormation, updateFormationAlerts } from "../src/game/units/formations.js";
+import { clamp, shortestAngleDifference } from "../src/utils/math.js";
 import { createRandomSeed, createSeededRandom, parseSeed } from "../src/utils/random.js";
 import { updateCamera } from "../src/render/camera.js";
 
@@ -93,6 +95,31 @@ test("personnel prices are positive and roles stay unique", () => {
     assert.ok(member.health > 0 && member.damage > 0 && member.range > 0 && member.cooldown > 0);
     assert.ok(!roles.has(member.id), `duplicate role ${member.id}`);
     roles.add(member.id);
+  }
+});
+
+console.log("[unit] angle math");
+
+test("shortestAngleDifference wraps across the +/-pi seam", () => {
+  const half = Math.PI / 2;
+  assert.ok(Math.abs(shortestAngleDifference(0, half) - half) < 1e-12);
+  assert.ok(Math.abs(shortestAngleDifference(half, 0) + half) < 1e-12);
+  // 0.1 rad past the seam is 0.1 rad across it, not ~6.18 rad the long way round.
+  assert.ok(Math.abs(Math.abs(shortestAngleDifference(3.1, -3.1)) - 0.0832) < 1e-3);
+  // A digitising seam at exactly pi is allowed to land on either end of the range.
+  for (const delta of [Math.PI, -Math.PI]) {
+    assert.ok(Math.abs(Math.abs(shortestAngleDifference(0, delta)) - Math.PI) < 1e-12);
+  }
+  for (const from of [-7, -1, 0, 2.5, 9]) {
+    for (const to of [-8, -0.5, 1, 6, 12]) {
+      const shortest = shortestAngleDifference(from, to);
+      assert.ok(Math.abs(shortest) <= Math.PI + 1e-12, `${from}->${to} left the range`);
+      // Reconstructing the target must land on the same heading, mod 2pi (never
+      // on the opposite one, which is what a `sin`-only check would let through).
+      const rebuilt = from + shortest - to;
+      assert.ok(Math.abs(Math.sin(rebuilt)) < 1e-9 && Math.cos(rebuilt) > 0.999999,
+        `${from}->${to} did not reconstruct (${rebuilt})`);
+    }
   }
 });
 
@@ -662,6 +689,463 @@ test("blood decals are capped and fatality adds drops", () => {
   assert.equal(state.bloodStains[1].drops.length, 10);
   for (let index = 0; index < 400; index += 1) addBloodStain(state, random, index, index, 12, false);
   assert.equal(state.bloodStains.length, 180);
+});
+
+console.log("[unit] enemy formations");
+
+// A minimal battlefield that runs the real spawner and the real per-frame AI.
+// `moveEntitySafely` actually moves (- the dust test stubs it out) so positions
+// are observable, and the PRNG is seeded so a failure is reproducible.
+function formationRig({ sight = { on: true }, seed = 11 } = {}) {
+  const state = {
+    enemies: [], particles: [], drops: [], footCompanions: [], formations: [],
+    formationsSpawned: 0, wave: 1, elapsed: 0, mode: "running", score: 0, kills: 0,
+    bloodStains: [], meleeEffects: [], bullets: [], groundArrows: [], shake: 0,
+  };
+  const player = {
+    x: arena.width / 2, y: arena.height / 2, radius: 17, mode: "chariot", angle: 0, speed: 0,
+    knockbackX: 0, knockbackY: 0, invulnerable: 0, swarmDamageCooldown: 0,
+  };
+  const enemies = createEnemies({
+    bossTypes,
+    enemyStats,
+    formationPatterns,
+    state,
+    player,
+    world: arena,
+    random: createSeededRandom(seed),
+    circleIntersectsObstacle: () => false,
+    moveEntitySafely: (entity, dx, dy) => {
+      entity.x = clamp(entity.x + dx, 0, arena.width);
+      entity.y = clamp(entity.y + dy, 0, arena.height);
+    },
+    getChariotCollisionDamage: () => 5,
+    playTone: () => {},
+    updateHud: () => {},
+    hasLineOfSight: () => sight.on,
+    fireEnemy: () => {},
+    damagePlayer: () => {},
+    damageCompanion: () => {},
+  });
+  return { state, player, enemies, sight };
+}
+
+// Slots are laid out in the pattern's own frame, where local -Y is the front.
+function spawnFormationAt(rig, patternIndex) {
+  rig.state.wave = patternIndex + 1;
+  rig.state.formationsSpawned = 0;
+  rig.enemies.spawnFormation();
+  return rig.state.formations[rig.state.formations.length - 1];
+}
+
+function toWorld(formation, localX, localY) {
+  return {
+    x: formation.x + localX * Math.cos(formation.heading) - localY * Math.sin(formation.heading),
+    y: formation.y + localX * Math.sin(formation.heading) + localY * Math.cos(formation.heading),
+  };
+}
+
+function parkPlayerInFront(rig, formation, distance) {
+  const spot = toWorld(formation, 0, -distance);
+  rig.player.x = spot.x;
+  rig.player.y = spot.y;
+}
+
+const infantry = (state) => state.enemies.filter((enemy) => !enemy.boss && !enemy.ranged
+  && enemy.type !== "chariot");
+
+// Gap between the two closest bodies; negative means they overlap.
+function closestPairGap(state) {
+  let worst = Infinity;
+  for (let first = 0; first < state.enemies.length; first += 1) {
+    for (let second = first + 1; second < state.enemies.length; second += 1) {
+      const left = state.enemies[first];
+      const right = state.enemies[second];
+      if (left.destroyed || right.destroyed) continue;
+      worst = Math.min(worst, Math.hypot(left.x - right.x, left.y - right.y) - (left.radius + right.radius));
+    }
+  }
+  return worst;
+}
+
+test("every melee unit holds its own slot instead of sharing a guard post", () => {
+  for (let patternIndex = 0; patternIndex < formationPatterns.length; patternIndex += 1) {
+    const label = formationPatterns[patternIndex].nameKey;
+    const rig = formationRig();
+    const formation = spawnFormationAt(rig, patternIndex);
+    // 420px: inside the 450px sight range (so the guard code runs) but well
+    // outside the footprint + alert margin. Standing inside the footprint is the
+    // other contract - the line wakes and leaves its slot - and it is covered by
+    // the aggro tests below.
+    parkPlayerInFront(rig, formation, 420);
+    const units = infantry(rig.state);
+    const walked = new Map(units.map((unit) => [unit, 0]));
+    for (let frame = 0; frame < 600; frame += 1) {
+      const before = new Map(units.map((unit) => [unit, { x: unit.x, y: unit.y }]));
+      rig.enemies.updateUnits(1 / 60);
+      for (const unit of units) {
+        const start = before.get(unit);
+        walked.set(unit, walked.get(unit) + Math.hypot(unit.x - start.x, unit.y - start.y));
+      }
+    }
+
+    const slots = new Set(units.map((unit) => `${unit.homeX},${unit.homeY}`));
+    assert.equal(slots.size, units.length, `${label}: two units share a slot`);
+    for (const unit of units) {
+      const stray = Math.hypot(unit.x - unit.homeX, unit.y - unit.homeY);
+      // 48 is the widest leash (38 + 10); the guard post used to sit 92px out
+      // and the whole column converged on it, so a unit 140px off its slot was
+      // the normal case.
+      assert.ok(stray <= 54, `${label}: ${unit.type} strayed ${stray.toFixed(1)}px from its slot`);
+      // A pacing guard still ends up near its slot, so distance alone would miss
+      // it: walking into the player's hull and being pushed back out chattered
+      // ~200px per 10 simulated seconds.
+      const paced = walked.get(unit);
+      assert.ok(paced < 120, `${label}: ${unit.type} paced ${paced.toFixed(0)}px in 10s`);
+    }
+    const gap = closestPairGap(rig.state);
+    assert.ok(gap > -6, `${label}: bodies stacked to ${gap.toFixed(1)}px overlap`);
+  }
+});
+
+test("a chariot at contact range does not make the line shuffle", () => {
+  const rig = formationRig();
+  const formation = spawnFormationAt(rig, 3);
+  const slot = formationPatterns[3].slots.find((entry) => entry[0] === "spear");
+  const home = toWorld(formation, slot[1], slot[2]);
+  const unit = rig.state.enemies.find((enemy) => Math.abs(enemy.homeX - home.x) < 0.01
+    && Math.abs(enemy.homeY - home.y) < 0.01);
+  // 32px from the slot: outside the 29px touch distance (so nothing shoves it)
+  // but inside the 35px spear range, where the whole lean is clamped away.
+  rig.player.x = home.x + 32;
+  rig.player.y = home.y;
+  const start = { x: unit.x, y: unit.y };
+  for (let frame = 0; frame < 120; frame += 1) rig.enemies.updateUnits(1 / 60);
+  const moved = Math.hypot(unit.x - start.x, unit.y - start.y);
+  assert.ok(moved < 1, `spear walked ${moved.toFixed(2)}px with the chariot already in reach`);
+});
+
+test("the melee line stays inside the footprint the renderer draws", () => {
+  const rig = formationRig();
+  const formation = spawnFormationAt(rig, 3);
+  // Parked outside the alert band: an alerted line deliberately leaves the
+  // footprint, and that bound is asserted by the chase tests below.
+  parkPlayerInFront(rig, formation, 420);
+  for (let frame = 0; frame < 600; frame += 1) rig.enemies.updateUnits(1 / 60);
+  for (const unit of infantry(rig.state)) {
+    // Back into the pattern's own frame; the dashed rect is axis aligned there.
+    const dx = unit.x - formation.x;
+    const dy = unit.y - formation.y;
+    const localX = dx * Math.cos(formation.heading) + dy * Math.sin(formation.heading);
+    const localY = -dx * Math.sin(formation.heading) + dy * Math.cos(formation.heading);
+    assert.ok(Math.abs(localX) <= formation.halfWidth, `${unit.type} pokes past the side border`);
+    assert.ok(Math.abs(localY) <= formation.halfHeight, `${unit.type} pokes past the front/back border`);
+  }
+});
+
+test("ramming through a formation spreads the infantry instead of stacking it", () => {
+  const rig = formationRig();
+  const formation = spawnFormationAt(rig, 3);
+  const acrossX = Math.cos(formation.heading);
+  const acrossY = Math.sin(formation.heading);
+  rig.player.x = formation.x - acrossX * 220;
+  rig.player.y = formation.y - acrossY * 220;
+  rig.player.angle = Math.atan2(acrossY, acrossX);
+  // Above the 20px/s shove threshold, below the 65px/s ram threshold: every
+  // contacted unit is knocked down and pushed, which is what used to pile the
+  // survivors onto one pixel.
+  rig.player.speed = 60;
+  let worst = Infinity;
+  for (let frame = 0; frame < 220; frame += 1) {
+    rig.player.x += acrossX * 2;
+    rig.player.y += acrossY * 2;
+    rig.enemies.updateUnits(1 / 60);
+    worst = Math.min(worst, closestPairGap(rig.state));
+  }
+  assert.ok(worst > -6, `bodies stacked to ${worst.toFixed(1)}px overlap while the chariot ploughed through`);
+});
+
+// --- aggro: the line only holds rank while the player is outside its footprint
+// The tests below pin the border behaviour as geometry first (no simulation, so
+// the numbers are the design constants), then the simulated outcome.
+const calmFormation = (overrides = {}) => ({
+  id: 7, x: 0, y: 0, heading: 0, halfWidth: 116, halfHeight: 86, alerted: false, ...overrides,
+});
+const rankUnit = (overrides = {}) => ({
+  formationId: 7, homeX: 0, homeY: 0, radius: 12, speed: 60, chaseSeconds: 1.2, ...overrides,
+});
+const chariotPlayer = (x, y) => ({ x, y, radius: 17, mode: "chariot" });
+// Local +Y is the back of the line, so a world point at y = 86 + d sits d px
+// behind the dashed border.
+const behindTheLine = (distance) => chariotPlayer(0, 86 + distance);
+
+test("the alert border is the drawn footprint plus a margin, in the pattern's frame", () => {
+  const formation = calmFormation({ heading: Math.PI / 2 });
+  // Rotated a quarter turn, the line's +X runs down the world's +Y axis.
+  assert.equal(isInsideFormation(formation, 0, 116), true, "the line's own width is not honoured");
+  assert.equal(isInsideFormation(formation, 0, 117), false);
+  assert.equal(isInsideFormation(formation, 86, 0), true, "the line's own depth is not honoured");
+  assert.equal(isInsideFormation(formation, 87, 0), false);
+  assert.equal(isInsideFormation(formation, 0, 190, 80), true, "the margin is not applied");
+});
+
+test("the alert latches instead of strobing on its border", () => {
+  const formation = calmFormation();
+  const unit = rankUnit();
+  // 40px behind the border: outside the 24px wake margin, so a cold line sleeps.
+  updateFormationAlerts([formation], [unit], behindTheLine(40));
+  assert.equal(formation.alerted, false);
+  assert.equal(unit.alerted, false);
+  updateFormationAlerts([formation], [unit], behindTheLine(-10));
+  assert.equal(formation.alerted, true, "the player standing inside the footprint did not wake the line");
+  assert.equal(unit.alerted, true, "the wake was not mirrored onto the unit");
+  // Still in the same band, but now awake: a chariot parked here must not make
+  // the whole formation flicker in and out of pursuit every frame.
+  updateFormationAlerts([formation], [unit], behindTheLine(40));
+  assert.equal(formation.alerted, true, "the alert released inside its own release band");
+  assert.equal(unit.alerted, true);
+  // Past the release border, it stands down.
+  updateFormationAlerts([formation], [unit], behindTheLine(73 + 1));
+  assert.equal(formation.alerted, false);
+  assert.equal(unit.alerted, false, "a unit kept chasing after its line stood down");
+});
+
+test("a chasing unit's goal is its leash plus one chase span from its slot", () => {
+  const unit = rankUnit();
+  // At 500px the brace has faded, so the leash is its 38px base and the span is
+  // 60px/s * 1.2s = 72px: the goal sits 110px from the slot.
+  const goal = chasePoint(chariotPlayer(0, -500), unit, 0, -500);
+  assert.ok(Math.abs(goal.x) < 1e-9, `goal drifted sideways: ${goal.x}`);
+  assert.ok(Math.abs(goal.y + 110) < 1e-9, `goal sat ${Math.abs(goal.y)}px out, expected 110`);
+  // In reach of the slot, the goal is simply the player.
+  assert.deepEqual(chasePoint(chariotPlayer(30, 40), unit, 30, 40), { x: 30, y: 40 });
+  // A unit with no formation (a boss) is never clamped.
+  const loose = chasePoint(chariotPlayer(0, -500), rankUnit({ formationId: undefined }), 0, -500);
+  assert.deepEqual(loose, { x: 0, y: -500 });
+});
+
+test("a line the chariot drives into leaves its rank and closes to reach", () => {
+  for (let patternIndex = 0; patternIndex < formationPatterns.length; patternIndex += 1) {
+    const label = formationPatterns[patternIndex].nameKey;
+    const rig = formationRig();
+    const formation = spawnFormationAt(rig, patternIndex);
+    parkPlayerInFront(rig, formation, 20);
+    rig.enemies.updateUnits(1 / 60);
+    assert.equal(formation.alerted, true, `${label}: the line did not wake`);
+    const units = infantry(rig.state);
+    for (const unit of units) assert.equal(unit.alerted, true, `${label}: ${unit.type} missed the alert`);
+    const distanceOf = (unit) => Math.hypot(unit.x - rig.player.x, unit.y - rig.player.y);
+    // Units that spawn already inside their own reach cannot demonstrate a
+    // charge, so the charge is measured on the ones that were out of reach.
+    const startedOutOfReach = units.filter((unit) => distanceOf(unit) > unit.range);
+    assert.ok(startedOutOfReach.length > 0, `${label}: every unit spawned in reach, the test proves nothing`);
+    const meanBefore = units.reduce((sum, unit) => sum + distanceOf(unit), 0) / units.length;
+    for (let frame = 0; frame < 900; frame += 1) rig.enemies.updateUnits(1 / 60);
+    for (const unit of startedOutOfReach) {
+      // Every unit that had ground to cover left its slot: one still welded to
+      // the slot it spawned on is the old "the line never comes at you" bug.
+      const stray = Math.hypot(unit.x - unit.homeX, unit.y - unit.homeY);
+      assert.ok(stray > 2, `${label}: ${unit.type} never left its slot (${stray.toFixed(1)}px off)`);
+    }
+    // The back ranks are walled in by their own front rank - a 32px-wide heavy
+    // stops a body-width short - so the line is judged as a body: it made
+    // contact (the nearest unit is in reach) and its centre of mass advanced.
+    const nearest = units.reduce((best, unit) => (distanceOf(unit) < distanceOf(best) ? unit : best));
+    assert.ok(distanceOf(nearest) <= nearest.range + 1,
+      `${label}: the line stopped ${distanceOf(nearest).toFixed(0)}px out, never making contact`);
+    const meanAfter = units.reduce((sum, unit) => sum + distanceOf(unit), 0) / units.length;
+    assert.ok(meanAfter < meanBefore * 0.8,
+      `${label}: the line only closed from ${meanBefore.toFixed(0)}px to ${meanAfter.toFixed(0)}px`);
+  }
+});
+
+test("an alerted line settles at reach instead of chattering", () => {
+  const rig = formationRig();
+  const formation = spawnFormationAt(rig, 3);
+  parkPlayerInFront(rig, formation, 20);
+  for (let frame = 0; frame < 900; frame += 1) rig.enemies.updateUnits(1 / 60);
+  const units = infantry(rig.state);
+  const before = new Map(units.map((unit) => [unit, { x: unit.x, y: unit.y }]));
+  for (let frame = 0; frame < 180; frame += 1) rig.enemies.updateUnits(1 / 60);
+  for (const unit of units) {
+    const start = before.get(unit);
+    const walked = Math.hypot(unit.x - start.x, unit.y - start.y);
+    // Pressing into the hull and being pushed back out chattered ~200px per 10s
+    // when the guard post was shared; a converged crowd has to stand still.
+    assert.ok(walked < 3, `${unit.type} paced ${walked.toFixed(1)}px against the stopped chariot`);
+  }
+  const gap = closestPairGap(rig.state);
+  assert.ok(gap > -6, `the converged crowd stacked to ${gap.toFixed(1)}px overlap`);
+});
+
+test("the line stands down and walks back to its slots once the player is clear", () => {
+  const rig = formationRig();
+  const formation = spawnFormationAt(rig, 0);
+  parkPlayerInFront(rig, formation, 20);
+  for (let frame = 0; frame < 240; frame += 1) rig.enemies.updateUnits(1 / 60);
+  assert.equal(formation.alerted, true, "the line never woke, so the release proves nothing");
+  parkPlayerInFront(rig, formation, 420);
+  for (let frame = 0; frame < 600; frame += 1) rig.enemies.updateUnits(1 / 60);
+  assert.equal(formation.alerted, false, "the line stayed awake with the chariot 420px out");
+  for (const unit of infantry(rig.state)) {
+    assert.equal(unit.alerted, false);
+    const stray = Math.hypot(unit.x - unit.homeX, unit.y - unit.homeY);
+    // Back under the stand-watch leash (38 + 10 of brace), i.e. the line re-forms
+    // exactly where the slot-holding test above expects it.
+    assert.ok(stray <= 54, `${unit.type} stayed ${stray.toFixed(1)}px off its slot after standing down`);
+  }
+});
+
+test("sight flickering at the 450px rim does not make the line pace about", () => {
+  const rig = formationRig();
+  const formation = spawnFormationAt(rig, 3);
+  parkPlayerInFront(rig, formation, 445);
+  const units = infantry(rig.state);
+  const walked = new Map(units.map((unit) => [unit, 0]));
+  const heading = new Map();
+  let reversals = 0;
+  for (let frame = 0; frame < 600; frame += 1) {
+    if (frame % 36 === 0) rig.sight.on = !rig.sight.on;
+    const before = new Map(units.map((unit) => [unit, { x: unit.x, y: unit.y }]));
+    rig.enemies.updateUnits(1 / 60);
+    for (const unit of units) {
+      const start = before.get(unit);
+      const dx = unit.x - start.x;
+      const dy = unit.y - start.y;
+      const span = Math.hypot(dx, dy);
+      walked.set(unit, walked.get(unit) + span);
+      const last = heading.get(unit);
+      if (span > 0.02 && last && last.x * dx + last.y * dy < 0) reversals += 1;
+      if (span > 0.02) heading.set(unit, { x: dx / span, y: dy / span });
+    }
+  }
+  const maxWalk = Math.max(...units.map((unit) => walked.get(unit)));
+  // The post/lastSeen/home attractors used to trade places at this rim: 467px
+  // of pacing and 120 direction flips per 10 simulated seconds.
+  assert.ok(maxWalk < 100, `infantry walked ${maxWalk.toFixed(0)}px while sight flickered`);
+  assert.ok(reversals <= 5, `infantry reversed direction ${reversals} times`);
+});
+
+test("a boss that has not seen the player still has a finite facing", () => {
+  const rig = formationRig();
+  rig.sight.on = false;
+  rig.enemies.spawnBoss();
+  for (let frame = 0; frame < 5; frame += 1) rig.enemies.updateUnits(1 / 60);
+  const boss = rig.state.boss;
+  // `spawnBoss` never set `wanderAngle`, so the idle branch stored `undefined`
+  // in `angle` and every later transform was NaN.
+  assert.ok(Number.isFinite(boss.angle), `boss angle became ${boss.angle}`);
+  // The boss idles like the infantry: it may look around its spawn heading, but
+  // that heading is what keeps `angle` finite.
+  assert.ok(Math.abs(shortestAngleDifference(boss.homeAngle, boss.angle)) <= 0.34 + 1e-9,
+    `boss idled ${boss.angle} instead of near ${boss.homeAngle}`);
+  assert.ok(Number.isFinite(boss.x) && Number.isFinite(boss.y));
+  for (let frame = 0; frame < 3600; frame += 1) rig.enemies.updateUnits(1 / 60);
+  assert.ok(Number.isFinite(boss.angle), `boss angle became ${boss.angle} after a minute of idling`);
+  assert.ok(Math.abs(shortestAngleDifference(boss.homeAngle, boss.angle)) <= 0.34 + 1e-9);
+});
+
+// "Idle" means "has never seen the player": `sight.on = false` keeps every unit
+// in the idle branch (nothing to investigate) while the real spawner and the
+// real per-frame AI still run.
+function idleRig(patternIndex = 3) {
+  const rig = formationRig();
+  rig.sight.on = false;
+  spawnFormationAt(rig, patternIndex);
+  return rig;
+}
+
+// Runs idle frames and reports what the scan did: the widest heading off each
+// unit's spawn front, the biggest single-frame turn, the total turn, and how far
+// the body itself actually travelled.
+function scanStats(rig, frames) {
+  const units = infantry(rig.state);
+  const origin = new Map(units.map((unit) => [unit, { x: unit.x, y: unit.y }]));
+  const turned = new Map(units.map((unit) => [unit, 0]));
+  let widest = 0;
+  let maxStep = 0;
+  for (let frame = 0; frame < frames; frame += 1) {
+    const before = new Map(units.map((unit) => [unit, unit.angle]));
+    rig.enemies.updateUnits(1 / 60);
+    for (const unit of units) {
+      const step = Math.abs(shortestAngleDifference(before.get(unit), unit.angle));
+      turned.set(unit, turned.get(unit) + step);
+      maxStep = Math.max(maxStep, step);
+      widest = Math.max(widest, Math.abs(shortestAngleDifference(unit.homeAngle, unit.angle)));
+    }
+  }
+  const moved = new Map(units.map((unit) => [unit, Math.hypot(unit.x - origin.get(unit).x, unit.y - origin.get(unit).y)]));
+  return { units, turned, moved, widest, maxStep };
+}
+
+test("idle units scan their front without leaving the slot they spawned on", () => {
+  const rig = idleRig();
+  const { units, turned, moved, widest } = scanStats(rig, 3600);
+  assert.ok(units.length > 4, "the rig spawned too few infantry to tell a line from a lull");
+  for (const unit of units) {
+    // Rotation only. If the sway bought its motion by nudging the body it would
+    // start moving the target of the leash and footprint tests above.
+    assert.ok(moved.get(unit) < 1e-9, `${unit.type} drifted ${moved.get(unit).toFixed(3)}px while idling`);
+    assert.ok(Number.isFinite(unit.angle), `${unit.type} angle became ${unit.angle}`);
+    // Looking around, not standing frozen: ~14 re-rolls a minute, each a 0.1-0.34
+    // rad turn, so a whole minute of stillness here means the scan never ran.
+    assert.ok(turned.get(unit) > 0.2, `${unit.type} stood frozen for 60s`);
+  }
+  assert.ok(widest <= 0.34 + 1e-9, `idle heading reached ${widest.toFixed(3)}rad off the front`);
+  // A bounded re-roll must still use its band, otherwise the unit is just facing
+  // forward with extra bookkeeping.
+  assert.ok(widest > 0.1, `no unit ever looked away from the front (widest ${widest.toFixed(3)}rad)`);
+});
+
+test("the idle scan eases into its heading instead of snapping", () => {
+  const rig = idleRig();
+  const { maxStep } = scanStats(rig, 1800);
+  // 1.7 rad/s at 60fps; a snap would write the whole 0.34 rad offset in one frame.
+  assert.ok(maxStep <= 1.7 / 60 + 1e-9, `idle heading snapped ${maxStep.toFixed(4)}rad in one frame`);
+  assert.ok(maxStep > 0.005, "the scan never actually moved");
+});
+
+test("a long idle run cannot walk the heading out of the scan band", () => {
+  // Five simulated minutes. `wanderAngle += (random()-0.5)*0.65` accumulated ~180
+  // rad over this window, which is why idle units ended up facing backwards.
+  const rig = idleRig();
+  const { units, moved, widest } = scanStats(rig, 18000);
+  assert.ok(widest <= 0.34 + 1e-9, `idle heading drifted to ${widest.toFixed(3)}rad off the front`);
+  for (const unit of units) {
+    assert.ok(Number.isFinite(unit.angle), `${unit.type} angle became ${unit.angle}`);
+    assert.ok(moved.get(unit) < 1e-9, `${unit.type} drifted ${moved.get(unit).toFixed(3)}px while idling`);
+  }
+});
+
+test("idle scanning is seeded, so a replayed seed looks the same", () => {
+  const first = idleRig();
+  const second = idleRig();
+  for (let frame = 0; frame < 900; frame += 1) {
+    first.enemies.updateUnits(1 / 60);
+    second.enemies.updateUnits(1 / 60);
+  }
+  const left = infantry(first.state);
+  const right = infantry(second.state);
+  assert.equal(left.length, right.length);
+  for (let index = 0; index < left.length; index += 1) {
+    // Anything reaching for Math.random() instead of the injected seeded
+    // generator breaks replays and the seeded smoke runs.
+    assert.equal(left[index].idleTarget, right[index].idleTarget);
+    assert.equal(left[index].angle, right[index].angle);
+  }
+});
+
+test("a new formation is not spawned on ground another formation holds", () => {
+  const rig = formationRig();
+  const first = spawnFormationAt(rig, 3);
+  // Same pattern, so the reservation is the only thing keeping them apart.
+  rig.state.wave = 4;
+  rig.enemies.spawnFormation();
+  assert.equal(rig.state.formations.length, 2, "the second formation found no ground in 8 tries");
+  const second = rig.state.formations[1];
+  const overlaps = Math.abs(first.x - second.x) < first.halfWidth + second.halfWidth
+    && Math.abs(first.y - second.y) < first.halfHeight + second.halfHeight;
+  assert.equal(overlaps, false, "the two formations interpenetrate");
 });
 
 console.log(`\n[unit] PASS (${passed} checks)`);
