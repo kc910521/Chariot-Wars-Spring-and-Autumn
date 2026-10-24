@@ -1,4 +1,4 @@
 .playwright-mcp
 .playwright-mcp/*
 .playwright-mcp/**
-
+.DS_Store

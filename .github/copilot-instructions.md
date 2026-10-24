@@ -73,3 +73,10 @@
 16. **Document intent.** Explain non-obvious decisions, constraints, and invariants. Avoid redundant comments.
 
 **Decision rule:** When choosing between two solutions that satisfy the requirements, prefer the one that is easier to understand, test, debug, and modify.
+
+## Git Workflow
+
+- **Never push to `main` or `master`.** Creating commits is fine; publishing them is the repository owner's action. This holds for this repo and for the 小游戏 port in `~/WeChatProjects/chariot-wars`, which carries the same gameplay code under a `main` branch.
+- Never `git push` without being asked, on any branch. Finish by reporting the new commit hash and the branch's ahead/behind state, so the owner can decide when to publish.
+- Stage only the files the change is actually about; leave unrelated working-tree edits out instead of sweeping them in with `git commit -a`. Keep the existing commit style: a lowercase subject with a `prefix:` when it applies, then short body paragraphs explaining why.
+- Do not rewrite published history (`reset --hard`, `commit --amend`, force-push) on a branch that has an upstream.
