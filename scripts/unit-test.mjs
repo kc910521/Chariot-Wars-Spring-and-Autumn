@@ -246,6 +246,66 @@ test("terrain slows movement", () => {
   assert.ok(entity.x > 100 && entity.x < 200, `expected slowed travel, got ${entity.x}`);
 });
 
+// The sight index files every sight-blocking element into a uniform grid and each
+// sample only visits its own cell, so these pin the two shapes it has to file, the
+// rebuild when a battle installs a new list, and - the one that matters - that the
+// indexed answer is identical to walking the whole list.
+function referenceLineOfSight(obstacles, fromX, fromY, toX, toY) {
+  const dx = toX - fromX;
+  const dy = toY - fromY;
+  const steps = Math.ceil(Math.hypot(dx, dy) / 12);
+  for (let step = 1; step < steps; step += 1) {
+    const fraction = step / steps;
+    const x = fromX + dx * fraction;
+    const y = fromY + dy * fraction;
+    if (obstacles.some((obstacle) => clearsSight(obstacle) && elementIntersects(x, y, 2, obstacle))) return false;
+  }
+  return true;
+}
+
+test("line of sight follows whichever list the current battle installed", () => {
+  const local = { obstacles: [], terrain: [] };
+  const sight = createCollisionSystem({ campaign: local, world });
+  assert.equal(sight.hasLineOfSight(100, 100, 900, 100), true, "an empty map blocks nothing");
+  local.obstacles = [
+    { type: "tree", x: 500, y: 100, radius: 40 },
+    { type: "wall", x: 400, y: 300, width: 200, height: 40 },
+  ];
+  assert.equal(sight.hasLineOfSight(100, 100, 900, 100), false, "the tree must block the first line");
+  assert.equal(sight.hasLineOfSight(100, 320, 900, 320), false, "the wall must block the second");
+  assert.equal(sight.hasLineOfSight(100, 220, 900, 220), true, "the gap between them is clear");
+  local.obstacles = [];
+  assert.equal(sight.hasLineOfSight(100, 100, 900, 100), true, "a new battle must clear the index");
+});
+
+test("the indexed line of sight answers exactly like the full walk", () => {
+  // A dense mixed list, so the sampled lines cross many cells and both shapes.
+  const random = createSeededRandom(2024);
+  const obstacles = [];
+  for (let index = 0; index < 44; index += 1) {
+    const x = 40 + random() * (world.width - 80);
+    const y = 40 + random() * (world.height - 80);
+    obstacles.push(index % 3 === 0
+      ? { type: "wall", x, y, width: 60 + random() * 100, height: 30 + random() * 40 }
+      : { type: "tree", x, y, radius: 24 + random() * 36 });
+  }
+  const sight = createCollisionSystem({ campaign: { obstacles, terrain: [] }, world });
+  let blocked = 0;
+  for (let index = 0; index < 500; index += 1) {
+    const fromX = random() * world.width;
+    const fromY = random() * world.height;
+    const toX = random() * world.width;
+    const toY = random() * world.height;
+    const expected = referenceLineOfSight(obstacles, fromX, fromY, toX, toY);
+    assert.equal(
+      sight.hasLineOfSight(fromX, fromY, toX, toY), expected,
+      `divergence for (${fromX}, ${fromY}) -> (${toX}, ${toY})`,
+    );
+    if (!expected) blocked += 1;
+  }
+  assert.ok(blocked > 50, `the sample must also contain blocked lines, got ${blocked}`);
+});
+
 console.log("[unit] map elements");
 
 // The catalog is the contract: an instance carries only `type` and geometry, so a

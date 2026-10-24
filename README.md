@@ -68,7 +68,7 @@ h5game/
 │   │   ├── state.js              # Player, campaign, and battle state creation
 │   │   ├── map.js                # Procedural battlefield scatter, driven by the element catalog
 │   │   ├── stages.js             # Campaign stages, objectives, extraction, progression
-│   │   ├── collision.js          # Obstacle/terrain collision, movement clamping, line of sight
+│   │   ├── collision.js          # Obstacle/terrain collision, movement clamping, indexed line of sight
 │   │   ├── elements.js           # Element runtime: shapes, sight, movement cost, drift, footprint queries
 │   │   ├── combat.js             # Player fire, crew attacks, damage, dismounting
 │   │   ├── player.js             # Steering and player movement
@@ -115,6 +115,8 @@ H5_SEED=7 node scripts/smoke-test.mjs            # 换一个随机种子复跑�
 冒烟脚本最后还有一段“下车阶段”：先通过真实的“下一战”流程重开一场战局，买入一名弓手和一名长戈兵，再用真实的伤害路径把车体打空，于是 `dismountPlayer`、随从站位、随从寻敌与齐射都会真正跑起来。这段流程需要 HUD 之外的两个入口，因此 `window.__h5game` 额外暴露了 `combat` 与 `stageManager`（仍然只由测试脚本读取）。
 
 `scripts/perf-test.mjs` 用同一套种子化的战场（46 个障碍、四支编队、满编随从）给每帧循环计时，并把阈值写在文件顶部的 `budgets` 里：敌军 AI、弓手齐射、下车随从、30 发弹道，以及单次 `hasLineOfSight` 的微秒成本。阈值是棘轮 —— 每一项都紧贴当前实测值，性能改动落地后要把它调低，注释里记着实测数与目标数。
+
+视线查询曾经是最大的逐帧热点：每次 `hasLineOfSight` 沿线段每 12px 采样一次，每个采样点都要遍历全部约 46 个障碍（约 1.5k 次形状测试），而一名准备就绪的弓手会为每个候选敌人各走一遍。现在 `collision.js` 在开战换列表时把“遮挡视线的”元素按格装进一张均匀网格索引（`campaign.obstacles` 换了列表或长度才重建），每个采样点只查自己所在的格子，判定结果与全表遍历逐条等价（单元测试用 500 条随机线段对拍）；`combat.js` 则把随从的冷却检查移到寻敌之前，装填中的弓手不再白算一遍视线。同一套基准下，单次视线从约 57µs 降到 0.6µs，弓手齐射从约 12ms 的突发降到 0.2ms，下车随从从约 9ms 降到 0.15ms，敌军 AI 从约 0.9ms 降到 0.25ms，而 `H5_TRACE=1` 的逐帧摘要完全不变 —— 这是一次只改代价、不改行为的重构。小游戏端同源同款，摘要同样不变。
 
 两次同种子的运行必须打印同样的摘要：`H5_TRACE=1` 把每帧模拟数值折叠成一个哈希，`H5_TRACE_DRAW=1` 折叠每一次 canvas 调用（并统计调用次数），`H5_TRACE_LOG=<path>` 写出逐帧数值以便定位第一个分歧帧。重构渲染或地图生成时，用它们区分“有意改变”与“顺手改坏”：只搬代码的改动应当摘要不变，换了生成规则（例如按战场分配地表成分）则应当只变一次，并在提交说明里记下新的基线。摘要覆盖随从快照（血量、伤害、射程、冷却）、名册冷却和下车阶段，因此随从重构无法在“哈希不变”的情况下偷换数值。小游戏端 `scripts/headless-smoke.mjs` 用同一套字段、同一组 `H5_TRACE*` 变量输出摘要，两端可以互相对照。
 

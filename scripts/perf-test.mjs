@@ -32,22 +32,21 @@ const noop = () => {};
 // budget so a failure says what moved and by how much.
 const budgets = {
   // Enemy AI: per-unit line of sight, chase, and the O(n^2) separation sweeps.
-  // Measurements on a warm machine spread 0.70-0.95ms, so the ceiling carries
+  // Measurements on a warm machine spread 0.19-0.26ms, so the ceiling carries
   // that spread rather than a single run.
-  enemyFrame: 2, // 0.70-0.95 measured
+  enemyFrame: 0.6, // 0.19-0.26 measured
   // Crew volley: every bow ready, five archers resolving a target against 48
-  // candidates on every frame. Today this is a ~12ms burst every 1.9s rather
-  // than a steady cost, which is exactly why it needs a ceiling: one dropped
-  // frame is a visible hitch. Target <= 0.6 once the sight index and the
-  // cooldown gate land.
-  crewVolley: 20, // 11.7-12.4 measured
+  // candidates on every frame. The sight index plus the cooldown gate took this
+  // from a ~12ms burst to 0.18-0.27ms, but it is still the frame a player feels
+  // if it regresses: one dropped frame is a visible hitch.
+  crewVolley: 0.6, // 0.18-0.27 measured
   // Dismounted companions: the same shape, but sustained rather than periodic.
-  footCompanions: 16, // 8.8-9.3 measured; target <= 0.8
+  footCompanions: 0.5, // 0.13-0.14 measured
   // Projectile integration for a 30-arrow flight.
-  projectiles: 0.6, // 0.11-0.13 measured
+  projectiles: 0.4, // 0.11-0.13 measured
   // One bow-length line-of-sight query, in microseconds, over the real obstacle
   // set. This is the per-call cost the two scan budgets above are made of.
-  lineOfSightMicro: 120, // 55-64 measured; target <= 6
+  lineOfSightMicro: 3, // 0.55-0.60 measured
 };
 
 const { state, player, campaign, world } = createGameState({ seedSource: () => "20240607" });

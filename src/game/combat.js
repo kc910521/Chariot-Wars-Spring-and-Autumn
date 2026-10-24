@@ -168,13 +168,18 @@ export function createCombatSystem({
       companion.knockbackY = (companion.knockbackY || 0) * Math.max(0, 1 - 5 * delta);
 
       companion.attackCooldown = Math.max(0, companion.attackCooldown - delta);
+      // The reload is checked before the scan, not after it: a dismounted archer
+      // used to walk a line of sight to every enemy in range on every frame and
+      // then throw the answer away because the bow was still reloading. That was
+      // the whole steady cost of the foot phase.
+      if (companion.attackCooldown > 0) continue;
       if (companion.type === "archer") {
         const range = companion.range;
         const target = state.enemies
           .filter((enemy) => !enemy.destroyed && distanceBetween(companion.x, companion.y, enemy.x, enemy.y) < range)
           .filter((enemy) => collision.hasLineOfSight(companion.x, companion.y, enemy.x, enemy.y))
           .sort((first, second) => distanceBetween(companion.x, companion.y, first.x, first.y) - distanceBetween(companion.x, companion.y, second.x, second.y))[0];
-        if (!target || companion.attackCooldown > 0) continue;
+        if (!target) continue;
         companion.angle = Math.atan2(target.y - companion.y, target.x - companion.x);
         projectiles.fireAllyArrow({
           x: companion.x,
@@ -190,7 +195,7 @@ export function createCombatSystem({
         const target = state.enemies
           .filter((enemy) => !enemy.destroyed && distanceBetween(companion.x, companion.y, enemy.x, enemy.y) < enemy.radius + 28)
           .sort((first, second) => distanceBetween(companion.x, companion.y, first.x, first.y) - distanceBetween(companion.x, companion.y, second.x, second.y))[0];
-        if (!target || companion.attackCooldown > 0) continue;
+        if (!target) continue;
         const angle = Math.atan2(target.y - companion.y, target.x - companion.x);
         companion.angle = angle;
         addMeleeEffect(target.x, target.y, angle, "dagger-axe");
