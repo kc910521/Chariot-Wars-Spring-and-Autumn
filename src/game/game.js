@@ -16,6 +16,7 @@ import { createRenderer } from "../render/renderer.js";
 import { createHud } from "../ui/hud.js";
 import { bindControls } from "../ui/controls.js";
 import { createScreens } from "../ui/screens.js";
+import { createShopScene } from "../ui/shop-scene.js";
 import { createStageManager } from "./stages.js";
 import { getGameElements } from "../ui/elements.js";
 import { applyTranslations, getLocale, setLocale, translate } from "../i18n/index.js";
@@ -50,12 +51,14 @@ function boot() {
     canvas, menuScreen, battleScreen, shopScreen, menuStartButton, nextBattleButton,
     shopItemsElement, shopStatsElement, shopGoldElement, shopScoreElement, shopKillsElement,
     shopStageElement, shopLocationElement, shopMessageElement, scoreElement,
+    shopRigCanvas, shopCampCanvas, shopRigCaptionElement, shopCampCaptionElement,
+    shopInfoElement,
     waveElement, goldElement, modeElement, hullLabelElement, hullValueElement, hullHealthElement,
     overlay, overlayEyebrow, overlayTitle, overlayCopy, overlayButton, startButton,
     startLabel, objectiveCountElement, objectiveProgressElement, objectiveLabelElement,
     extractionGuideElement, extractionArrowElement, extractionDistanceElement,
     touchPadElement, touchHintElement, touchControlsElement,
-    touchJoystickElement, touchJoystickKnob,
+    touchJoystickElement, touchJoystickKnob, touchFireElement,
     bossWarningElement, bossWarningTitleElement, bossWarningSubtitleElement,
     soundButton, soundIcon, fatalErrorReloadButton,
   } = elements;
@@ -64,10 +67,18 @@ function boot() {
   const seedSource = () => launchQuery().seed;
   const { keys, touchInput, view, world, camera, player, campaign, state } = createGameState({ seedSource });
   const playTone = createAudio(state).playTone;
+  // The dossier's two canvases: the live team preview and the camp fire. They
+  // only animate while the shop screen is up, so they never compete with the
+  // battle loop for a frame.
+  const shopScene = createShopScene({ rigCanvas: shopRigCanvas, campCanvas: shopCampCanvas });
   const equipmentShop = createEquipmentShop({
     campaign,
     container: shopItemsElement,
     statsContainer: shopStatsElement,
+    scene: shopScene,
+    rigCaptionElement: shopRigCaptionElement,
+    campCaptionElement: shopCampCaptionElement,
+    infoElement: shopInfoElement,
     goldElement: shopGoldElement,
     messageElement: shopMessageElement,
   });
@@ -81,7 +92,7 @@ function boot() {
       hullHealthElement, objectiveCountElement, objectiveProgressElement,
       objectiveLabelElement, extractionGuideElement, extractionArrowElement,
       extractionDistanceElement, touchPadElement, touchHintElement, touchControlsElement,
-      touchJoystickElement, touchJoystickKnob,
+      touchJoystickElement, touchJoystickKnob, touchFireElement,
     },
   });
   const collision = createCollisionSystem({ campaign, world });
@@ -98,6 +109,9 @@ function boot() {
     state,
     campaign,
     draw,
+    // The shop's preview runs on its own clock and must start and stop with the
+    // screen, not with the battle loop.
+    onModeChange: (mode) => shopScene.setActive(mode === "shop"),
     elements: {
       menuScreen, battleScreen, shopScreen, overlay, startLabel, startButton,
       overlayEyebrow, overlayTitle, overlayCopy, overlayButton,
@@ -201,7 +215,7 @@ function boot() {
     player.swarmDamageCooldown = Math.max(0, player.swarmDamageCooldown - delta);
     readControls(delta);
     if (state.mode !== "running") return;
-    if (keys.has(" ") || keys.has("Spacebar")) combat.firePlayer();
+    combat.updatePlayerFire(delta, keys.has(" ") || keys.has("Spacebar"));
     player.cooldown = Math.max(0, player.cooldown - delta);
     player.invulnerable = Math.max(0, player.invulnerable - delta);
     combat.updateCrew(delta);
@@ -307,7 +321,7 @@ function boot() {
   // are on it so a harness can drive a real dismount and a real next battle
   // instead of reaching into module internals.
   globalThis.__h5game = {
-    state, player, campaign, world, view, camera, combat, stageManager,
+    state, player, campaign, world, view, camera, combat, stageManager, equipmentShop, shopScene,
   };
 
   startGameLoop({

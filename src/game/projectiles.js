@@ -45,10 +45,16 @@ export function createBallisticProjectile({
   };
 }
 
-export function solveBallisticElevation(distance, speed, gravity = 420) {
+// Low-arc solution for hitting the ground `distance` away. `launchHeight` is the
+// z every projectile starts at: leaving it out (the old call shape) solves as if
+// the bow stood on the ground, which makes the arrow fly longer than requested
+// and land past a close target. Passing LAUNCH_HEIGHT drops the shot exactly on
+// the requested distance instead.
+export function solveBallisticElevation(distance, speed, gravity = 420, launchHeight = 0) {
   if (distance <= 0) return 0;
   const speedSquared = speed * speed;
-  const discriminant = speedSquared ** 2 - gravity * (gravity * distance ** 2);
+  const discriminant = speedSquared ** 2 - gravity * (gravity * distance ** 2)
+    + 2 * launchHeight * speedSquared * gravity;
   if (discriminant <= 0) return Math.PI / 4;
   return Math.atan((speedSquared - Math.sqrt(discriminant)) / (gravity * distance));
 }
@@ -149,18 +155,32 @@ export function createProjectileSystem({
   state, player, world, campaign, collision, burst, dust, playTone,
   damageEnemy, damagePlayer, damageCompanion,
 }) {
-  function firePlayerVolley() {
+  // `aimX`/`aimY` mark a tapped shot: the fan turns onto that bearing and the
+  // arc is solved for the distance instead of using the fixed elevation, so the
+  // arrows come down on the target's ring rather than ~200px past it. Without an
+  // aim point the fixed high arc stands, and that is the long shot.
+  function firePlayerVolley({ aimX = null, aimY = null, tone = null } = {}) {
     const arrowCount = getPlayerArrowCount(campaign.equipment);
     const rules = projectileRules.playerVolley;
     const damage = calculateArrowDamage(campaign.equipment, campaign.horseCount);
+    const aimed = aimX !== null && aimY !== null;
+    const bearing = aimed ? Math.atan2(aimY - player.y, aimX - player.x) : player.angle;
+    // The arrow starts `originOffset` along the bearing, so only the rest of the
+    // distance has to be flown.
+    const aimDistance = aimed
+      ? Math.max(0, Math.hypot(aimX - player.x, aimY - player.y) - rules.originOffset)
+      : 0;
+    const elevation = aimed
+      ? solveBallisticElevation(aimDistance, rules.speed, rules.gravity, LAUNCH_HEIGHT)
+      : rules.elevation;
     for (let index = 0; index < arrowCount; index += 1) {
-      const angle = player.angle + (index - (arrowCount - 1) / 2) * rules.spread;
+      const angle = bearing + (index - (arrowCount - 1) / 2) * rules.spread;
       state.bullets.push(createBallisticProjectile({
         x: player.x + Math.cos(angle) * rules.originOffset,
         y: player.y + Math.sin(angle) * rules.originOffset,
         angle,
         speed: rules.speed,
-        elevation: rules.elevation,
+        elevation,
         gravity: rules.gravity,
         range: rules.range,
         owner: "player",
@@ -168,7 +188,7 @@ export function createProjectileSystem({
         kind: "arrow",
       }));
     }
-    playTone(340, 0.09, "triangle", 0.018);
+    playTone(tone ?? rules.chargedTone, 0.09, "triangle", 0.018);
   }
 
   function fireAllyArrow({

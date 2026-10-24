@@ -148,7 +148,7 @@ export const bossTypes = [
     type: "catapult",
     nameKey: "boss.catapult.name",
     epithetKey: "boss.catapult.epithet",
-    health: 45,
+    health: 55,
     radius: 36,
     speed: 34,
     damage: 96,

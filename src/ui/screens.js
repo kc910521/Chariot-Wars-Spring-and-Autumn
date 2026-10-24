@@ -1,6 +1,6 @@
 import { translate } from "../i18n/index.js";
 
-export function createScreens({ state, campaign, draw, elements }) {
+export function createScreens({ state, campaign, draw, onModeChange, elements }) {
   const {
     menuScreen, battleScreen, shopScreen, overlay, startLabel, startButton,
     overlayEyebrow, overlayTitle, overlayCopy, overlayButton,
@@ -31,6 +31,7 @@ export function createScreens({ state, campaign, draw, elements }) {
     }
 
     draw();
+    onModeChange?.(mode);
   }
 
   return { setMode };

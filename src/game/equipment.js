@@ -2,8 +2,15 @@ import { calculateCrewSlots, equipment, horses, personnel } from "../data/equipm
 import { translate } from "../i18n/index.js";
 import { renderShop } from "../ui/shop.js";
 
-export function createEquipmentShop({ campaign, container, statsContainer, goldElement, messageElement }) {
+export function createEquipmentShop({
+  campaign, container, statsContainer, scene,
+  rigCaptionElement, campCaptionElement, infoElement, goldElement, messageElement,
+}) {
   let selectedCategory = "equipment";
+  // The card whose description the info panel keeps after a click. Hovering is
+  // transient and never lands here; this is the pick that has to survive the
+  // re-render a purchase does.
+  let selectedItem = null;
 
   function purchaseItem(purchaseType, itemId) {
     let price;
@@ -63,12 +70,18 @@ export function createEquipmentShop({ campaign, container, statsContainer, goldE
     renderShop({
       container,
       statsContainer,
+      scene,
+      rigCaptionElement,
+      campCaptionElement,
+      infoElement,
       totalGold: campaign.totalGold,
       equipmentLevels: campaign.equipment,
       horseCount: campaign.horseCount,
       roster: campaign.roster,
       selectedCategory,
+      selectedItem,
       onSelectCategory: (category) => { selectedCategory = category; },
+      onSelectItem: (itemId) => { selectedItem = itemId; },
       onBuy: purchaseItem,
     });
   }

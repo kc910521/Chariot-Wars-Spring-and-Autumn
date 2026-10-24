@@ -303,6 +303,72 @@ h1 span {
   background: radial-gradient(ellipse at 75% 15%, rgba(168, 68, 50, 0.11), transparent 42%);
 }
 
+/* The shop reads as a dossier beside a ledger: the left column always shows the
+   money in the team, the team itself and the five stats, while the right column
+   scrolls through purchases. Both columns are data-driven (see ui/shop.js), so a
+   new category or a new stat grows them without new layout rules. */
+.shop-layout {
+  display: grid;
+  grid-template-columns: minmax(260px, 340px) minmax(0, 1fr);
+  align-items: start;
+  gap: clamp(18px, 3vw, 34px);
+}
+
+.shop-dossier {
+  position: sticky;
+  top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  background:
+    radial-gradient(ellipse at 50% 8%, rgba(210, 173, 104, 0.09), transparent 62%),
+    rgba(30, 23, 17, 0.72);
+}
+
+.dossier-rig,
+.dossier-camp {
+  position: relative;
+  margin: 0;
+}
+
+.shop-rig-canvas,
+.shop-camp-canvas {
+  display: block;
+  width: 100%;
+  border: 1px solid rgba(211, 185, 139, 0.14);
+  background: #1a1510;
+}
+
+.shop-rig-canvas {
+  height: 196px;
+}
+
+.shop-camp-canvas {
+  height: 128px;
+}
+
+.dossier-caption {
+  margin: 6px 0 0;
+  color: #a69478;
+  font-family: "DM Mono", monospace;
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  text-align: center;
+}
+
+.dossier-title {
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  margin: 4px 0 0;
+  font-size: 15px;
+}
+
+.shop-body {
+  min-width: 0;
+}
+
 .shop-heading,
 .shop-summary,
 .shop-bottom,
@@ -380,9 +446,9 @@ h1 span {
 
 .shop-stats {
   display: grid;
-  min-height: 330px;
+  min-height: 250px;
   place-items: center;
-  margin: 0 0 28px;
+  margin: 0;
   border: 1px solid var(--line);
   background:
     radial-gradient(ellipse at center, rgba(210, 173, 104, 0.08), transparent 68%),
@@ -390,7 +456,7 @@ h1 span {
 }
 
 .shop-radar {
-  width: min(100%, 390px);
+  width: min(100%, 340px);
   height: auto;
   overflow: visible;
 }
@@ -419,7 +485,7 @@ h1 span {
   stroke-width: 2;
   stroke-dasharray: 5 4;
   stroke-linejoin: round;
-  transition: points 180ms ease, fill 180ms ease, stroke 180ms ease;
+  transition: fill 180ms ease, stroke 180ms ease;
 }
 
 .radar-preview.is-preview {
@@ -430,14 +496,14 @@ h1 span {
 .radar-label {
   fill: #c8b99d;
   font-family: "Noto Serif SC", "Songti SC", serif;
-  font-size: 11px;
   transition: fill 180ms ease;
 }
 
+/* No font-size here: `radar.js` writes it as an attribute so the chart can be
+   drawn at different sizes (dossier vs. narrow strip) without extra rules. */
 .radar-value {
   fill: #eee2c9;
   font-family: "DM Mono", monospace;
-  font-size: 10px;
 }
 
 .radar-label.is-up,
@@ -450,7 +516,12 @@ h1 span {
   fill: #d47a68;
 }
 
-.shop-collision-note {
+/* The shop's one description surface. Cards are titles and prices; the long copy
+   lands here, so the panel reserves room for the longest rule (two lines at
+   11px/1.65 plus its padding) and the ledger below never shifts as the pointer
+   moves from card to card. Longer text grows the panel instead of clipping. */
+.shop-info {
+  min-height: 62px;
   margin: -14px 0 26px;
   padding: 11px 14px;
   border-left: 2px solid rgba(210, 173, 104, 0.58);
@@ -458,9 +529,17 @@ h1 span {
   color: #a69478;
   font-size: 11px;
   line-height: 1.65;
+  transition: border-color 160ms ease, background 160ms ease;
 }
 
-.shop-collision-note strong {
+/* An item's description instead of the standing rule: same panel, accented so
+   the switch is visible without a second element appearing. */
+.shop-info.is-item {
+  border-left-color: rgba(210, 173, 104, 0.9);
+  background: rgba(210, 173, 104, 0.08);
+}
+
+.shop-info strong {
   color: #d2ad68;
   font-weight: 600;
 }
@@ -476,13 +555,17 @@ h1 span {
 
 .shop-tabs {
   display: flex;
+  flex-wrap: wrap;
   gap: 4px;
   padding: 8px 8px 0;
   border-bottom: 1px solid var(--line);
 }
 
 .shop-tab {
+  display: inline-flex;
   min-height: 40px;
+  align-items: center;
+  gap: 8px;
   padding: 0 18px;
   border: 1px solid transparent;
   border-bottom: 0;
@@ -491,6 +574,12 @@ h1 span {
   cursor: pointer;
   font-family: "Noto Serif SC", "Songti SC", serif;
   font-size: 13px;
+}
+
+.shop-tab-mark {
+  color: rgba(210, 173, 104, 0.7);
+  font-family: "DM Mono", monospace;
+  font-size: 12px;
 }
 
 .shop-tab:hover,
@@ -538,12 +627,21 @@ h1 span {
 
 .shop-item {
   display: grid;
-  min-height: 132px;
+  min-height: 104px;
   grid-template-columns: 42px minmax(0, 1fr);
   gap: 4px 13px;
   padding: 15px;
   border: 1px solid var(--line);
   background: rgba(39, 28, 20, 0.55);
+  transition: border-color 160ms ease, background 160ms ease;
+}
+
+/* Hovering a card re-targets the dossier, so the card itself has to look like
+   the thing that is being previewed. */
+.shop-item:hover,
+.shop-item:focus-within {
+  border-color: rgba(210, 173, 104, 0.52);
+  background: rgba(50, 36, 25, 0.66);
 }
 
 .shop-item-icon {
@@ -562,13 +660,6 @@ h1 span {
   margin: 0;
   font-family: "Noto Serif SC", "Songti SC", serif;
   font-size: 14px;
-}
-
-.shop-item-details p {
-  margin: 5px 0 6px;
-  color: #a69478;
-  font-size: 10px;
-  line-height: 1.55;
 }
 
 .shop-item-effect {
@@ -1939,7 +2030,14 @@ body.battle-focus {
   height: 72px;
   border: 1px solid rgba(255, 235, 204, 0.5);
   border-radius: 50%;
-  background: rgba(169, 68, 50, 0.46);
+  /* The draw meter: `--charge` (0..1, set by src/ui/hud.js) sweeps a gold ring
+     around the button, so holding it visibly winds the bow up. */
+  background:
+    conic-gradient(
+      from -90deg,
+      rgba(240, 196, 106, 0.72) calc(var(--charge, 0) * 1turn),
+      rgba(169, 68, 50, 0.46) 0
+    );
   color: #fff0d0;
   font-size: 13px;
   pointer-events: auto;
@@ -1950,8 +2048,15 @@ body.battle-focus {
   backdrop-filter: blur(2px);
 }
 
+/* Brighten instead of repainting the background, so `:active` cannot erase the
+   charge ring while the player is actually drawing the bow. */
 .battle-focus.touch-layout .touch-fire:active {
-  background: rgba(169, 68, 50, 0.72);
+  filter: brightness(1.18);
+}
+
+.battle-focus.touch-layout .touch-fire.charged {
+  border-color: rgba(255, 233, 176, 0.95);
+  box-shadow: 0 0 0 2px rgba(240, 196, 106, 0.7), 0 0 18px rgba(240, 196, 106, 0.42);
 }
 
 @media (max-width: 850px) {
@@ -1982,6 +2087,101 @@ body.battle-focus {
   .battle-focus.touch-layout .touch-fire {
     width: 64px;
     height: 64px;
+  }
+}
+
+/* The dossier becomes a strip above the ledger on small screens: the rig and the
+   radar stay side by side, so whatever a card previews is still on screen while
+   the card is hovered. The camp scene is dropped there - its canvas measures 0
+   and `shop-scene.js` simply stops drawing it. */
+@media (max-width: 980px) {
+  .shop-layout {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 16px;
+  }
+
+  /* Sticky only works as a narrow side column. In one column the dossier is a
+     full-width strip: pinned to the top it measured ~360px tall and floated over
+     the ledger, hiding the info panel and swallowing clicks aimed at the buy
+     buttons (the hit test landed on the rig canvas). Here it is an ordinary block
+     that scrolls with the page, so nothing is ever painted on top of a price. */
+  .shop-dossier {
+    position: static;
+    flex-direction: row;
+    align-items: center;
+    gap: 10px;
+    padding: 10px;
+    border-color: rgba(211, 185, 139, 0.28);
+    background: #1d1712;
+  }
+
+  .dossier-rig {
+    flex: 1 1 40%;
+    min-width: 0;
+  }
+
+  .shop-rig-canvas {
+    height: 128px;
+  }
+
+  .dossier-caption {
+    margin-top: 4px;
+    font-size: 8px;
+  }
+
+  .dossier-title,
+  .dossier-camp {
+    display: none;
+  }
+
+  .shop-stats {
+    min-height: 0;
+    flex: 1 1 56%;
+    border: 0;
+    background: none;
+  }
+
+  /* `width: 100%` plus the 360x330 viewBox made the chart 341px tall in a 393px
+     column, which is what turned the strip into a screen. The height cap scales
+     the drawing down (the labels are already drawn larger for narrow screens, see
+     `readableLabelSize`) and keeps the strip a strip. */
+  .shop-radar {
+    width: 100%;
+    max-height: 132px;
+  }
+}
+
+@media (max-width: 560px) {
+  .shop-rig-canvas {
+    height: 104px;
+  }
+
+  .shop-tab-panel {
+    height: auto;
+    max-height: 62vh;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  /* Two states, one height. On a phone the standing rule wraps to three lines
+     while an item description fits in two, and a panel that shrank when it
+     switched pulled the ledger (and the finger's target) up by ~14px: the tap
+     landed on the card instead of 购置. The floor covers both states - measured
+     at 390px wide, the rule and every description are 78px in Chinese. */
+  .shop-info {
+    min-height: 78px;
+  }
+
+  /* English wraps that same rule to one more line (measured 95px at 360px), so
+     the floor is raised for the locale instead of under-reserving it. */
+  html[lang="en"] .shop-info {
+    min-height: 95px;
+  }
+
+  /* And the price gets a thumb-sized target: 27px is a miss waiting to happen. */
+  .shop-buy {
+    min-height: 40px;
+    padding: 9px 14px;
+    font-size: 10px;
   }
 }
 

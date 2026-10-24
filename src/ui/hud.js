@@ -1,8 +1,25 @@
+import { projectileRules } from "../data/rules.js";
 import { getLocale, translate } from "../i18n/index.js";
 
 export function createHud({ state, player, getCampaignFunds, getCampaignStage, elements }) {
   let lastFootMode;
   let lastLocale;
+  let lastCharge;
+
+  // The fire control doubles as the bow's draw meter: holding it fills a ring,
+  // and a full ring means the release will be the long shot. Only write when the
+  // 5% step changes, because updateHud() runs on every frame.
+  function updateCharge() {
+    const charge = player.mode === "foot"
+      ? 0
+      : Math.min(1, state.fireHold / projectileRules.playerVolley.holdSeconds);
+    const step = Math.round(charge * 20) / 20;
+    if (step === lastCharge) return;
+    lastCharge = step;
+    const fireButton = elements.touchFireElement;
+    fireButton.style.setProperty("--charge", String(step));
+    fireButton.classList.toggle("charged", step >= 1);
+  }
 
   function updateHud() {
     const {
@@ -54,6 +71,7 @@ export function createHud({ state, player, getCampaignFunds, getCampaignStage, e
       objectiveCountElement.textContent = `${Math.min(state.kills, state.objectiveTarget)} / ${state.objectiveTarget}`;
       objectiveProgressElement.style.width = `${Math.min(100, state.kills / state.objectiveTarget * 100)}%`;
     }
+    updateCharge();
   }
 
   return updateHud;

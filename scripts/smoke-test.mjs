@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 import { resolve } from "node:path";
 import { createHash } from "node:crypto";
 import { writeFileSync } from "node:fs";
+import { projectileRules } from "../src/data/rules.js";
 
 const projectRoot = resolve(import.meta.dirname, "..");
 
@@ -119,6 +120,8 @@ const elementCache = new Map();
 const listeners = { window: new Map() };
 
 function createElement(selector) {
+  const styleProps = new Map();
+  const classes = new Set();
   const element = {
     selector,
     textContent: "",
@@ -128,8 +131,25 @@ function createElement(selector) {
     height: 592,
     dataset: {},
     listeners: new Map(),
-    style: { setProperty() {} },
-    classList: { toggle() {}, add() {}, remove() {}, contains: () => false },
+    // Children are recorded (not rendered) so a test can walk the tree the game
+    // built - the shop ledger is the one screen whose behaviour is a DOM tree:
+    // which card is hovered, what the info panel is showing, which tab is open.
+    children: [],
+    // Enough of CSSOM to prove the HUD actually drives the draw meter: the ring is
+    // a `--charge` custom property and one `.charged` class (styles/game.css).
+    style: {
+      setProperty(name, value) { styleProps.set(name, String(value)); },
+      getPropertyValue: (name) => styleProps.get(name) ?? "",
+    },
+    classList: {
+      toggle(name, force) {
+        const on = force === undefined ? !classes.has(name) : Boolean(force);
+        if (on) classes.add(name); else classes.delete(name);
+      },
+      add: (name) => classes.add(name),
+      remove: (name) => classes.delete(name),
+      contains: (name) => classes.has(name),
+    },
     addEventListener(type, handler) {
       if (!this.listeners.has(type)) this.listeners.set(type, []);
       this.listeners.get(type).push(handler);
@@ -141,9 +161,15 @@ function createElement(selector) {
     setAttribute() {},
     getAttribute: () => null,
     getBoundingClientRect: () => ({ width: 960, height: 592, top: 0, left: 0 }),
-    append() {},
-    appendChild() {},
-    replaceChildren() {},
+    append(...nodes) { this.children.push(...nodes); },
+    appendChild(node) {
+      this.children.push(node);
+      return node;
+    },
+    replaceChildren(...nodes) {
+      this.children.length = 0;
+      this.children.push(...nodes);
+    },
     querySelectorAll: () => [],
     getContext: () => context2d,
     setPointerCapture() {},
@@ -372,6 +398,46 @@ check(
 check("menu start begins a battle", query("#battle-screen").hidden === false);
 checkCamera("battle start");
 
+// The two releases have to stay distinct: a drawn bow must not fire by itself,
+// and letting go after `holdSeconds` has to be the long volley rather than the
+// assisted tap. It runs before the roam, so the field is still empty here — which
+// is the other half of the rule: a tap with nothing in its cone still looses an
+// arrow instead of swallowing the press.
+{
+  const { holdSeconds, tapCooldown } = projectileRules.playerVolley;
+  dispatchWindow("keydown", { key: " " });
+  runFrames(45); // 0.75s of draw
+  const drawnFor = game.state.fireHold;
+  check("holding the fire key draws the bow", drawnFor >= holdSeconds, `fireHold=${drawnFor.toFixed(2)}s`);
+  check("a drawn bow does not fire on its own", game.player.cooldown === 0,
+    `cooldown=${game.player.cooldown.toFixed(3)}s`);
+  const fireButton = query(".touch-fire");
+  check("the fire button fills its draw ring while held",
+    fireButton.style.getPropertyValue("--charge") === "1" && fireButton.classList.contains("charged"),
+    `--charge=${fireButton.style.getPropertyValue("--charge")} charged=${fireButton.classList.contains("charged")}`);
+  dispatchWindow("keyup", { key: " " });
+  runFrames(1);
+  check("a drawn release looses the long volley", game.player.cooldown > tapCooldown,
+    `cooldown=${game.player.cooldown.toFixed(3)}s`);
+  check("the draw meter resets on release", game.state.fireHold === 0, `fireHold=${game.state.fireHold}`);
+  check("the draw ring empties on release",
+    fireButton.style.getPropertyValue("--charge") === "0" && !fireButton.classList.contains("charged"),
+    `--charge=${fireButton.style.getPropertyValue("--charge")}`);
+
+  runFrames(40);
+  const arrowsBefore = game.state.bullets.filter((shot) => shot.owner === "player").length;
+  dispatchWindow("keydown", { key: " " });
+  runFrames(6);
+  dispatchWindow("keyup", { key: " " });
+  runFrames(1);
+  check("a quick tap looses the shorter aimed shot",
+    game.player.cooldown > 0 && game.player.cooldown <= tapCooldown,
+    `cooldown=${game.player.cooldown.toFixed(3)}s`);
+  const arrowsAfter = game.state.bullets.filter((shot) => shot.owner === "player").length;
+  check("an empty cone still looses an arrow", arrowsAfter > arrowsBefore, `${arrowsBefore} -> ${arrowsAfter} arrows`);
+}
+
+
 // Sampled after every frame of the combat run. Two units in the same pixel is
 // the visible symptom of the guard-post collapse (a whole column used to walk
 // onto one post), and a non-finite `angle` is what the boss idle branch wrote
@@ -429,11 +495,22 @@ function sampleEnemies() {
 }
 
 // Roam and fire: the chariot turns, rams, and volleys so formations, projectiles,
-// collision damage, drops, and HUD updates all execute.
+// collision damage, drops, and HUD updates all execute. The bow looses on
+// release now, so the drive taps the fire key in a rhythm instead of holding it:
+// 6 frames of draw is a tap (aim-assisted shot), 18 frames of quiet lets the
+// reload finish, which keeps roughly the old shot rate.
+function tapFire(frames, sample) {
+  for (let elapsed = 0; elapsed < frames; elapsed += 24) {
+    dispatchWindow("keydown", { key: " " });
+    runFrames(6, sample);
+    dispatchWindow("keyup", { key: " " });
+    runFrames(18, sample);
+  }
+}
+
 for (const [frameBlock, key] of [[120, "w"], [120, "a"], [120, "w"], [120, "d"], [120, "s"], [120, "w"], [180, "d"]]) {
   dispatchWindow("keydown", { key });
-  dispatchWindow("keydown", { key: " " });
-  runFrames(frameBlock, sampleEnemies);
+  tapFire(frameBlock, sampleEnemies);
   dispatchWindow("keyup", { key });
 }
 
@@ -588,6 +665,101 @@ query("#sound-button").dispatch("click");
 const select = query("#locale-select");
 select.dispatch("change");
 runFrames(60);
+
+// The shop dossier. Entering the shop re-renders the ledger and starts the
+// preview's own clock; a hovered purchase must never outlive the render that
+// follows it (a stale preview would show a team the player never bought).
+game.stageManager.enterShop();
+runFrames(45);
+const shopFrame = game.shopScene.lastFrame();
+check("entering the shop shows the dossier", query("#shop-screen").hidden === false, `mode=${game.state.mode}`);
+check("the shop preview drew the chariot", Boolean(shopFrame.rig), "no rig frame");
+check("the shop preview drew the camp fire", Boolean(shopFrame.camp), "no camp frame");
+check("the preview rig is fitted to its canvas", shopFrame.rig?.scale > 0, `scale=${shopFrame.rig?.scale}`);
+check("the shop opens on the owned team, not a preview", shopFrame.rig?.isPreview === false,
+  `isPreview=${shopFrame.rig?.isPreview}`);
+
+game.shopScene.preview({ horseCount: game.campaign.horseCount + 1, crew: game.campaign.roster });
+check("a hovered purchase previews before it is bought", game.shopScene.lastFrame().rig?.isPreview === true,
+  "preview did not take");
+game.equipmentShop.render();
+check("re-rendering the ledger clears the hover preview", game.shopScene.lastFrame().rig?.isPreview === false,
+  "stale preview survived the render");
+check("the shop rig follows the owned team", game.shopScene.lastFrame().rig?.horseCount === game.campaign.horseCount,
+  `drew ${game.shopScene.lastFrame().rig?.horseCount} horses, owns ${game.campaign.horseCount}`);
+
+// The ledger's cards are titles, effect lines and prices; the long descriptions
+// live in the one info panel under the summary, which follows the pointer and
+// keeps a click. `#shop-items` holds [tabs, equipment, horses, crew].
+const { translate } = await import("../src/i18n/index.js");
+const shopInfo = query("#shop-info");
+const ruleLine = `${translate("shop.collision.label")}${translate("shop.collision.description")}`;
+const weaponRackLine = translate("shop.info.label", { name: translate("equipment.weaponRack.name") })
+  + translate("equipment.weaponRack.description");
+const ledger = query("#shop-items").children;
+check("the shop opens on the standing collision rule",
+  shopInfo.textContent === ruleLine && !shopInfo.classList.contains("is-item"),
+  `panel="${shopInfo.textContent}"`);
+check("shop cards keep their description out of the card",
+  ledger[1].children.every((card) => card.children[1].children.length === 2),
+  `${ledger[1].children[0].children[1].children.length} blocks in the first card`);
+
+// A tap is not a hover: on a phone `pointerenter` arrives a frame before
+// `pointerup`, and a panel repainted there changed its height and pulled the
+// ledger up - the 购置 button slid out from under the finger and the tap fell
+// through to the card behind it. Only a mouse may repaint the panel on entry.
+ledger[1].children[0].dispatch("pointerenter", { pointerType: "touch" });
+check("a touch entering a card leaves the panel alone",
+  shopInfo.textContent === ruleLine, `panel="${shopInfo.textContent}"`);
+ledger[1].children[0].dispatch("pointerleave", { pointerType: "touch" });
+
+// A buy button that cannot be pressed has to say why: a dimmed "购置" reads as a
+// broken button, "军资不足" reads as the next goal. Gold is forced here so both
+// label states are checked whatever drops this run happened to collect.
+const { equipment } = await import("../src/data/equipment.js");
+const upgrade = equipment.find((item) => game.campaign.equipment[item.id] < item.levels.length);
+if (upgrade) {
+  const price = upgrade.levels[game.campaign.equipment[upgrade.id]].price;
+  const cardIndex = equipment.indexOf(upgrade);
+  const buyButton = () => query("#shop-items").children[1].children[cardIndex].children[2];
+  const savedGold = game.campaign.totalGold;
+  game.campaign.totalGold = 0;
+  game.equipmentShop.render();
+  check("an unaffordable purchase names the price instead of a dim 购置",
+    buyButton().textContent === translate("shop.shortGold", { price }) && buyButton().disabled === true,
+    `label="${buyButton().textContent}" disabled=${buyButton().disabled}`);
+  game.campaign.totalGold = 99999;
+  game.equipmentShop.render();
+  check("an affordable purchase goes back to the buy label",
+    buyButton().textContent === translate("shop.buy", { price }) && buyButton().disabled === false,
+    `label="${buyButton().textContent}"`);
+  game.campaign.totalGold = savedGold;
+  game.equipmentShop.render();
+}
+
+const weaponRackCard = ledger[1].children[0];
+weaponRackCard.dispatch("pointerenter");
+check("hovering a card puts its description in the panel",
+  shopInfo.textContent === weaponRackLine && shopInfo.classList.contains("is-item"),
+  `panel="${shopInfo.textContent}"`);
+weaponRackCard.dispatch("pointerleave");
+check("leaving the card restores the standing rule", shopInfo.textContent === ruleLine,
+  `panel="${shopInfo.textContent}"`);
+
+weaponRackCard.dispatch("click");
+check("clicking a card pins its description", shopInfo.textContent === weaponRackLine,
+  `panel="${shopInfo.textContent}"`);
+game.equipmentShop.render();
+check("a pinned description survives the purchase re-render",
+  shopInfo.textContent === weaponRackLine && shopInfo.classList.contains("is-item"),
+  `panel="${shopInfo.textContent}"`);
+
+ledger[0].children[1].dispatch("click");
+check("switching tabs drops the pick back to the standing rule", shopInfo.textContent === ruleLine,
+  `panel="${shopInfo.textContent}"`);
+ledger[1].children[0].children[2].dispatch("click");
+check("a buy click leaves that item's description in the panel", shopInfo.textContent === weaponRackLine,
+  `panel="${shopInfo.textContent}"`);
 
 check("no errors after UI interactions", loggedErrors.length === 0, loggedErrors[0]);
 checkCamera("after UI interactions");

@@ -73,6 +73,11 @@ export function createGameState({ seedSource = () => null } = {}) {
     damageFlash: 0,
     drops: [],
     footCompanions: [],
+    // Bow draw, written by combat.updatePlayerFire() and read by the HUD: the
+    // seconds the fire control has been held, and whether it was held last frame
+    // (so only a real press -> release is a shot).
+    fireHold: 0,
+    fireHeld: false,
   };
 
   return {

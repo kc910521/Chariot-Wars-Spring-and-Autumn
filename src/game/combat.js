@@ -2,6 +2,7 @@ import { calculateChariotStats, calculateProtectionChance, personnel } from "../
 import { projectileRules } from "../data/rules.js";
 import { translate } from "../i18n/index.js";
 import { distanceBetween } from "../utils/math.js";
+import { selectAimTarget } from "./aim.js";
 import { addBloodStain } from "./blood.js";
 
 // Player-side combat: chariot/foot attacks, crew, dismounted companions, and
@@ -12,7 +13,33 @@ export function createCombatSystem({
   damageEnemy, addMeleeEffect, burst, playTone, updateHud,
   announceBanner, onDefeat,
 }) {
-  function firePlayer() {
+  // Two releases share one button. While the button is down the bow is only
+  // drawn: `state.fireHold` counts the draw and `state.fireHeld` remembers the
+  // previous frame, so a release fires once and a stray release (a pause clearing
+  // the keys, a touch cancelled by the platform) fires nothing. The sword is
+  // exempt — it has no charge, so pressing it still swings exactly as before.
+  function updatePlayerFire(delta, held) {
+    if (player.mode === "foot") {
+      // Dismounting mid-draw must not leave a charge behind for the HUD to show.
+      state.fireHold = 0;
+      state.fireHeld = false;
+      if (held) firePlayer();
+      return;
+    }
+    if (held) {
+      state.fireHold += delta;
+      state.fireHeld = true;
+      return;
+    }
+    const released = state.fireHeld;
+    const drawnFor = state.fireHold;
+    state.fireHeld = false;
+    state.fireHold = 0;
+    if (!released) return;
+    firePlayer(drawnFor >= projectileRules.playerVolley.holdSeconds ? "charged" : "tap");
+  }
+
+  function firePlayer(shot = "charged") {
     if (player.cooldown > 0) return;
     if (player.mode === "foot") {
       const target = state.enemies
@@ -39,8 +66,26 @@ export function createCombatSystem({
       playTone(target ? 180 : 250, 0.08, "triangle", 0.02);
       return;
     }
+    const rules = projectileRules.playerVolley;
+    if (shot === "tap") {
+      const target = selectAimTarget({
+        x: player.x,
+        y: player.y,
+        angle: player.angle,
+        enemies: state.enemies,
+        maxRange: rules.tapRange,
+        coneCosine: rules.tapConeCosine,
+        hasLineOfSight: collision.hasLineOfSight,
+      });
+      // An empty cone still shoots: the tap loses its helper, not the arrow.
+      projectiles.firePlayerVolley(target
+        ? { aimX: target.x, aimY: target.y, tone: rules.tapTone }
+        : { tone: rules.tapTone });
+      player.cooldown = rules.tapCooldown;
+      return;
+    }
     projectiles.firePlayerVolley();
-    player.cooldown = 0.42;
+    player.cooldown = rules.chargedCooldown;
   }
 
   function updateCrew(delta) {
@@ -257,7 +302,8 @@ export function createCombatSystem({
   }
 
   return {
-    firePlayer, updateCrew, updateFootCompanions, damagePlayer, damageCompanion, dismountPlayer,
+    firePlayer, updatePlayerFire, updateCrew, updateFootCompanions,
+    damagePlayer, damageCompanion, dismountPlayer,
   };
 }
 

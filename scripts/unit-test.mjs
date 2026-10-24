@@ -11,6 +11,7 @@ import {
 } from "../src/data/equipment.js";
 import { campaignRules, chariotRules, effectRules, projectileRules } from "../src/data/rules.js";
 import { addBloodStain } from "../src/game/blood.js";
+import { selectAimTarget } from "../src/game/aim.js";
 import { battlefields } from "../src/data/battlefields.js";
 import { createCollisionSystem } from "../src/game/collision.js";
 import { createCombatSystem } from "../src/game/combat.js";
@@ -21,6 +22,7 @@ import {
 } from "../src/game/elements.js";
 import { createBattlefield } from "../src/game/map.js";
 import { createElementRenderer } from "../src/render/elements.js";
+import { chariotRigBox, createSpriteArt, spritePalette } from "../src/render/sprites.js";
 import { CHARIOT_CONTROL_CONFIG, createPlayerController } from "../src/game/player.js";
 import { bossTypes, enemyStats, formationPatterns } from "../src/data/formations.js";
 import {
@@ -34,6 +36,15 @@ import {
 import { clamp, shortestAngleDifference } from "../src/utils/math.js";
 import { createRandomSeed, createSeededRandom, parseSeed } from "../src/utils/random.js";
 import { updateCamera } from "../src/render/camera.js";
+import {
+  campSeats, crewBanner, crewFigure, crewRobe, playerRobe, projectRigBox, radarLayout,
+  radarPolygon, rigPreview, statKeys, statLabelKeys,
+} from "../src/ui/shop-layout.js";
+import { createRadarChart } from "../src/ui/radar.js";
+import { createShopScene } from "../src/ui/shop-scene.js";
+import { createInfoPanel, itemInfo } from "../src/ui/shop-info.js";
+import { translate } from "../src/i18n/index.js";
+import { locales } from "../src/i18n/locales.js";
 
 let passed = 0;
 function test(name, run) {
@@ -365,6 +376,106 @@ test("every row's visual.kind has a silhouette, and its palettes are full", () =
   assert.equal(obstacleKinds.tree.visual.trunk.length, 3, "the trunk gradient reads three stops");
   assert.equal(obstacleKinds.tree.visual.canopy.length, 4, "the canopy gradient reads four stops");
   assert.equal(cloudKinds.sky.visual.shade.length, 3, "the cloud shadow reads three stops");
+});
+console.log("[unit] sprite art");
+
+// A recording 2d context: enough of the API for the unit painters to run, plus
+// the geometry extents of everything they paint. src/render/sprites.js declares
+// the box its chariot rig occupies, and the shop fits the preview to that box -
+// so "the rig is never clipped" is a fact about the art, not a number someone
+// eyeballed at one team size.
+function recordingContext() {
+  const bounds = { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity };
+  const grow = (x, y) => {
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+    bounds.minX = Math.min(bounds.minX, x);
+    bounds.minY = Math.min(bounds.minY, y);
+    bounds.maxX = Math.max(bounds.maxX, x);
+    bounds.maxY = Math.max(bounds.maxY, y);
+  };
+  const box = (x, y, width, height) => {
+    grow(x, y);
+    grow(x + width, y + height);
+  };
+  const context = {
+    canvas: { width: 800, height: 600 },
+    save() {}, restore() {}, beginPath() {}, closePath() {}, fill() {}, stroke() {},
+    translate() {}, rotate() {}, scale() {}, setTransform() {}, clip() {},
+    moveTo: grow, lineTo: grow,
+    arc: (x, y, radius) => box(x - radius, y - radius, radius * 2, radius * 2),
+    arcTo: box,
+    ellipse: (x, y, radiusX, radiusY) => box(x - radiusX, y - radiusY, radiusX * 2, radiusY * 2),
+    quadraticCurveTo: (controlX, controlY, x, y) => { grow(controlX, controlY); grow(x, y); },
+    bezierCurveTo: (c1x, c1y, c2x, c2y, x, y) => { grow(c1x, c1y); grow(c2x, c2y); grow(x, y); },
+    rect: box, fillRect: box, strokeRect: box, roundRect: box, clearRect: box,
+    createLinearGradient: () => ({ addColorStop() {} }),
+    createRadialGradient: () => ({ addColorStop() {} }),
+    createPattern: () => null,
+  };
+  return { context, bounds };
+}
+
+function measureRig(horseCount, crew = []) {
+  const recorder = recordingContext();
+  createSpriteArt({ context: recorder.context }).drawChariotRig({
+    robeColor: "#17796f", horseCount, elapsed: 0.4, crew, banner: "#41b7a3",
+  });
+  return recorder.bounds;
+}
+
+test("the shared chariot rig fits the box the shop scales it into", () => {
+  // Four horses is the widest team, and a full crew puts dots along the hull, so
+  // measure the extremes as well as the empty rig.
+  const fullCrew = ["archer", "halberdier", "archer", "halberdier"].map((role) => ({ role }));
+  for (const horseCount of [1, 2, 3, 4]) {
+    for (const crew of [[], fullCrew]) {
+      const drawn = measureRig(horseCount, crew);
+      const box = chariotRigBox(horseCount);
+      assert.ok(box.minX <= drawn.minX && box.maxX >= drawn.maxX,
+        `a ${horseCount}-horse rig paints past its box horizontally (${drawn.minX}..${drawn.maxX} vs ${box.minX}..${box.maxX})`);
+      assert.ok(box.minY <= drawn.minY && box.maxY >= drawn.maxY,
+        `a ${horseCount}-horse rig paints past its box vertically (${drawn.minY}..${drawn.maxY} vs ${box.minY}..${box.maxY})`);
+    }
+  }
+});
+
+test("the rig box grows with the team, so a preview never clips a bigger team", () => {
+  let previous = chariotRigBox(1);
+  for (const horseCount of [2, 3, 4]) {
+    const box = chariotRigBox(horseCount);
+    assert.ok(box.width >= previous.width && box.height >= previous.height,
+      `${horseCount} horses is not at least as big as ${horseCount - 1}`);
+    previous = box;
+  }
+  assert.ok(chariotRigBox(4).height > chariotRigBox(1).height, "a full team is not taller than a single horse");
+});
+
+test("every overlay a data row asks for is painted by the shared art", () => {
+  // `visual.overlays` is a list of names resolved against the art tables, so a
+  // typo in a row is an invisible missing weapon, not a crash.
+  const { overlayKinds } = createSpriteArt({ context: recordingContext().context });
+  for (const [type, row] of Object.entries(enemyStats)) {
+    const painted = overlayKinds[row.visual.kind];
+    if (!painted) {
+      assert.equal(row.visual.overlays.length, 0,
+        `${type} asks for overlays but the "${row.visual.kind}" silhouette has none`);
+      continue;
+    }
+    for (const overlay of row.visual.overlays) {
+      assert.ok(painted.includes(overlay), `${type} asks for a "${overlay}" the ${row.visual.kind} art never painted`);
+    }
+  }
+});
+
+test("the battlefield unit art has exactly one implementation", () => {
+  // The chariot and foot silhouettes used to be inlined in renderer.js. They live
+  // in render/sprites.js now so the shop preview and the camp scene can reuse
+  // them; a second copy is exactly how a preview drifts from the battlefield.
+  const renderer = readFileSync(new URL("../src/render/renderer.js", import.meta.url), "utf8");
+  assert.ok(/createSpriteArt/.test(renderer), "renderer.js no longer binds the shared sprite art");
+  for (const colour of ["#674a2f", "#ffe1a0", "#493729", "#88bd8a"]) {
+    assert.equal(renderer.includes(colour), false, `renderer.js still paints unit art itself (${colour})`);
+  }
 });
 
 console.log("[unit] battlefield scatter");
@@ -800,7 +911,7 @@ function createTestProjectiles({ state, player, dust = () => {}, burst = () => {
     state,
     player,
     world: arena,
-    campaign: { random: () => 0.5, equipment: {} },
+    campaign: { random: () => 0.5, equipment: extras.equipment ?? {}, horseCount: 1 },
     collision: {
       circleIntersectsObstacle: extras.circleIntersectsObstacle ?? (() => false),
       hasLineOfSight: () => true,
@@ -1120,6 +1231,163 @@ test("no module reads the personnel table by array position", () => {
   // the table, so pin the shape of the access instead.
   const source = readFileSync(new URL("../src/game/combat.js", import.meta.url), "utf8");
   assert.equal(/personnel\s*\[\s*\d+\s*\]\s*\./.test(source), false, "combat.js indexes personnel by position");
+});
+
+console.log("[unit] bow");
+
+// The chariot's bow is a two-stage control: press, draw, release. These tests
+// drive the real combat system through that sequence and read what the
+// projectile system was asked to do, instead of trusting the HUD.
+function bowRig({ mode = "chariot", enemies = [], lineOfSight = () => true } = {}) {
+  const volleys = [];
+  const melee = [];
+  const state = {
+    enemies, bullets: [], footCompanions: [], groundArrows: [], fireHold: 0, fireHeld: false,
+  };
+  const player = {
+    mode, x: 100, y: 100, angle: 0, radius: 17, speed: 0, health: 40, maxHealth: 40,
+    knockbackX: 0, knockbackY: 0, invulnerable: 0, cooldown: 0,
+  };
+  const combat = createCombatSystem({
+    state,
+    player,
+    campaign: { roster: [], equipment: emptyEquipment(), horseCount: 1, random: () => 0.5 },
+    collision: { hasLineOfSight: lineOfSight, moveEntitySafely: () => true },
+    projectiles: { firePlayerVolley: (options = {}) => volleys.push(options) },
+    damageEnemy: (enemy, amount) => melee.push({ enemy, amount }),
+    addMeleeEffect: () => {},
+    burst: () => {},
+    playTone: () => {},
+    updateHud: () => {},
+    announceBanner: () => {},
+    onDefeat: () => {},
+  });
+  return { combat, state, player, volleys, melee };
+}
+
+const tap = (combat) => {
+  combat.updatePlayerFire(1 / 60, true);
+  combat.updatePlayerFire(1 / 60, false);
+};
+
+test("aim assist picks the nearest enemy inside the nose's cone", () => {
+  const enemies = [
+    { x: 380, y: 100, destroyed: false }, // 280 ahead, and first in the list
+    { x: 190, y: 100, destroyed: false }, // 90 ahead: the nearest
+    { x: 100, y: 30, destroyed: false }, // beside the axle
+    { x: 40, y: 100, destroyed: false }, // behind the bow
+  ];
+  const target = selectAimTarget({
+    x: 100, y: 100, angle: 0, enemies, maxRange: 380, coneCosine: 0.5,
+  });
+  assert.equal(target, enemies[1]);
+});
+
+test("aim assist stays out of walls and out of the bow's rear", () => {
+  const args = { x: 100, y: 100, angle: 0, maxRange: 380, coneCosine: 0.5 };
+  assert.equal(selectAimTarget({ ...args, enemies: [{ x: 60, y: 100 }] }), null);
+  assert.equal(
+    selectAimTarget({ ...args, enemies: [{ x: 200, y: 100 }], hasLineOfSight: () => false }),
+    null,
+    "a locked bow must not swing onto a target it cannot see",
+  );
+});
+
+test("a tap looses an aimed volley at the nearest enemy ahead", () => {
+  const rig = bowRig({
+    enemies: [
+      { x: 380, y: 100, radius: 16, destroyed: false },
+      { x: 205, y: 96, radius: 16, destroyed: false },
+    ],
+  });
+  tap(rig.combat);
+  assert.equal(rig.volleys.length, 1);
+  assert.equal(rig.volleys[0].aimX, 205);
+  assert.equal(rig.volleys[0].aimY, 96);
+  assert.equal(rig.volleys[0].tone, projectileRules.playerVolley.tapTone);
+  assert.equal(rig.player.cooldown, projectileRules.playerVolley.tapCooldown);
+  assert.equal(rig.state.fireHold, 0, "the draw has to reset on release");
+});
+
+test("a tap with an empty cone still shoots, just unassisted", () => {
+  const rig = bowRig({ enemies: [{ x: 520, y: 100, radius: 16, destroyed: false }] });
+  tap(rig.combat);
+  assert.equal(rig.volleys.length, 1, "a tap must never cost the player an arrow");
+  assert.equal(rig.volleys[0].aimX, undefined, "assist reached past its own range");
+});
+
+test("a drawn bow looses the long volley down the nose", () => {
+  const rig = bowRig({ enemies: [{ x: 205, y: 100, radius: 16, destroyed: false }] });
+  rig.combat.updatePlayerFire(0.3, true);
+  rig.combat.updatePlayerFire(0.3, true);
+  rig.combat.updatePlayerFire(1 / 60, true);
+  assert.equal(rig.volleys.length, 0, "a drawn bow must not fire while it is held");
+  assert.ok(rig.state.fireHold >= projectileRules.playerVolley.holdSeconds);
+  rig.combat.updatePlayerFire(1 / 60, false);
+  assert.equal(rig.volleys.length, 1);
+  assert.equal(rig.volleys[0].aimX, undefined, "the drawn shot must not turn onto the enemy");
+  assert.equal(rig.player.cooldown, projectileRules.playerVolley.chargedCooldown);
+});
+
+test("releasing without pressing does not loose an arrow", () => {
+  // A pause clears the keys, and a cancelled touch arrives as an end event: both
+  // look like "not held" and must not be mistaken for a release.
+  const rig = bowRig();
+  rig.combat.updatePlayerFire(1 / 60, false);
+  assert.equal(rig.volleys.length, 0);
+});
+
+test("a release during the reload is spent, not queued", () => {
+  const rig = bowRig();
+  rig.player.cooldown = 0.2;
+  rig.combat.updatePlayerFire(0.1, true);
+  rig.combat.updatePlayerFire(1 / 60, false);
+  assert.equal(rig.volleys.length, 0);
+  assert.equal(rig.state.fireHold, 0);
+});
+
+test("the sword keeps its press-to-swing rhythm on foot", () => {
+  const rig = bowRig({ mode: "foot", enemies: [{ x: 125, y: 100, radius: 16, destroyed: false }] });
+  rig.combat.updatePlayerFire(1 / 60, true);
+  assert.equal(rig.melee.length, 1);
+  assert.equal(rig.player.cooldown, 0.72);
+  assert.equal(rig.state.fireHold, 0, "the sword has no draw meter");
+});
+
+test("a tapped shot lands on the enemy instead of past it", () => {
+  const state = emptyBattleState();
+  const player = { x: 400, y: 400, radius: 17, mode: "chariot", angle: 0 };
+  const impacts = [];
+  const projectiles = createTestProjectiles({
+    state,
+    player,
+    extras: { equipment: emptyEquipment() },
+    burst: (x) => impacts.push(x),
+  });
+
+  const fly = () => {
+    for (let frame = 0; frame < 240 && state.bullets.length > 0; frame += 1) {
+      projectiles.update(1 / 60);
+    }
+  };
+
+  // 160px ahead: inside the tap's reach, and close enough that the drawn arc
+  // (fixed 0.42 rad) flies over the enemy and lands well beyond it.
+  projectiles.firePlayerVolley({ aimX: 560, aimY: 400 });
+  fly();
+  assert.equal(impacts.length, 1);
+  assert.ok(
+    Math.abs(impacts[0] - 560) < 12,
+    `the aimed arrow landed ${(impacts[0] - 560).toFixed(1)}px off the target`,
+  );
+
+  projectiles.firePlayerVolley();
+  fly();
+  assert.equal(impacts.length, 2);
+  assert.ok(
+    impacts[1] - 560 > 150,
+    `the drawn volley must stay the long shot (${(impacts[1] - 560).toFixed(1)}px past)`,
+  );
 });
 
 console.log("[unit] blood decals");
@@ -1684,6 +1952,433 @@ test("a wet patch the ladder could avoid does not end up under the line", () => 
   const rig = formationRig({ terrain: [shallows] });
   rig.enemies.spawnFormation();
   assert.equal(rig.state.formations[0].groundTier, "dry");
+});
+
+console.log("[unit] shop dossier");
+
+// The radar is the only place where a stat becomes geometry, so the test builds
+// it against a throwaway element tree instead of a browser: what matters is that
+// the polygon it writes is the shared stat table, not a second copy of it.
+function fakeSvgElement(tagName) {
+  const attributes = new Map();
+  const classes = new Set();
+  const children = [];
+  return {
+    tagName,
+    children,
+    textContent: "",
+    setAttribute(name, value) { attributes.set(name, String(value)); },
+    getAttribute: (name) => attributes.get(name) ?? null,
+    append(...nodes) { children.push(...nodes); },
+    replaceChildren(...nodes) {
+      children.length = 0;
+      children.push(...nodes);
+    },
+    classList: {
+      add: (name) => classes.add(name),
+      contains: (name) => classes.has(name),
+      toggle(name, force) {
+        const on = force === undefined ? !classes.has(name) : Boolean(force);
+        if (on) classes.add(name); else classes.delete(name);
+        return on;
+      },
+    },
+  };
+}
+
+function withFakeDocument(run) {
+  const previous = globalThis.document;
+  globalThis.document = { createElementNS: (_namespace, tagName) => fakeSvgElement(tagName) };
+  try {
+    return run();
+  } finally {
+    if (previous === undefined) delete globalThis.document;
+    else globalThis.document = previous;
+  }
+}
+
+const byClass = (nodes, name) => nodes.find((node) => node.classList.contains(name));
+
+test("the radar plots the shared chariot stats, axis for axis", () => {
+  withFakeDocument(() => {
+    const container = fakeSvgElement("div");
+    const chart = createRadarChart(container, { labelSize: 16 });
+    const svg = container.children[0];
+    assert.equal(svg.getAttribute("viewBox"), `0 0 ${radarLayout.width} ${radarLayout.height}`);
+    // The wheel's rim is the stat maximum; a stat table that outgrows it would
+    // draw outside the outer ring, so the two numbers have to agree.
+    assert.equal(radarLayout.maximum, chariotRules.maximumStat);
+
+    const stats = calculateChariotStats({ ...emptyEquipment(), weaponRack: 1, chariotBox: 1 }, 2);
+    chart.update(stats, stats);
+    assert.equal(
+      byClass(svg.children, "radar-current").getAttribute("points"),
+      radarPolygon(statKeys.map((key) => stats[key])),
+    );
+    assert.equal(svg.children.filter((node) => node.tagName === "line").length, statKeys.length);
+    assert.equal(svg.children.filter((node) => node.tagName === "text").length, statKeys.length);
+  });
+});
+
+test("a hovered upgrade moves the preview ring and marks the labels it changes", () => {
+  withFakeDocument(() => {
+    const container = fakeSvgElement("div");
+    const chart = createRadarChart(container);
+    const svg = container.children[0];
+    const owned = calculateChariotStats(emptyEquipment(), 1);
+    const next = calculateChariotStats({ ...emptyEquipment(), weaponRack: 1 }, 1);
+
+    chart.update(owned, next);
+    const previewShape = byClass(svg.children, "radar-preview");
+    assert.equal(previewShape.getAttribute("points"), radarPolygon(statKeys.map((key) => next[key])));
+    assert.equal(previewShape.classList.contains("is-preview"), true);
+
+    const labels = svg.children.filter((node) => node.tagName === "text");
+    const firepower = labels[statKeys.indexOf("firepower")];
+    assert.equal(firepower.classList.contains("is-up"), true, "a buffed stat is not marked up");
+    assert.match(firepower.children[1].textContent, /▲/, "a buffed stat shows no delta");
+    const protection = labels[statKeys.indexOf("protection")];
+    assert.equal(protection.classList.contains("is-up"), false);
+    assert.equal(protection.children[1].textContent, String(owned.protection));
+
+    // Leaving the card drops the preview ring instead of leaving it on the wheel.
+    chart.update(owned, owned);
+    assert.equal(previewShape.classList.contains("is-preview"), false);
+  });
+});
+
+test("every radar axis has a label in both locales", () => {
+  for (const locale of Object.keys(locales)) {
+    for (const key of statKeys) {
+      assert.ok(locales[locale][statLabelKeys[key]], `${locale} is missing ${statLabelKeys[key]}`);
+    }
+    for (const key of ["shop.stats.chartLabel", "shop.rig.caption", "shop.camp.caption", "shop.dossier.label",
+      "shop.collision.label", "shop.collision.description", "shop.info.label", "shop.shortGold"]) {
+      assert.ok(locales[locale][key], `${locale} is missing ${key}`);
+    }
+  }
+});
+
+test("every equipment change names a stat the radar draws", () => {
+  for (const item of equipment) {
+    for (const level of item.levels) {
+      for (const stat of Object.keys(level.bonuses)) {
+        assert.ok(statKeys.includes(stat), `${item.id} buffs ${stat}, which the radar does not draw`);
+      }
+      for (const stat of Object.keys(level.penalties ?? {})) {
+        assert.ok(statKeys.includes(stat), `${item.id} penalises ${stat}, which the radar does not draw`);
+      }
+    }
+  }
+  // And the other direction: a stat the rules expose but the chart ignores would
+  // stay invisible to the player forever.
+  const stats = calculateChariotStats(emptyEquipment(), 1);
+  assert.deepEqual(Object.keys(stats).sort(), [...statKeys].sort());
+});
+
+test("the rig preview keeps the whole team inside its canvas", () => {
+  // The three sizes the shop actually draws at: the desktop dossier, the narrow
+  // strip and the phone strip.
+  const boxes = [[320, 220], [180, 128], [120, 104]];
+  for (let horseCount = 1; horseCount <= horses.max; horseCount += 1) {
+    for (const [width, height] of boxes) {
+      const rig = rigPreview(horseCount, width, height);
+      const fit = projectRigBox(rig.box, rig);
+      const label = `${horseCount} horses in ${width}x${height}`;
+      assert.ok(rig.scale > 0, `${label}: scale collapsed`);
+      assert.ok(fit.minX >= -0.01 && fit.minY >= -0.01,
+        `${label}: rig spills off the top/left (${fit.minX}, ${fit.minY})`);
+      assert.ok(fit.maxX <= width + 0.01 && fit.maxY <= height + 0.01,
+        `${label}: rig spills off the bottom/right (${fit.maxX}, ${fit.maxY})`);
+    }
+  }
+});
+
+test("the rig box grows with the team instead of hiding it", () => {
+  // The box is the contract the shop scales into; teams that fit the same box
+  // would mean the preview is drawing horses on top of each other.
+  const boxes = [];
+  for (let horseCount = 1; horseCount <= horses.max; horseCount += 1) {
+    boxes.push(rigPreview(horseCount, 320, 220).box);
+  }
+  for (let index = 1; index < boxes.length; index += 1) {
+    assert.ok(boxes[index].width >= boxes[index - 1].width, "the rig box shrank as horses were added");
+    assert.ok(boxes[index].height >= boxes[index - 1].height, "the rig box lost height as horses were added");
+  }
+  // The extra horses are harnessed along the team's depth, so the box grows on
+  // that axis and not across it - which is why the preview fits the *rotated*
+  // extent, not the raw box.
+  assert.equal(boxes.at(-1).width, boxes[0].width, "the rig box changed width as horses were added");
+  assert.ok(boxes.at(-1).height > boxes[0].height, "a four-horse rig is no taller than a single horse");
+});
+
+test("the camp fire seats the player plus one body per seat, far side first", () => {
+  const seats = campSeats(4, { centerX: 100, centerY: 60, radius: 50 });
+  assert.equal(seats.length, 4);
+  assert.deepEqual(seats.map((seat) => seat.index).sort((a, b) => a - b), [0, 1, 2, 3]);
+  // Painter's order: the far side is drawn before the fire, the near side after.
+  const heights = seats.map((seat) => seat.y);
+  assert.deepEqual(heights, [...heights].sort((a, b) => a - b));
+  assert.equal(seats.at(-1).index, 0, "the player is not on the near rim");
+  assert.equal(seats.at(-1).near, true);
+  for (const seat of seats) {
+    assert.ok(Number.isFinite(seat.x) && Number.isFinite(seat.y) && Number.isFinite(seat.facing),
+      `seat ${seat.index} is not finite`);
+    assert.ok(Math.abs(seat.x - 100) <= 50 + 1e-9, `seat ${seat.index} sits outside the ring`);
+  }
+  // One seat and no crew still seats the player: an empty fire would read as a bug.
+  assert.equal(campSeats(1, { centerX: 0, centerY: 0, radius: 10 }).length, 1);
+});
+
+test("every recruit has a figure at the fire, and an unknown role still gets one", () => {
+  const { overlayKinds } = createSpriteArt({ context: recordingContext().context });
+  for (const member of personnel) {
+    const figure = crewFigure(member.id);
+    assert.equal(figure.isPlayer, false);
+    assert.equal(figure.robeColor, crewRobe, `${member.id} is not wearing the ally colour`);
+    assert.ok(figure.overlays.length > 0, `${member.id} sits at the fire with no kit`);
+    for (const overlay of figure.overlays) {
+      assert.ok(overlayKinds.foot.includes(overlay),
+        `${member.id} asks for a "${overlay}" the foot art never painted`);
+    }
+  }
+  // A row added tomorrow shows up at the fire before anyone has drawn it a kit.
+  const unknown = crewFigure("future-recruit");
+  assert.equal(unknown.isPlayer, false);
+  assert.ok(unknown.overlays.length > 0);
+  assert.equal(crewFigure().isPlayer, true, "seat 0 is the player");
+});
+
+test("the camp fire wears the colours the battlefield paints", () => {
+  // Both scenes paint from one palette; a preview in a different green is the
+  // classic way a shop screen stops matching the game behind it.
+  assert.equal(playerRobe, spritePalette.playerRobe);
+  assert.equal(crewRobe, spritePalette.allyRobe);
+  assert.equal(crewBanner, spritePalette.playerBanner);
+  const renderer = readFileSync(new URL("../src/render/renderer.js", import.meta.url), "utf8");
+  for (const colour of [spritePalette.playerRobe, spritePalette.playerBanner, spritePalette.allyRobe]) {
+    assert.equal(renderer.includes(colour), false, `renderer.js still hard-codes the team colour ${colour}`);
+  }
+});
+
+// The preview owns a requestAnimationFrame loop, so the test owns the frame
+// queue: `drain` hands the scene the stamps a browser at 30fps would.
+function withAnimationFrames(run) {
+  const previousWindow = globalThis.window;
+  const previousRequest = globalThis.requestAnimationFrame;
+  const previousCancel = globalThis.cancelAnimationFrame;
+  const queue = new Map();
+  let nextId = 1;
+  let stamp = 0;
+  globalThis.window = {
+    ...previousWindow,
+    devicePixelRatio: 2,
+    matchMedia: (query) => ({ matches: false, media: query }),
+  };
+  globalThis.requestAnimationFrame = (callback) => {
+    const id = nextId;
+    nextId += 1;
+    queue.set(id, callback);
+    return id;
+  };
+  globalThis.cancelAnimationFrame = (id) => queue.delete(id);
+  const drain = (frames, step = 1000 / 30) => {
+    for (let index = 0; index < frames; index += 1) {
+      const pending = [...queue.values()];
+      queue.clear();
+      stamp += step;
+      for (const callback of pending) callback(stamp);
+    }
+  };
+  try {
+    return run({ queue, drain });
+  } finally {
+    if (previousWindow === undefined) delete globalThis.window;
+    else globalThis.window = previousWindow;
+    if (previousRequest === undefined) delete globalThis.requestAnimationFrame;
+    else globalThis.requestAnimationFrame = previousRequest;
+    if (previousCancel === undefined) delete globalThis.cancelAnimationFrame;
+    else globalThis.cancelAnimationFrame = previousCancel;
+  }
+}
+
+// A canvas whose CSS box is what the test says it is: `shop-scene.js` measures
+// the box and sizes the backing store, exactly like the battlefield's canvas.
+function fakeCanvas(width, height, context) {
+  return {
+    width: 0,
+    height: 0,
+    getContext: () => context,
+    getBoundingClientRect: () => ({ width, height, top: 0, left: 0 }),
+  };
+}
+
+test("the shop preview animates only while the shop is open", () => {
+  const rigRecorder = recordingContext();
+  const campRecorder = recordingContext();
+  const rigCanvas = fakeCanvas(320, 220, rigRecorder.context);
+  const campCanvas = fakeCanvas(320, 128, campRecorder.context);
+  withAnimationFrames(({ queue, drain }) => {
+    const scene = createShopScene({ rigCanvas, campCanvas });
+    // A dead companion is still in the roster the campaign owns; it must not be
+    // drawn on the hull or seated at the fire.
+    const roster = [{ role: "archer" }, { role: "halberdier", alive: false }];
+    scene.update({ horseCount: 3, crew: roster });
+    scene.preview({ horseCount: 3, crew: [{ role: "archer" }, { role: "halberdier" }] });
+    assert.equal(queue.size, 0, "a closed shop asked for a frame");
+    assert.deepEqual(scene.lastFrame(), { rig: null, camp: null }, "a closed shop painted its canvases");
+    // Opening the shop re-renders the ledger first (`shop.js` -> `update`), which
+    // is what drops a hover that was still set when the screen closed.
+    scene.update({ horseCount: 3, crew: roster });
+
+    scene.setActive(true);
+    assert.equal(queue.size, 1, "an open shop scheduled more than one frame per frame");
+    // The backing store follows the CSS box and the device pixel ratio, like the
+    // battlefield's canvas does.
+    assert.equal(rigCanvas.width, 640);
+    assert.equal(rigCanvas.height, 440);
+    assert.ok(rigRecorder.bounds.maxX > 0, "opening the shop did not paint the rig");
+    assert.ok(campRecorder.bounds.maxX > 0, "opening the shop did not paint the camp");
+    const owned = scene.lastFrame();
+    assert.equal(owned.rig.crew, 1, "a buried companion still stands on the rig");
+    assert.equal(owned.rig.horseCount, 3);
+    assert.equal(owned.rig.isPreview, false, "the owned team opened as a preview");
+    assert.equal(owned.camp.seats, 2, "the fire seated a body the campaign buried");
+
+    scene.preview({ horseCount: 3, crew: [{ role: "archer" }, { role: "halberdier" }] });
+    const hovered = scene.lastFrame();
+    assert.equal(hovered.rig.crew, 2, "the hovered recruit is not on the previewed rig");
+    assert.equal(hovered.rig.isPreview, true);
+    assert.equal(hovered.camp.seats, 3, "the fire did not seat the hovered recruit");
+    // A hover repaints the current phase; it does not restart or skip the clock.
+    assert.equal(hovered.rig.time, owned.rig.time);
+
+    drain(4);
+    const later = scene.lastFrame();
+    assert.equal(queue.size, 1, "the loop stopped scheduling after a frame");
+    assert.ok(later.rig.time > owned.rig.time, "the preview clock did not advance");
+    assert.ok(later.rig.time - owned.rig.time <= 4 / 30 + 1e-9,
+      "the preview advanced further than the four frames it was given");
+
+    // A render clears the preview, so a stale hover cannot outlive the ledger.
+    scene.update({ horseCount: 3, crew: roster });
+    assert.equal(scene.lastFrame().rig.isPreview, false, "re-rendering the ledger kept the hover");
+
+    scene.setActive(false);
+    assert.equal(queue.size, 0, "a closed shop kept its frame scheduled");
+    const parked = scene.lastFrame().rig.time;
+    drain(4);
+    assert.equal(scene.lastFrame().rig.time, parked, "a closed shop kept animating");
+
+    // Re-opening resumes on the phase it stopped at instead of jumping.
+    scene.setActive(true);
+    assert.equal(scene.lastFrame().rig.time, parked);
+    assert.equal(queue.size, 1);
+    scene.setActive(false);
+  });
+});
+
+test("a shop canvas with no box is left alone", () => {
+  const recorder = recordingContext();
+  withAnimationFrames(({ drain }) => {
+    // The narrow layout hides the camp fire, so its canvas measures 0x0 and the
+    // scene has to skip it rather than draw at a guessed size.
+    const scene = createShopScene({
+      rigCanvas: fakeCanvas(320, 220, recorder.context),
+      campCanvas: fakeCanvas(0, 0, recorder.context),
+    });
+    scene.update({ horseCount: 1, crew: [] });
+    scene.setActive(true);
+    assert.equal(scene.lastFrame().camp, null, "a zero-sized canvas was drawn anyway");
+    assert.ok(scene.lastFrame().rig, "hiding the camp fire stopped the rig too");
+    drain(3);
+    assert.equal(scene.lastFrame().camp, null, "a later frame drew the hidden canvas");
+    scene.setActive(false);
+
+    // No canvases at all (a stripped page) is not an error either.
+    const empty = createShopScene({});
+    empty.update({ horseCount: 2, crew: [{ role: "archer" }] });
+    empty.setActive(true);
+    assert.deepEqual(empty.lastFrame(), { rig: null, camp: null });
+    drain(2);
+    empty.setActive(false);
+  });
+});
+
+console.log("\n[unit] shop info panel");
+
+// The panel is the shop's one description surface: cards carry a title, an
+// effect line and a price, and the long copy (equipment descriptions are long
+// enough to double every card) is swapped into one place under the summary.
+function fakeInfoElement() {
+  const classes = new Set();
+  const label = { textContent: "" };
+  const text = { textContent: "" };
+  return {
+    label,
+    text,
+    classes,
+    element: {
+      textContent: "",
+      classList: {
+        toggle(name, force) {
+          const on = force === undefined ? !classes.has(name) : Boolean(force);
+          if (on) classes.add(name); else classes.delete(name);
+          return on;
+        },
+        contains: (name) => classes.has(name),
+      },
+      querySelector: (selector) => {
+        if (selector === ".shop-info-label") return label;
+        if (selector === ".shop-info-text") return text;
+        return null;
+      },
+    },
+  };
+}
+
+test("the shop info panel shows the standing rule until an item is picked", () => {
+  const { element, label, text, classes } = fakeInfoElement();
+  const panel = createInfoPanel(element);
+
+  panel.paint();
+  assert.equal(label.textContent, translate("shop.collision.label"));
+  assert.equal(text.textContent, translate("shop.collision.description"));
+  assert.equal(classes.has("is-item"), false, "the standing rule was marked as a picked item");
+
+  // Pointing at a card paints that card's own copy in both languages of the
+  // label and the body, with the accented state on.
+  panel.paint(itemInfo("weaponRack", "equipment.weaponRack.name", translate("equipment.weaponRack.description")));
+  assert.equal(label.textContent, translate("shop.info.label", { name: translate("equipment.weaponRack.name") }));
+  assert.equal(text.textContent, translate("equipment.weaponRack.description"));
+  assert.equal(classes.has("is-item"), true, "a picked item was not marked as one");
+
+  // Releasing the pointer falls back to the rule instead of keeping the pick.
+  panel.paint(null);
+  assert.equal(text.textContent, translate("shop.collision.description"));
+  assert.equal(classes.has("is-item"), false, "a released item stayed pinned");
+});
+
+test("a shop info panel without children still reads as one line", () => {
+  // A harness - or a stripped page - whose element reports no child nodes must
+  // not throw: the whole line lands in `textContent`, which is what a screen
+  // reader reads out of the live region anyway.
+  const element = { textContent: "", classList: { toggle() {} } };
+  const panel = createInfoPanel(element);
+  panel.paint();
+  assert.equal(element.textContent,
+    `${translate("shop.collision.label")}${translate("shop.collision.description")}`);
+  panel.paint(itemInfo("horse", "shop.horse", translate("horse.description")));
+  assert.equal(element.textContent,
+    `${translate("shop.info.label", { name: translate("shop.horse") })}${translate("horse.description")}`);
+});
+
+test("a shop info panel with no element is a no-op", () => {
+  const panel = createInfoPanel(null);
+  assert.doesNotThrow(() => {
+    panel.paint();
+    panel.paint(itemInfo("horse", "shop.horse", "…"));
+  });
 });
 
 console.log(`\n[unit] PASS (${passed} checks)`);

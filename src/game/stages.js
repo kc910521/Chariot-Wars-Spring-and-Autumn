@@ -79,6 +79,8 @@ export function createStageManager({
     state.bloodStains = [];
     state.spawnTimer = 1.2;
     state.elapsed = 0;
+    state.fireHold = 0;
+    state.fireHeld = false;
     player.x = world.width / 2;
     player.y = world.height / 2;
     player.radius = 17;

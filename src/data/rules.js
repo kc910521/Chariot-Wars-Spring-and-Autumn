@@ -14,6 +14,16 @@ export const chariotRules = Object.freeze({
 export const projectileRules = Object.freeze({
   playerVolley: Object.freeze({
     speed: 460, elevation: 0.42, gravity: 420, range: 470, spread: 0.075, originOffset: 29,
+    // The bow has two releases. Drawing past `holdSeconds` and letting go looses
+    // the fixed high arc above, which is the bow's longest shot (~400px from the
+    // axle). Anything shorter is a tap that asks the bow to pick a target, so it
+    // gets its own reload and tone, and a reach that stops short of where the
+    // drawn arc comes down — a tap can never outrange a drawn shot.
+    holdSeconds: 0.6,
+    chargedCooldown: 0.42, chargedTone: 340,
+    // `tapConeCosine` is the cosine of the half-angle the nose must clear
+    // (0.5 = ±60°), so a target beside or behind the axle is never assisted.
+    tapCooldown: 0.34, tapTone: 400, tapRange: 380, tapConeCosine: 0.5,
   }),
   allyArrow: Object.freeze({
     speed: 420, gravity: 420, spread: 0.055, crewOriginOffset: 25, crewRange: 430, footOriginOffset: 12,
