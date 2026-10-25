@@ -30,6 +30,8 @@ import {
   solveTimeToGround, updateProjectiles,
 } from "../src/game/projectiles.js";
 import { createEnemies } from "../src/game/units/enemies.js";
+import { countParticles, pruneParticles, spawnParticle, updateParticles } from "../src/game/particles.js";
+import { createTrailSystem } from "../src/game/trails.js";
 import {
   chasePoint, defendedPoint, formationExtent, formationGroundExtent, isInsideFormation, searchPoint,
   updateFormationAlerts,
@@ -1084,6 +1086,132 @@ test("dust particles carry their own lifetime and a palette that reads on grass"
   for (const mote of motes) {
     assert.ok(mote.size >= effectRules.dust.sizeMin && mote.size <= effectRules.dust.sizeMax);
     assert.ok(mote.vy < 0, "dust should drift upwards");
+  }
+});
+
+console.log("[unit] dust trails");
+
+// The trail emitters read the displacement between frames, so the rig moves the
+// body instead of pretending it has a `speed` field: that is the property the
+// feature is built on, and a test that set `speed` would not exercise it.
+function trailRig({ angle = 0, radius = 17, camera = { x: 0, y: 0 } } = {}) {
+  const state = { particles: [] };
+  const view = { width: 1280, height: 720 };
+  const trails = createTrailSystem({ state, camera, view });
+  const actor = { x: 600, y: 360, angle, radius };
+  const puffs = () => state.particles.filter((particle) => particle.kind === "trail");
+  function drive(stepPerFrame, { frames = 30, direction = 1 } = {}) {
+    const dx = Math.cos(angle) * stepPerFrame * direction;
+    const dy = Math.sin(angle) * stepPerFrame * direction;
+    for (let frame = 0; frame < frames; frame += 1) {
+      actor.x += dx;
+      actor.y += dy;
+      trails.update(1 / 60, actor, []);
+    }
+    return puffs();
+  }
+  return { state, actor, trails, puffs, drive };
+}
+
+test("the shared particle lifecycle builds, advances and prunes in one place", () => {
+  const list = [];
+  const mote = spawnParticle(list, { x: 0, y: 0, vx: 10, vy: -4, life: 0.5, color: "#fff" });
+  // Every emitter used to repeat these five fields, and a copy that missed one
+  // changed how the mote looked or how long it lived.
+  assert.deepEqual(mote, {
+    kind: "mote", vx: 10, vy: -4, size: 3, growth: 0, x: 0, y: 0, life: 0.5, color: "#fff",
+  });
+  // No default `maxLife` on purpose: `burst` relies on the renderer's 0.52s
+  // fallback, and inventing one here would change how fast sparks fade.
+  assert.equal(mote.maxLife, undefined);
+
+  updateParticles(list, 0.1);
+  assert.ok(Math.abs(mote.x - 1) < 1e-9, "the integrator should carry vx * delta");
+  assert.ok(Math.abs(mote.y + 0.4) < 1e-9);
+  assert.ok(Math.abs(mote.life - 0.4) < 1e-9);
+  assert.ok(Math.abs(mote.vx - 9.7) < 1e-9, "damping stays in the shared integrator");
+  assert.equal(pruneParticles(list).length, 1);
+  updateParticles(list, 0.5);
+  assert.equal(pruneParticles(list).length, 0, "a spent particle must be pruned");
+  assert.equal(countParticles(list, "mote"), 1, "pruning returns a new list, it does not edit the old one");
+});
+
+test("a chariot driving forward leaves a trail that grows with its speed", () => {
+  // 1px/frame is 60px/s (a walking unit), 4px/frame is 240px/s (flat out).
+  const slow = trailRig().drive(1, { frames: 40 });
+  const fast = trailRig().drive(4, { frames: 40 });
+
+  assert.ok(slow.length > 0, "a unit walking forward should raise some dust");
+  assert.ok(fast.length > slow.length, "a faster unit must raise more of it");
+  const biggest = (puffs) => Math.max(...puffs.map((puff) => puff.size));
+  const widest = (puffs) => Math.max(...puffs.map((puff) => puff.growth));
+  assert.ok(biggest(fast) > biggest(slow), "puffs should be larger at speed");
+  assert.ok(widest(fast) > widest(slow), "and should span further before they fade");
+  for (const puff of fast) {
+    assert.ok(puff.maxLife >= puff.life, "alpha would overflow 1");
+    assert.ok(puff.life <= effectRules.trail.lifeMax);
+    assert.ok(puff.growth > 0, "a puff that never blooms reads as grit, not fog");
+  }
+});
+
+test("the trail sits behind the hull it came from", () => {
+  const rig = trailRig({ angle: 0 });
+  const puffs = rig.drive(3, { frames: 30 });
+  for (const puff of puffs) {
+    assert.ok(puff.x < rig.actor.x, `puff at ${puff.x.toFixed(1)} is not behind ${rig.actor.x}`);
+  }
+  // Turning the whole rig has to turn the wake with it.
+  const turned = trailRig({ angle: Math.PI / 2 });
+  for (const puff of turned.drive(3, { frames: 30 })) {
+    assert.ok(puff.y < turned.actor.y, "the wake should follow the heading, not the x axis");
+  }
+});
+
+test("a unit standing still raises no dust, and neither does one creeping", () => {
+  const still = trailRig();
+  for (let frame = 0; frame < 90; frame += 1) still.trails.update(1 / 60, still.actor, []);
+  assert.equal(still.puffs().length, 0, "a parked chariot must not smoke");
+
+  // 0.2px/frame is 12px/s, under `minSpeed`: the crowd shuffling in place is not
+  // travelling, and it should read that way.
+  assert.equal(trailRig().drive(0.2, { frames: 90 }).length, 0);
+});
+
+test("a reversing chariot raises no dust, forwards raises it", () => {
+  // 24px/s is the reverse lane's ceiling (CHARIOT_CONTROL_CONFIG.reverseMaxSpeed),
+  // i.e. the fastest the chariot can travel backwards - fast enough to clear
+  // `minSpeed`, so only the forward test can be what suppresses the wake.
+  const backwards = trailRig({ angle: 0 }).drive(0.4, { frames: 120, direction: -1 });
+  assert.equal(backwards.length, 0, "backing up must not leave a wake");
+  const fastBackwards = trailRig({ angle: 0 }).drive(3, { frames: 30, direction: -1 });
+  assert.equal(fastBackwards.length, 0, "and neither should a shoved-into-reverse hull");
+  const forwards = trailRig({ angle: 0 }).drive(0.4, { frames: 120 });
+  assert.ok(forwards.length > 0, "the same rig driving forwards does raise dust");
+});
+
+test("the trail is capped and skips units that cannot be seen", () => {
+  const busy = trailRig();
+  busy.drive(4, { frames: 600 });
+  assert.ok(busy.puffs().length <= effectRules.trail.maxLive,
+    `${busy.puffs().length} trail puffs exceeded the cap`);
+
+  // An off-screen unit would spend a visible unit's share of that cap.
+  const hidden = trailRig({ camera: { x: 4000, y: 4000 } });
+  assert.equal(hidden.drive(4, { frames: 60 }).length, 0);
+});
+
+test("the trail draws no random numbers, so the seed stream is untouched", () => {
+  // The system takes no `random` at all - it structurally cannot reach the
+  // battle's generator - and this guards against anyone reaching for Math.random
+  // instead, which would be a second, hidden source of variation.
+  const original = Math.random;
+  Math.random = () => {
+    throw new Error("the dust trail must not draw random numbers");
+  };
+  try {
+    assert.ok(trailRig().drive(4, { frames: 30 }).length > 0);
+  } finally {
+    Math.random = original;
   }
 });
 

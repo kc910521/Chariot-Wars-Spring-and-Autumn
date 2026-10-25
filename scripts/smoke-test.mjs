@@ -5,7 +5,7 @@ import { pathToFileURL } from "node:url";
 import { resolve } from "node:path";
 import { createHash } from "node:crypto";
 import { writeFileSync } from "node:fs";
-import { projectileRules } from "../src/data/rules.js";
+import { effectRules, projectileRules } from "../src/data/rules.js";
 
 const projectRoot = resolve(import.meta.dirname, "..");
 
@@ -511,9 +511,24 @@ function tapFire(frames, sample) {
   }
 }
 
+// The dust trail is painted under the bodies, so no drawing assertion can see it.
+// Sample the particle list while the chariot is actually driving instead: a puff
+// that is the wrong size, lives past its own fade, or never appears at all shows
+// up here.
+const trailSample = { puffs: 0, widest: 0, longest: 0, stale: 0 };
+function sampleTrail() {
+  for (const particle of game?.state?.particles ?? []) {
+    if (particle.kind !== "trail") continue;
+    trailSample.puffs += 1;
+    trailSample.widest = Math.max(trailSample.widest, particle.size);
+    trailSample.longest = Math.max(trailSample.longest, particle.life);
+    if (particle.life > (particle.maxLife ?? 0)) trailSample.stale += 1;
+  }
+}
+
 for (const [frameBlock, key] of [[120, "w"], [120, "a"], [120, "w"], [120, "d"], [120, "s"], [120, "w"], [180, "d"]]) {
   dispatchWindow("keydown", { key });
-  tapFire(frameBlock, sampleEnemies);
+  tapFire(frameBlock, () => { sampleEnemies(); sampleTrail(); });
   dispatchWindow("keyup", { key });
 }
 
@@ -543,6 +558,12 @@ for (const [frameBlock, key] of [[120, "w"], [120, "a"], [120, "w"], [120, "d"],
   runFrames(420, sampleEnemies);
 }
 
+check("the driving chariot raised a dust trail", trailSample.puffs > 0,
+  `${trailSample.puffs} puffs sampled`);
+check("every sampled puff stayed inside the trail rule band",
+  trailSample.widest >= effectRules.trail.sizeMin && trailSample.widest <= effectRules.trail.sizeMax
+  && trailSample.longest <= effectRules.trail.lifeMax && trailSample.stale === 0,
+  `size<=${trailSample.widest.toFixed(1)} life<=${trailSample.longest.toFixed(2)} stale=${trailSample.stale}`);
 check("game loop still schedules frames", preRenderQueue.length > 0);
 check("no runtime errors during combat", loggedErrors.length === 0, loggedErrors[0]);
 check("battle screen still active", query("#battle-screen").hidden === false);

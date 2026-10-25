@@ -228,6 +228,51 @@ export function createRenderer({ canvas, context, view, camera, world, player, s
       && y >= camera.y - margin && y <= camera.y + view.height + margin;
   }
 
+  // One particle pass for every kind, filtered by `match`. Splitting the list this
+  // way lets the ground wake be painted under the bodies and the sparks over them
+  // without a second copy of the fade, the cull and the alpha reset - and without
+  // painting the same puff twice, which would double its alpha.
+  const isTrailParticle = (particle) => particle.kind === "trail";
+  const isImpactParticle = (particle) => particle.kind !== "trail";
+
+  function paintParticles(match) {
+    for (const particle of state.particles) {
+      if (match && !match(particle)) continue;
+      const size = particle.size ?? 3;
+      const growth = particle.growth ?? 0;
+      if (!inView(particle.x, particle.y, size + growth + 8)) continue;
+      // Never divide by the old hard-coded 0.52s: dust lives longer, and an
+      // alpha above 1 is rejected by the canvas, which would freeze the fade.
+      const maxLife = particle.maxLife ?? effectRules.particleFadeSeconds;
+      const alpha = Math.min(1, Math.max(0, particle.life / maxLife));
+      // Both a ring and a trail puff bloom as they fade; a square mote keeps its size.
+      const radius = size + growth * (1 - alpha);
+      if (particle.kind === "trail") {
+        // Soft, translucent, still growing: the same fade as the motes, but a disc
+        // at a third of the alpha is the cloud where a square would be grit.
+        context.globalAlpha = alpha * effectRules.trail.alpha;
+        context.fillStyle = particle.color;
+        context.beginPath();
+        context.arc(particle.x, particle.y, radius, 0, Math.PI * 2);
+        context.fill();
+        continue;
+      }
+      if (particle.kind === "ring") {
+        context.globalAlpha = alpha * 0.55;
+        context.strokeStyle = particle.color;
+        context.lineWidth = 2;
+        context.beginPath();
+        context.ellipse(particle.x, particle.y, radius, radius * 0.6, 0, 0, Math.PI * 2);
+        context.stroke();
+        continue;
+      }
+      context.globalAlpha = alpha;
+      context.fillStyle = particle.color;
+      context.fillRect(particle.x, particle.y, size, size);
+    }
+    context.globalAlpha = 1;
+  }
+
   function draw() {
     if (!context || !canvas.width || !canvas.height) return;
     context.clearRect(0, 0, view.width, view.height);
@@ -429,6 +474,10 @@ export function createRenderer({ canvas, context, view, camera, world, player, s
       context.fillText(formationName, formation.x, formation.y - (formation.halfHeight || 86) - 9);
     }
 
+    // The wake goes down before anything that flies or stands on it: the hull
+    // drives through its own dust, and an arrow in the air stays above it.
+    paintParticles(isTrailParticle);
+
     for (const bullet of state.bullets) {
       if (!inView(bullet.x, bullet.y, 40)) continue;
       const color = bullet.kind === "stone" ? "#5f3428"
@@ -548,29 +597,8 @@ export function createRenderer({ canvas, context, view, camera, world, player, s
       context.restore();
     }
 
-    for (const particle of state.particles) {
-      const size = particle.size ?? 3;
-      const reach = size + (particle.growth ?? 0);
-      if (!inView(particle.x, particle.y, reach + 8)) continue;
-      // Never divide by the old hard-coded 0.52s: dust lives longer, and an
-      // alpha above 1 is rejected by the canvas, which would freeze the fade.
-      const maxLife = particle.maxLife ?? effectRules.particleFadeSeconds;
-      const alpha = Math.min(1, Math.max(0, particle.life / maxLife));
-      if (particle.kind === "ring") {
-        const radius = size + (particle.growth ?? 0) * (1 - alpha);
-        context.globalAlpha = alpha * 0.55;
-        context.strokeStyle = particle.color;
-        context.lineWidth = 2;
-        context.beginPath();
-        context.ellipse(particle.x, particle.y, radius, radius * 0.6, 0, 0, Math.PI * 2);
-        context.stroke();
-        continue;
-      }
-      context.globalAlpha = alpha;
-      context.fillStyle = particle.color;
-      context.fillRect(particle.x, particle.y, size, size);
-    }
-    context.globalAlpha = 1;
+    // Impact sparks, ground rings and motes stay above the bodies.
+    paintParticles(isImpactParticle);
 
     context.strokeStyle = "rgba(111, 64, 35, 0.45)";
     context.lineWidth = 2;

@@ -52,6 +52,27 @@ export const effectRules = Object.freeze({
     riseMax: 70,
     ring: Object.freeze({ color: "#d8cbb0", radius: 5, growth: 30, life: 0.34 }),
   }),
+  // Ground dust for anything that is actually travelling. Same warm palette as
+  // `dust` (the floor is #929d6d, so anything cooler vanishes), opposite numbers:
+  // many soft, low-alpha puffs that bloom as they fade, instead of one hot
+  // scatter that is over in half a second. Every entry scales with the unit's
+  // current speed between `minSpeed` and `fullSpeed` (the mounted chariot).
+  trail: Object.freeze({
+    colors: Object.freeze(["#e6dcc4", "#cdbfa1", "#d8cbb0"]),
+    minSpeed: 18, // px/s; anything slower reads as standing still
+    fullSpeed: 170,
+    sizeMin: 2, sizeMax: 7, // radius at birth
+    growthMin: 8, growthMax: 24, // how far a puff blooms - the span of the plume
+    lifeMin: 0.28, lifeMax: 0.7,
+    rateMin: 4, rateMax: 18, // puffs per second
+    driftMin: 0.12, driftMax: 0.3, // share of the unit's speed carried backwards
+    riseMin: 6, riseMax: 20,
+    alpha: 0.3, // fog: translucent where the impact motes stay opaque
+    maxStep: 200, // px in one frame: a teleport (spawn, respawn, dismount), not a stride
+    maxLive: 160, // hard cap, so a full formation cannot flood the particle list
+    cullMargin: 220, // an off-screen unit is not worth the churn - and it must not
+    // spend a visible unit's share of `maxLive`.
+  }),
   // Fallback fade for particles that do not carry their own `maxLife`.
   particleFadeSeconds: 0.52,
 });

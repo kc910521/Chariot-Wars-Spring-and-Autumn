@@ -10,6 +10,8 @@ import { createGameState } from "./state.js";
 import { createCollisionSystem } from "./collision.js";
 import { createCombatSystem } from "./combat.js";
 import { createProjectileSystem } from "./projectiles.js";
+import { pruneParticles, updateParticles } from "./particles.js";
+import { createTrailSystem } from "./trails.js";
 import { startGameLoop } from "./loop.js";
 import { updateCamera } from "../render/camera.js";
 import { createRenderer } from "../render/renderer.js";
@@ -187,6 +189,10 @@ function boot() {
     state,
   });
   const readControls = playerController.readControls;
+  // Cosmetic only: the dust behind anything travelling. It reads positions, never
+  // writes one, and draws no random numbers - so the battle's seed stream, and
+  // with it every enemy decision, is exactly what it was before the trail existed.
+  const trails = createTrailSystem({ state, camera, view });
 
   function resizeCanvas() {
     const rect = canvas.getBoundingClientRect();
@@ -251,14 +257,11 @@ function boot() {
     state.drops = state.drops.filter((drop) => !drop.collected && drop.life > 0);
     state.enemies = state.enemies.filter((enemy) => !enemy.destroyed);
     state.formations = state.formations.filter((formation) => state.enemies.some((enemy) => enemy.formationId === formation.id));
-    for (const particle of state.particles) {
-      particle.x += particle.vx * delta;
-      particle.y += particle.vy * delta;
-      particle.life -= delta;
-      particle.vx *= 0.97;
-      particle.vy *= 0.97;
-    }
-    state.particles = state.particles.filter((particle) => particle.life > 0);
+    // After the units have moved and before the particles are integrated, so a
+    // puff raised this frame is already on its way.
+    trails.update(delta, player, state.enemies);
+    updateParticles(state.particles, delta);
+    state.particles = pruneParticles(state.particles);
     for (const effect of state.meleeEffects) effect.life -= delta;
     state.meleeEffects = state.meleeEffects.filter((effect) => effect.life > 0);
     for (const arrow of state.groundArrows) arrow.life -= delta;

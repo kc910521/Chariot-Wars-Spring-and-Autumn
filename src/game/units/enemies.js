@@ -2,6 +2,7 @@ import { addBloodStain } from "../blood.js";
 import { effectRules } from "../../data/rules.js";
 import { clamp, shortestAngleDifference } from "../../utils/math.js";
 import { rectHitsAnyObstacle, rectTerrain } from "../elements.js";
+import { spawnParticle } from "../particles.js";
 import { createBehaviours } from "./behaviours.js";
 import { formationExtent, formationGroundExtent, searchPoint, updateFormationAlerts } from "./formations.js";
 
@@ -301,7 +302,7 @@ export function createEnemies({
     for (let index = 0; index < 9; index += 1) {
       const angle = random() * Math.PI * 2;
       const speed = 35 + random() * 115;
-      state.particles.push({
+      spawnParticle(state.particles, {
         x,
         y,
         vx: Math.cos(angle) * speed,
@@ -316,12 +317,10 @@ export function createEnemies({
     const rules = effectRules.dust;
     // One flattened ring sells the "something hit the ground here" beat, the
     // squares around it are the loose soil kicked up by the impact.
-    state.particles.push({
+    spawnParticle(state.particles, {
       kind: "ring",
       x,
       y,
-      vx: 0,
-      vy: 0,
       size: rules.ring.radius,
       growth: rules.ring.growth,
       life: rules.ring.life,
@@ -335,7 +334,7 @@ export function createEnemies({
       // Dust climbs instead of falling: it hangs in the air long enough to be
       // noticed against the pale grass.
       const rise = rules.riseMin + random() * (rules.riseMax - rules.riseMin);
-      state.particles.push({
+      spawnParticle(state.particles, {
         x,
         y,
         vx: Math.cos(angle) * speed,
