@@ -1,5 +1,5 @@
 import { clamp } from "../../utils/math.js";
-import { chasePoint, leashRadius } from "./formations.js";
+import { defendedPoint, leashRadius } from "./formations.js";
 
 // The per-type answer to "my target is in sight - what do I do this frame?".
 //
@@ -38,6 +38,17 @@ export function createBehaviours({
     moveEntitySafely(enemy, -Math.cos(angle) * enemy.speed * delta, -Math.sin(angle) * enemy.speed * delta, enemy.radius);
   }
 
+  // The distance at which a melee unit is genuinely at its target: its weapon
+  // range, but never shorter than its own body plus the radius of the target.
+  // A unit whose `range` is shorter than that pair of radii would have to stand
+  // inside the hull to swing, and `resolveInfantryCollision` shoves it back out
+  // every frame (the heavy: 16px body, 27px weapon, 17px hull). Movement and the
+  // swing both read this, so the post a unit walks to and the distance it
+  // strikes at can never disagree.
+  function honestReach(enemy, target) {
+    return Math.max(enemy.range, enemy.radius + target.radius + 2);
+  }
+
   function strike(enemy, target, angle) {
     enemy.attackCooldown = enemy.attackInterval;
     addMeleeEffect(target.x, target.y, angle, enemy.weapon);
@@ -50,10 +61,8 @@ export function createBehaviours({
   function guardPost(enemy, target, distance, angle, delta) {
     const homeDistance = Math.hypot(player.x - enemy.homeX, player.y - enemy.homeY);
     const bearing = Math.atan2(player.y - enemy.homeY, player.x - enemy.homeX);
-    // Stop at the honest reach, not at the weapon range: a unit whose `range`
-    // is shorter than its own body plus the player's would walk into the hull
-    // and be pushed back out every frame.
-    const reach = Math.max(enemy.range, enemy.radius + target.radius + 2);
+    // The post and the swing both sit at the honest reach.
+    const reach = honestReach(enemy, target);
     const lean = clamp(homeDistance - reach, 0, leashRadius(player, enemy));
     if (lean > 0) {
       const guardX = enemy.homeX + Math.cos(bearing) * lean;
@@ -65,21 +74,24 @@ export function createBehaviours({
         moveEntitySafely(enemy, Math.cos(guardAngle) * pace * delta, Math.sin(guardAngle) * pace * delta, enemy.radius);
       }
     }
-    if (distance <= enemy.range && enemy.attackCooldown === 0) strike(enemy, target, angle);
+    if (distance <= reach && enemy.attackCooldown === 0) strike(enemy, target, angle);
   }
 
-  // An alerted line leaves its rank. The goal is the player clamped to the
-  // unit's own envelope (leash + one chase span), so a formation cannot be
-  // kited apart, and it still stops at the honest reach instead of stepping
-  // into the hull.
+  // An alerted line leaves its rank. The goal is the player anywhere on the
+  // line's own ground (`defendedPoint`), not clamped to this unit's private
+  // envelope: a private envelope minus the weapon's reach left a back-rank heavy
+  // 46px of room to manoeuvre in, so it stood inside its own formation with its
+  // swing ready and never touched the hull. The line as a whole still stops at
+  // its release border, so it cannot be kited off the field, and the walk still
+  // ends at the honest reach instead of stepping into the hull.
   function closeOnTarget(enemy, target, distance, angle, delta) {
-    const goal = chasePoint(player, enemy, target.x, target.y);
-    const reach = Math.max(enemy.range, enemy.radius + target.radius + 2);
+    const goal = defendedPoint(player, enemy, target.x, target.y);
+    const reach = honestReach(enemy, target);
     if (Math.hypot(goal.x - enemy.x, goal.y - enemy.y) > reach) {
       advance(enemy, Math.atan2(goal.y - enemy.y, goal.x - enemy.x), delta);
       return;
     }
-    if (distance <= enemy.range && enemy.attackCooldown === 0) strike(enemy, target, angle);
+    if (distance <= reach && enemy.attackCooldown === 0) strike(enemy, target, angle);
   }
 
   // spear, ge, heavy: close to weapon range, then swing on the row's interval.
@@ -91,7 +103,7 @@ export function createBehaviours({
       else guardPost(enemy, target, distance, angle, delta);
       return;
     }
-    if (distance > enemy.range) advance(enemy, angle, delta);
+    if (distance > honestReach(enemy, target)) advance(enemy, angle, delta);
     else if (enemy.attackCooldown === 0) strike(enemy, target, angle);
   }
 

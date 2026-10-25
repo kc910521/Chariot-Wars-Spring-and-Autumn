@@ -31,7 +31,8 @@ import {
 } from "../src/game/projectiles.js";
 import { createEnemies } from "../src/game/units/enemies.js";
 import {
-  chasePoint, formationExtent, formationGroundExtent, isInsideFormation, updateFormationAlerts,
+  chasePoint, defendedPoint, formationExtent, formationGroundExtent, isInsideFormation, searchPoint,
+  updateFormationAlerts,
 } from "../src/game/units/formations.js";
 import { clamp, shortestAngleDifference } from "../src/utils/math.js";
 import { createRandomSeed, createSeededRandom, parseSeed } from "../src/utils/random.js";
@@ -1425,6 +1426,9 @@ function formationRig({ sight = { on: true }, seed = 11, obstacles = [], terrain
   // The spawner reads the ground from the campaign, exactly like the collision
   // system does, so the rig hands it a battlefield instead of a stub predicate.
   const campaign = { obstacles, terrain };
+  // Every blow a unit lands on the player; the melee tests read it to tell a
+  // swing that connected from a unit that only stood in reach.
+  const hits = [];
   const enemies = createEnemies({
     bossTypes,
     enemyStats,
@@ -1444,10 +1448,10 @@ function formationRig({ sight = { on: true }, seed = 11, obstacles = [], terrain
     updateHud: () => {},
     hasLineOfSight: () => sight.on,
     fireEnemy: () => {},
-    damagePlayer: () => {},
+    damagePlayer: (amount) => { hits.push(amount); },
     damageCompanion: () => {},
   });
-  return { state, player, enemies, sight, campaign, world };
+  return { state, player, enemies, sight, campaign, world, hits };
 }
 
 // Slots are laid out in the pattern's own frame, where local -Y is the front.
@@ -1473,6 +1477,11 @@ function parkPlayerInFront(rig, formation, distance) {
 
 const infantry = (state) => state.enemies.filter((enemy) => !enemy.boss && !enemy.ranged
   && enemy.type !== "chariot");
+
+// Where a melee unit settles: its weapon range, or its own body plus the body it
+// is swinging at when that is wider. The heavy (16px body, 27px weapon, 17px
+// hull) cannot get inside 35px, so its post and its swing both sit there.
+const reachOf = (unit, target) => Math.max(unit.range, unit.radius + target.radius + 2);
 
 // Gap between the two closest bodies; negative means they overlap.
 function closestPairGap(state) {
@@ -1644,6 +1653,56 @@ test("a chasing unit's goal is its leash plus one chase span from its slot", () 
   assert.deepEqual(loose, { x: 0, y: -500 });
 });
 
+test("an alerted line defends its whole footprint, not a leash circle per slot", () => {
+  // A back-rank slot 90px behind the centre of a 116x86 footprint, and a chariot
+  // parked 80px in front of that centre: the player is on the line's own ground.
+  const line = calmFormation();
+  const backRank = rankUnit({ homeX: 0, homeY: 90, line });
+  // What the old goal did to this unit: 39.5px of leash (the brace is nearly
+  // spent 170px out) + 72px of chase span = 111.5px from its slot, i.e. y =
+  // -21.5 - and the brain then stops a weapon's reach short of *that*, 58px
+  // short of the player, with its swing ready and out of contact.
+  const chase = chasePoint(chariotPlayer(0, -80), backRank, 0, -80);
+  assert.ok(Math.abs(chase.y + 21.5) < 1e-9, `the chase goal moved: ${chase.y}`);
+  // Awake, the line's goal is the player himself, so the back rank can reach him.
+  backRank.alerted = true;
+  assert.deepEqual(defendedPoint(chariotPlayer(0, -80), backRank, 0, -80), { x: 0, y: -80 });
+  // The bound moved from the unit to the line: 300px out, the goal stops at the
+  // release band (86 + 73) instead of following him off the field.
+  assert.deepEqual(
+    defendedPoint(chariotPlayer(0, -300), backRank, 0, -300),
+    { x: 0, y: -(86 + 73) },
+  );
+  // The rect is read in the formation's own frame, not the world's: a quarter
+  // turn puts local +Y down world -X, so the release border moves with it.
+  const turned = calmFormation({ heading: Math.PI / 2 });
+  const turnedUnit = rankUnit({ homeX: 0, homeY: 100, alerted: true, line: turned });
+  assert.deepEqual(defendedPoint(chariotPlayer(-100, 0), turnedUnit, -100, 0), { x: -100, y: 0 });
+  const beyond = defendedPoint(chariotPlayer(-200, 0), turnedUnit, -200, 0);
+  assert.ok(Math.abs(beyond.y) < 1e-9, `the rotated clamp drifted off the line's axis: ${beyond.y}`);
+  assert.ok(Math.abs(beyond.x + 159) < 1e-9, `the rotated clamp sat at ${beyond.x}, expected -159`);
+  // A line that is not awake keeps the old per-slot envelope...
+  backRank.alerted = false;
+  assert.deepEqual(defendedPoint(chariotPlayer(0, -80), backRank, 0, -80), chase);
+  // ...and a unit with no line at all (a boss) is never clamped.
+  const loose = defendedPoint(chariotPlayer(0, -300), rankUnit({ formationId: undefined }), 0, -300);
+  assert.deepEqual(loose, { x: 0, y: -300 });
+});
+
+test("a sighting is searched from a wider envelope than a chase", () => {
+  const unit = rankUnit();
+  // Leash 38 + two 72px chase spans = 182px from the slot: far enough to reach a
+  // sighting the chase itself would have been clamped away from, still bounded.
+  const spot = searchPoint(chariotPlayer(0, -500), unit, 0, -500);
+  assert.ok(Math.abs(spot.x) < 1e-9, `search goal drifted sideways: ${spot.x}`);
+  assert.ok(Math.abs(spot.y + 182) < 1e-9, `search goal sat ${Math.abs(spot.y)}px out, expected 182`);
+  // A sighting already inside the envelope is taken as it is.
+  assert.deepEqual(searchPoint(chariotPlayer(30, 40), unit, 30, 40), { x: 30, y: 40 });
+  // A unit with no formation (a boss) is never clamped.
+  const loose = searchPoint(chariotPlayer(0, -500), rankUnit({ formationId: undefined }), 0, -500);
+  assert.deepEqual(loose, { x: 0, y: -500 });
+});
+
 test("a line the chariot drives into leaves its rank and closes to reach", () => {
   for (let patternIndex = 0; patternIndex < formationPatterns.length; patternIndex += 1) {
     const label = formationPatterns[patternIndex].nameKey;
@@ -1657,7 +1716,7 @@ test("a line the chariot drives into leaves its rank and closes to reach", () =>
     const distanceOf = (unit) => Math.hypot(unit.x - rig.player.x, unit.y - rig.player.y);
     // Units that spawn already inside their own reach cannot demonstrate a
     // charge, so the charge is measured on the ones that were out of reach.
-    const startedOutOfReach = units.filter((unit) => distanceOf(unit) > unit.range);
+    const startedOutOfReach = units.filter((unit) => distanceOf(unit) > reachOf(unit, rig.player));
     assert.ok(startedOutOfReach.length > 0, `${label}: every unit spawned in reach, the test proves nothing`);
     const meanBefore = units.reduce((sum, unit) => sum + distanceOf(unit), 0) / units.length;
     for (let frame = 0; frame < 900; frame += 1) rig.enemies.updateUnits(1 / 60);
@@ -1671,11 +1730,86 @@ test("a line the chariot drives into leaves its rank and closes to reach", () =>
     // stops a body-width short - so the line is judged as a body: it made
     // contact (the nearest unit is in reach) and its centre of mass advanced.
     const nearest = units.reduce((best, unit) => (distanceOf(unit) < distanceOf(best) ? unit : best));
-    assert.ok(distanceOf(nearest) <= nearest.range + 1,
+    assert.ok(distanceOf(nearest) <= reachOf(nearest, rig.player) + 1,
       `${label}: the line stopped ${distanceOf(nearest).toFixed(0)}px out, never making contact`);
     const meanAfter = units.reduce((sum, unit) => sum + distanceOf(unit), 0) / units.length;
     assert.ok(meanAfter < meanBefore * 0.8,
       `${label}: the line only closed from ${meanBefore.toFixed(0)}px to ${meanAfter.toFixed(0)}px`);
+  }
+});
+
+test("the whole line answers a player standing on its footprint", () => {
+  // The chariot parks on the line instead of driving through it: the front edge
+  // and a far corner of the same 12-strong formation. This is the case a private
+  // envelope could not answer - a heavy could walk 46px from its slot and no
+  // further, so the back rank stood with a swing ready (`attackCooldown === 0`)
+  // 70-160px out and never touched the hull: 10 of 12 units stalled, and only
+  // 4-8 blows landed in 5s.
+  for (const [, localX, localY] of [["front edge", 0, -110], ["far corner", 130, 110]]) {
+    const rig = formationRig();
+    const formation = spawnFormationAt(rig, 3);
+    const spot = toWorld(formation, localX, localY);
+    rig.player.x = spot.x;
+    rig.player.y = spot.y;
+    const units = infantry(rig.state);
+    const distanceOf = (unit) => Math.hypot(unit.x - rig.player.x, unit.y - rig.player.y);
+    const meanBefore = units.reduce((sum, unit) => sum + distanceOf(unit), 0) / units.length;
+    for (let frame = 0; frame < 300; frame += 1) rig.enemies.updateUnits(1 / 60);
+    assert.equal(formation.alerted, true, "the line never woke");
+    // Crowding, not the goal, is the only thing that may hold a unit back now: a
+    // stopped ring of twelve bodies cannot all stand at one hull, and the back of
+    // that ring queues a couple of body-widths out.
+    const meanAfter = units.reduce((sum, unit) => sum + distanceOf(unit), 0) / units.length;
+    for (const unit of units) {
+      // Measured on this build: the worst unit sat 33px (front edge) and 37px
+      // (far corner) past its reach, i.e. one heavy body back in the queue;
+      // against the old goal the worst was 62px and 191px. 45 leaves the fix a
+      // body-width of room and still fails the old behaviour on both cases.
+      const slack = distanceOf(unit) - reachOf(unit, rig.player);
+      assert.ok(slack <= 45,
+        `${unit.type} stood ${slack.toFixed(0)}px past its reach (${distanceOf(unit).toFixed(0)}px out) instead of coming at the chariot`);
+    }
+    assert.ok(meanAfter < meanBefore * 0.6,
+      `the line only closed from ${meanBefore.toFixed(0)}px to ${meanAfter.toFixed(0)}px`);
+    assert.ok(rig.hits.length >= 10, `only ${rig.hits.length} blows landed in 5s`);
+  }
+});
+
+test("the line cannot be walked off its own ground", () => {
+  // The bound moved from each slot to the line's rectangle, so the guard is that
+  // the line's ground is still a bound: the chariot wakes the line at its edge,
+  // then runs. Nobody may trail him across the field, and once he is out of the
+  // release band the line stands down and walks home.
+  const rig = formationRig();
+  const formation = spawnFormationAt(rig, 3);
+  parkPlayerInFront(rig, formation, 20);
+  rig.enemies.updateUnits(1 / 60);
+  assert.equal(formation.alerted, true, "the line did not wake");
+  const overhang = (unit) => {
+    const dx = unit.x - formation.x;
+    const dy = unit.y - formation.y;
+    const localX = dx * Math.cos(formation.heading) + dy * Math.sin(formation.heading);
+    const localY = -dx * Math.sin(formation.heading) + dy * Math.cos(formation.heading);
+    return Math.max(Math.abs(localX) - formation.halfWidth, Math.abs(localY) - formation.halfHeight);
+  };
+  let worstOverhang = -Infinity;
+  for (let frame = 0; frame < 700; frame += 1) {
+    const spot = toWorld(formation, 0, -20 - frame * 0.5);
+    rig.player.x = spot.x;
+    rig.player.y = spot.y;
+    rig.enemies.updateUnits(1 / 60);
+    for (const unit of infantry(rig.state)) worstOverhang = Math.max(worstOverhang, overhang(unit));
+  }
+  // Kited at 30px/s - slow enough for a heavy (40px/s) to keep pace - the line
+  // presses up to the release border and stops there: measured 71px past the
+  // footprint, i.e. a weapon's reach short of the player at the band's edge. The
+  // 12px of slack is the crowd shoving a body, nothing more.
+  assert.ok(worstOverhang <= 73 + 12,
+    `a unit was dragged ${worstOverhang.toFixed(0)}px past the footprint, more than the release band`);
+  assert.equal(formation.alerted, false, "the line stayed awake after the chariot left the band");
+  for (let frame = 0; frame < 900; frame += 1) rig.enemies.updateUnits(1 / 60);
+  for (const unit of infantry(rig.state)) {
+    assert.ok(overhang(unit) <= 8, `${unit.type} never made it home (${overhang(unit).toFixed(0)}px out)`);
   }
 });
 
@@ -1714,6 +1848,122 @@ test("the line stands down and walks back to its slots once the player is clear"
     // exactly where the slot-holding test above expects it.
     assert.ok(stray <= 54, `${unit.type} stayed ${stray.toFixed(1)}px off its slot after standing down`);
   }
+});
+
+test("heavy infantry swings at the hull instead of standing in it", () => {
+  const rig = formationRig();
+  const formation = spawnFormationAt(rig, 3);
+  parkPlayerInFront(rig, formation, 20);
+  const heavy = rig.state.enemies.find((enemy) => enemy.type === "heavy");
+  assert.ok(heavy, "the rig spawned no heavy to test");
+  // On its own: in a crowd the front rank lands the swings for it.
+  rig.state.enemies = [heavy];
+  for (let frame = 0; frame < 420; frame += 1) rig.enemies.updateUnits(1 / 60);
+  const distance = Math.hypot(heavy.x - rig.player.x, heavy.y - rig.player.y);
+  // Its own body keeps it out of weapon range, so the post it walks to is the
+  // honest reach (16 + 17 + 2) rather than its 27px sword. It used to settle at
+  // 35px and then wait forever for a distance its body made impossible.
+  assert.ok(distance <= reachOf(heavy, rig.player) + 1,
+    `heavy settled ${distance.toFixed(1)}px out, past its own reach`);
+  assert.ok(rig.hits.length >= 2, `heavy landed ${rig.hits.length} swings at ${distance.toFixed(1)}px`);
+});
+
+test("holding rank outranks going to look", () => {
+  const rig = formationRig();
+  const formation = spawnFormationAt(rig, 3);
+  // In sight, so the guard post runs, but outside the alert band: the line is
+  // standing watch, which is exactly when it must not break formation.
+  parkPlayerInFront(rig, formation, 420);
+  for (let frame = 0; frame < 120; frame += 1) rig.enemies.updateUnits(1 / 60);
+  const units = infantry(rig.state);
+  // Only the units that actually saw the player have a sighting to glance at.
+  const watchers = units.filter((unit) => unit.seesPlayer);
+  assert.ok(watchers.length >= 3, "too few units could see the player to test the gate");
+  rig.sight.on = false;
+  rig.enemies.updateUnits(1 / 60);
+  for (const unit of watchers) {
+    // It may look, but it may not walk: the guard post outranks the search, so
+    // the unit is granted a glance rather than a walk budget.
+    assert.equal(unit.searchTimer, 0, `${unit.type} started a search while holding rank`);
+    assert.ok(unit.sweepTimer > 0, `${unit.type} did not even glance at the sighting`);
+  }
+  let widest = 0;
+  for (let frame = 0; frame < 240; frame += 1) {
+    rig.enemies.updateUnits(1 / 60);
+    for (const unit of units) {
+      widest = Math.max(widest, Math.hypot(unit.x - unit.homeX, unit.y - unit.homeY));
+    }
+  }
+  // The line leans off its slot towards a target it can see; it must not walk
+  // out of the leash to hunt one it cannot.
+  assert.ok(widest <= 54, `the line strayed ${widest.toFixed(1)}px from its slots while holding rank`);
+});
+
+test("a unit that loses track walks to the spot instead of turning back", () => {
+  const rig = formationRig();
+  const formation = spawnFormationAt(rig, 3);
+  parkPlayerInFront(rig, formation, 20);
+  const unit = rig.state.enemies.find((enemy) => enemy.type === "spear");
+  // On its own, so a crowd cannot stand in for it.
+  rig.state.enemies = [unit];
+  for (let frame = 0; frame < 120; frame += 1) rig.enemies.updateUnits(1 / 60);
+  assert.equal(unit.alerted, true, "the line never broke rank, so the search proves nothing");
+  // The player slips out of sight from 110px further down the field. The spot
+  // is left clear, so the walk can be measured without the hull in the way.
+  rig.sight.on = false;
+  const sighting = toWorld(formation, 0, -150);
+  unit.lastSeenX = sighting.x;
+  unit.lastSeenY = sighting.y;
+  const from = { x: unit.x, y: unit.y };
+  let closest = Infinity;
+  let maxStep = 0;
+  let widest = 0;
+  for (let frame = 0; frame < 210; frame += 1) {
+    const before = unit.angle;
+    rig.enemies.updateUnits(1 / 60);
+    closest = Math.min(closest, Math.hypot(unit.x - sighting.x, unit.y - sighting.y));
+    maxStep = Math.max(maxStep, Math.abs(shortestAngleDifference(before, unit.angle)));
+    if (frame >= 45) {
+      // While it is looking, it looks at the spot - never away from it.
+      const bearing = Math.atan2(sighting.y - unit.y, sighting.x - unit.x);
+      widest = Math.max(widest, Math.abs(shortestAngleDifference(bearing, unit.angle)));
+    }
+  }
+  assert.ok(closest <= 16, `the unit stopped ${closest.toFixed(1)}px short of where it lost sight`);
+  assert.ok(Math.hypot(unit.x - from.x, unit.y - from.y) > 40, "the unit never left its post");
+  // It used to freeze on a goal clamped to the guard leash, usually behind it,
+  // and snap round the moment the timer ran out.
+  // 3.2 rad/s is the quickest of the eased turn rates, so no branch may cover
+  // more than that in a frame; the old snap showed up as ~pi in one frame.
+  assert.ok(maxStep <= 3.2 / 60 + 1e-9, `the facing snapped ${maxStep.toFixed(4)}rad in one frame`);
+  assert.ok(widest <= Math.PI / 2, `the unit turned ${widest.toFixed(2)}rad away from the spot`);
+});
+
+test("a sighting at the rim earns a glance, not a march", () => {
+  const rig = formationRig();
+  const formation = spawnFormationAt(rig, 3);
+  parkPlayerInFront(rig, formation, 20);
+  const unit = rig.state.enemies.find((enemy) => enemy.type === "spear");
+  rig.state.enemies = [unit];
+  for (let frame = 0; frame < 120; frame += 1) rig.enemies.updateUnits(1 / 60);
+  assert.equal(unit.alerted, true, "the line never broke rank, so this tests nothing");
+  // A sighting out past the chase is further than the unit would ever go: it
+  // can only stare at the rim of its sight, so marching there chases nothing.
+  rig.sight.on = false;
+  const sighting = toWorld(formation, 0, -350);
+  unit.lastSeenX = sighting.x;
+  unit.lastSeenY = sighting.y;
+  rig.enemies.updateUnits(1 / 60);
+  assert.equal(unit.searchTimer, 0, "the unit marched off after a rim sighting");
+  assert.ok(unit.sweepTimer > 0, "the unit did not even glance at it");
+  let closest = Infinity;
+  for (let frame = 0; frame < 240; frame += 1) {
+    rig.enemies.updateUnits(1 / 60);
+    closest = Math.min(closest, Math.hypot(unit.x - sighting.x, unit.y - sighting.y));
+  }
+  assert.ok(closest > 240, `the unit closed to ${closest.toFixed(1)}px of a sighting it cannot use`);
+  const stray = Math.hypot(unit.x - unit.homeX, unit.y - unit.homeY);
+  assert.ok(stray <= 60, `the unit ended ${stray.toFixed(1)}px off its slot`);
 });
 
 test("sight flickering at the 450px rim does not make the line pace about", () => {

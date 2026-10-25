@@ -1,0 +1,434 @@
+[
+  {
+    "name": "趙",
+    "weight": 10,
+    "namingStory": {
+      "reason": "你的先祖受封于赵地，后代逐渐以封地为氏。",
+      "named_by": "fief"
+    }
+  },
+  {
+    "name": "魏",
+    "weight": 10,
+    "namingStory": {
+      "reason": "你的先祖因封地或宗族分支而以魏为氏，后代沿用此称。",
+      "named_by": "fief"
+    }
+  },
+  {
+    "name": "韓",
+    "weight": 10,
+    "namingStory": {
+      "reason": "你的先祖因封邑或宗族传承而以韩为氏，后代世代相承。",
+      "named_by": "fief"
+    }
+  },
+  {
+    "name": "屈",
+    "weight": 8,
+    "namingStory": {
+      "reason": "你的先祖属于楚国屈氏宗族，后代以屈为氏。",
+      "named_by": "clan_inheritance"
+    }
+  },
+  {
+    "name": "景",
+    "weight": 7,
+    "namingStory": {
+      "reason": "你的先祖属于楚国景氏宗族，后代沿用景氏之名。",
+      "named_by": "clan_inheritance"
+    }
+  },
+  {
+    "name": "昭",
+    "weight": 7,
+    "namingStory": {
+      "reason": "你的先祖属于楚国昭氏宗族，后代以昭为氏。",
+      "named_by": "clan_inheritance"
+    }
+  },
+  {
+    "name": "孟孫",
+    "weight": 7,
+    "namingStory": {
+      "reason": "你的先祖属于鲁国孟孙氏宗族，后代以孟孙为氏。",
+      "named_by": "clan_inheritance"
+    }
+  },
+  {
+    "name": "叔孫",
+    "weight": 7,
+    "namingStory": {
+      "reason": "你的先祖属于鲁国叔孙氏宗族，后代以叔孙为氏。",
+      "named_by": "clan_inheritance"
+    }
+  },
+  {
+    "name": "季孫",
+    "weight": 7,
+    "namingStory": {
+      "reason": "你的先祖属于鲁国季孙氏宗族，后代以季孙为氏。",
+      "named_by": "clan_inheritance"
+    }
+  },
+  {
+    "name": "臧",
+    "weight": 6,
+    "namingStory": {
+      "reason": "你的先祖在鲁国形成臧氏宗族，后代以臧为氏。",
+      "named_by": "clan_inheritance"
+    }
+  },
+  {
+    "name": "晏",
+    "weight": 6,
+    "namingStory": {
+      "reason": "你的先祖属于齐国晏氏宗族，后代以晏为氏。",
+      "named_by": "clan_inheritance"
+    }
+  },
+  {
+    "name": "崔",
+    "weight": 6,
+    "namingStory": {
+      "reason": "你的先祖在齐国形成崔氏宗族，后代沿用崔氏之名。",
+      "named_by": "clan_inheritance"
+    }
+  },
+  {
+    "name": "高",
+    "weight": 6,
+    "namingStory": {
+      "reason": "你的先祖属于齐国高氏宗族，后代以高为氏。",
+      "named_by": "clan_inheritance"
+    }
+  },
+  {
+    "name": "國",
+    "weight": 6,
+    "namingStory": {
+      "reason": "你的先祖属于齐国国氏宗族，后代以国为氏。",
+      "named_by": "clan_inheritance"
+    }
+  },
+  {
+    "name": "鮑",
+    "weight": 6,
+    "namingStory": {
+      "reason": "你的先祖属于齐国鲍氏宗族，后代以鲍为氏。",
+      "named_by": "clan_inheritance"
+    }
+  },
+  {
+    "name": "范",
+    "weight": 7,
+    "namingStory": {
+      "reason": "你的先祖因封邑或宗族支系而形成范氏，后代沿用此氏。",
+      "named_by": "fief"
+    }
+  },
+  {
+    "name": "中行",
+    "weight": 5,
+    "namingStory": {
+      "reason": "你的先祖属于晋国中行氏宗族，后代以中行为氏。",
+      "named_by": "clan_inheritance"
+    }
+  },
+  {
+    "name": "智",
+    "weight": 5,
+    "namingStory": {
+      "reason": "你的先祖属于晋国智氏宗族，后代以智为氏。",
+      "named_by": "clan_inheritance"
+    }
+  },
+  {
+    "name": "荀",
+    "weight": 5,
+    "namingStory": {
+      "reason": "你的先祖属于晋国荀氏宗族，后代以荀为氏。",
+      "named_by": "clan_inheritance"
+    }
+  },
+  {
+    "name": "郤",
+    "weight": 4,
+    "namingStory": {
+      "reason": "你的先祖属于晋国郤氏宗族，后代以郤为氏。",
+      "named_by": "clan_inheritance"
+    }
+  },
+  {
+    "name": "欒",
+    "weight": 4,
+    "namingStory": {
+      "reason": "你的先祖属于晋国栾氏宗族，后代以栾为氏。",
+      "named_by": "clan_inheritance"
+    }
+  },
+  {
+    "name": "羊舌",
+    "weight": 4,
+    "namingStory": {
+      "reason": "你的先祖属于晋国羊舌氏宗族，后代以羊舌为氏。",
+      "named_by": "clan_inheritance"
+    }
+  },
+  {
+    "name": "狐",
+    "weight": 4,
+    "namingStory": {
+      "reason": "你的先祖属于晋国狐氏宗族，后代以狐为氏。",
+      "named_by": "clan_inheritance"
+    }
+  },
+  {
+    "name": "令狐",
+    "weight": 3,
+    "namingStory": {
+      "reason": "你的先祖因封邑或居地而形成令狐氏，后代沿用此称。",
+      "named_by": "fief"
+    }
+  },
+  {
+    "name": "士",
+    "weight": 4,
+    "namingStory": {
+      "reason": "你的先祖以士为氏，后代延续这一宗族称谓。",
+      "named_by": "clan_inheritance"
+    }
+  },
+  {
+    "name": "公孫",
+    "weight": 6,
+    "namingStory": {
+      "reason": "你的先祖是某诸侯国公族的后裔，后代以公孙作为宗族称谓。",
+      "named_by": "ancestry"
+    }
+  },
+  {
+    "name": "子車",
+    "weight": 3,
+    "namingStory": {
+      "reason": "你的先祖属于秦国子车氏宗族，后代以子车为氏。",
+      "named_by": "clan_inheritance"
+    }
+  },
+  {
+    "name": "百里",
+    "weight": 3,
+    "namingStory": {
+      "reason": "你的先祖与百里氏宗族相承，后代以百里为氏。",
+      "named_by": "clan_inheritance"
+    }
+  },
+  {
+    "name": "華",
+    "weight": 5,
+    "namingStory": {
+      "reason": "你的先祖属于宋国华氏宗族，后代以华为氏。",
+      "named_by": "clan_inheritance"
+    }
+  },
+  {
+    "name": "樂",
+    "weight": 5,
+    "namingStory": {
+      "reason": "你的先祖属于宋国乐氏宗族，后代以乐为氏。",
+      "named_by": "clan_inheritance"
+    }
+  },
+  {
+    "name": "向",
+    "weight": 4,
+    "namingStory": {
+      "reason": "你的先祖属于宋国向氏宗族，后代以向为氏。",
+      "named_by": "clan_inheritance"
+    }
+  },
+  {
+    "name": "孔",
+    "weight": 5,
+    "namingStory": {
+      "reason": "你的先祖属于孔氏宗族，后代以孔为氏。",
+      "named_by": "clan_inheritance"
+    }
+  },
+  {
+    "name": "石",
+    "weight": 5,
+    "namingStory": {
+      "reason": "你的先祖以石为氏，后代沿用这一宗族称谓。",
+      "named_by": "clan_inheritance"
+    }
+  },
+  {
+    "name": "寧",
+    "weight": 4,
+    "namingStory": {
+      "reason": "你的先祖属于卫国宁氏宗族，后代以宁为氏。",
+      "named_by": "clan_inheritance"
+    }
+  },
+  {
+    "name": "游",
+    "weight": 4,
+    "namingStory": {
+      "reason": "你的先祖属于郑国游氏宗族，后代以游为氏。",
+      "named_by": "clan_inheritance"
+    }
+  },
+  {
+    "name": "罕",
+    "weight": 3,
+    "namingStory": {
+      "reason": "你的先祖属于郑国罕氏宗族，后代以罕为氏。",
+      "named_by": "clan_inheritance"
+    }
+  },
+  {
+    "name": "豐",
+    "weight": 3,
+    "namingStory": {
+      "reason": "你的先祖以丰为氏，后代沿用这一宗族称谓。",
+      "named_by": "clan_inheritance"
+    }
+  },
+  {
+    "name": "斗",
+    "weight": 4,
+    "namingStory": {
+      "reason": "你的先祖属于楚国斗氏宗族，后代以斗为氏。",
+      "named_by": "clan_inheritance"
+    }
+  },
+  {
+    "name": "伍",
+    "weight": 4,
+    "namingStory": {
+      "reason": "你的先祖以伍为氏，后代沿用这一宗族称谓。",
+      "named_by": "clan_inheritance"
+    }
+  },
+  {
+    "name": "白",
+    "weight": 4,
+    "namingStory": {
+      "reason": "你的先祖以白为氏，后代沿用这一宗族称谓。",
+      "named_by": "clan_inheritance"
+    }
+  },
+  {
+    "name": "蒙",
+    "weight": 4,
+    "namingStory": {
+      "reason": "你的先祖与秦地蒙氏宗族相承，后代以蒙为氏。",
+      "named_by": "clan_inheritance"
+    }
+  },
+  {
+    "name": "召",
+    "weight": 4,
+    "namingStory": {
+      "reason": "你的先祖因封邑或宗族支系而形成召氏，后代沿用此氏。",
+      "named_by": "fief"
+    }
+  },
+  {
+    "name": "單",
+    "weight": 3,
+    "namingStory": {
+      "reason": "你的先祖属于周王室相关的单氏宗族，后代以单为氏。",
+      "named_by": "clan_inheritance"
+    }
+  },
+  {
+    "name": "甘",
+    "weight": 3,
+    "namingStory": {
+      "reason": "你的先祖因封邑或宗族支系而形成甘氏，后代以甘为氏。",
+      "named_by": "fief"
+    }
+  },
+  {
+    "name": "毛",
+    "weight": 3,
+    "namingStory": {
+      "reason": "你的先祖属于毛氏宗族，后代以毛为氏。",
+      "named_by": "clan_inheritance"
+    }
+  },
+  {
+    "name": "管",
+    "weight": 4,
+    "namingStory": {
+      "reason": "你的先祖因管地或相关宗族传承而形成管氏，后代以管为氏。",
+      "named_by": "fief"
+    }
+  },
+  {
+    "name": "曹",
+    "weight": 4,
+    "namingStory": {
+      "reason": "你的先祖属于曹氏宗族，后代以曹为氏。",
+      "named_by": "clan_inheritance"
+    }
+  },
+  {
+    "name": "南宮",
+    "weight": 4,
+    "namingStory": {
+      "reason": "你的先祖因居住地或宗族分支而形成南宫氏，后代沿用此称。",
+      "named_by": "place"
+    }
+  },
+  {
+    "name": "南郭",
+    "weight": 2,
+    "namingStory": {
+      "reason": "你的先祖居于城邑南面的郭区，后代逐渐以南郭为氏。",
+      "named_by": "place"
+    }
+  },
+  {
+    "name": "東郭",
+    "weight": 2,
+    "namingStory": {
+      "reason": "你的先祖居于城邑东面的郭区，后代逐渐以东郭为氏。",
+      "named_by": "place"
+    }
+  },
+  {
+    "name": "西門",
+    "weight": 2,
+    "namingStory": {
+      "reason": "你的先祖长期居于城邑西门附近，后代以西门为氏。",
+      "named_by": "place"
+    }
+  },
+  {
+    "name": "北宮",
+    "weight": 2,
+    "namingStory": {
+      "reason": "你的先祖因居地或宗族分支而形成北宫氏，后代沿用此称。",
+      "named_by": "place"
+    }
+  },
+  {
+    "name": "東野",
+    "weight": 2,
+    "namingStory": {
+      "reason": "你的先祖居于城邑东面的田野地区，后代逐渐以东野为氏。",
+      "named_by": "place"
+    }
+  },
+  {
+    "name": "南疆",
+    "weight": 2,
+    "namingStory": {
+      "reason": "你的先祖世代居于南方边地，因守土有功或长期以此地为居，后代遂以「南疆」为氏。",
+      "named_by": "place"
+    }
+  }
+]

@@ -74,6 +74,17 @@ export function leashPoint(player, unit, x, y) {
   return clampToAnchor(unit, x, y, leashRadius(player, unit));
 }
 
+// How far past its leash a unit will walk to check a sighting it lost. Looking
+// is more than chasing - there is no live target to follow, so the unit commits
+// to a spot - but the envelope is still bounded, so a line that loses track of a
+// chariot walks out, looks, and re-forms instead of scattering after nothing.
+const SEARCH_SPANS = 2;
+
+export function searchPoint(player, unit, x, y) {
+  if (unit.formationId === undefined) return { x, y };
+  return clampToAnchor(unit, x, y, leashRadius(player, unit) + chaseSpan(unit) * SEARCH_SPANS);
+}
+
 // A line wakes up when the player steps into its footprint and stands down again
 // once he is clear. The two borders are deliberately different: one shared border
 // would make a chariot parked on it flicker the whole formation in and out of
@@ -120,18 +131,68 @@ export function chasePoint(player, unit, x, y) {
   return clampToAnchor(unit, x, y, leashRadius(player, unit) + chaseSpan(unit));
 }
 
+// The rect a line defends while it is awake: the footprint the renderer dashes,
+// grown by the band that keeps the line alerted. A point already inside comes
+// back untouched - the everyday case, the player standing on the formation - and
+// anything beyond is pulled in to the border.
+function clampToRect(formation, x, y, margin) {
+  const local = formationLocal(formation, x, y);
+  const halfWidth = (formation.halfWidth || 116) + margin;
+  const halfHeight = (formation.halfHeight || 86) + margin;
+  const localX = clamp(local.x, -halfWidth, halfWidth);
+  const localY = clamp(local.y, -halfHeight, halfHeight);
+  if (localX === local.x && localY === local.y) return { x, y };
+  return {
+    x: formation.x + localX * Math.cos(formation.heading) - localY * Math.sin(formation.heading),
+    y: formation.y + localX * Math.sin(formation.heading) + localY * Math.cos(formation.heading),
+  };
+}
+
+// An alerted line's goal: the player *anywhere on the line's own ground*, not
+// clamped to each slot's private envelope.
+//
+// `chasePoint` bounds a unit to leash + one chase span from its slot, and the
+// brain then stops a weapon's reach short of that goal - so the farthest a heavy
+// could ever walk from the ground it spawned on was 38px of leash + 43px of
+// chase span - 35px of reach = 46px. A back-rank heavy therefore could not touch
+// a chariot parked on its own formation: it took its 46px, stood there with its
+// swing ready (`attackCooldown === 0`) and faced the player while 100-160px out.
+// Measured on the real spawner: 10 of 12 melee units stalled like that, and only
+// 4-8 blows landed per 5s when the player stopped at the edge of the line,
+// against 21 at its centre.
+//
+// Defending the formation's rectangle instead puts every rank within reach of a
+// player who is on the footprint or in the band that keeps the line awake. The
+// bound moves from the unit to the line: the goal still stops at the release
+// border, so nothing can be kited off the field, and a unit that is not in an
+// alerted formation keeps the old envelope (or no bound at all - a boss).
+//
+// Same spawner, player parked: the line's mean distance falls from 117px to 49px
+// at the front edge and from 199px to 39px at a far corner, the worst unit ends
+// one body past its reach instead of 62-191px, and blows in 5s go from 4-8 to 16
+// (front edge) and 22 (corner). Centred, 21 blows become 32.
+export function defendedPoint(player, unit, x, y) {
+  if (unit.line === undefined || !unit.alerted) return chasePoint(player, unit, x, y);
+  return clampToRect(unit.line, x, y, ALERT_RELEASE);
+}
+
 // Alerts are latched on the formation and mirrored onto its units, because a
 // brain owns no state of its own: one pass here and every brain can read
-// `enemy.alerted` without having to find its own formation.
+// `enemy.alerted` without having to find its own formation. The formation itself
+// rides along as `unit.line` for the same reason - a brain that has to know
+// *which ground* it defends (`defendedPoint`) should not have to look it up
+// either, and a line's geometry never moves once it has spawned.
 export function updateFormationAlerts(formations, units, player) {
-  const alerts = new Map();
+  const lines = new Map();
   for (const formation of formations) {
     const margin = formation.alerted ? ALERT_RELEASE : ALERT_MARGIN;
     formation.alerted = isInsideFormation(formation, player.x, player.y, margin);
-    alerts.set(formation.id, formation.alerted);
+    lines.set(formation.id, formation);
   }
   for (const unit of units) {
     if (unit.formationId === undefined) continue;
-    unit.alerted = alerts.get(unit.formationId) === true;
+    const line = lines.get(unit.formationId);
+    unit.alerted = line !== undefined && line.alerted === true;
+    unit.line = line;
   }
 }

@@ -294,7 +294,7 @@ const TRACE_COMPANION_NUMBERS = [
 ];
 const TRACE_ENEMY_NUMBERS = [
   "x", "y", "angle", "health", "knockedDown", "idleTimer", "idleTarget",
-  "investigateTimer", "attackCooldown", "shotCooldown", "contactCooldown",
+  "searchTimer", "sweepTimer", "attackCooldown", "shotCooldown", "contactCooldown",
   "lastSeenX", "lastSeenY",
 ];
 
@@ -445,16 +445,19 @@ checkCamera("battle start");
 const enemyGap = { worst: Infinity, nonFiniteAngle: null };
 // Idle units look around their formation's front. Two live invariants: a settled
 // unit never leaves the scan band, and the scan actually runs here (not just in
-// the focused unit test). A unit that just lost sight spends up to ~1.9s easing
-// round from its combat heading, so each unit is latched as settled once it is
-// first inside the band and only checked from then on.
+// the focused unit test). A unit that just lost track spends up to a couple of
+// seconds easing round from its combat heading, and may look about the spot it
+// last saw the player, so each unit is latched as settled once it is first
+// inside the band and only checked from then on.
 const idleScan = { states: new WeakMap(), widest: 0, bandBreak: null, settled: 0, drifters: 0, quietClearance: 0 };
 function sampleIdleScan() {
   for (const enemy of game?.state?.enemies ?? []) {
     if (enemy.destroyed) continue;
     let entry = idleScan.states.get(enemy);
     if (!entry) idleScan.states.set(enemy, entry = { settled: false, widest: 0 });
-    const idle = !enemy.seesPlayer && !(enemy.investigateTimer > 0)
+    // A unit that is walking to a sighting is not idle, even when the walk
+    // happens to cross its own slot on the way.
+    const idle = !enemy.seesPlayer && !(enemy.searchTimer > 0) && !(enemy.sweepTimer > 0)
       && Math.hypot(enemy.homeX - enemy.x, enemy.homeY - enemy.y) <= 8;
     if (!idle) {
       entry.settled = false;

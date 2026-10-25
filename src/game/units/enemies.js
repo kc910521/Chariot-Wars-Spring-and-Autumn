@@ -3,7 +3,7 @@ import { effectRules } from "../../data/rules.js";
 import { clamp, shortestAngleDifference } from "../../utils/math.js";
 import { rectHitsAnyObstacle, rectTerrain } from "../elements.js";
 import { createBehaviours } from "./behaviours.js";
-import { formationExtent, formationGroundExtent, leashPoint, updateFormationAlerts } from "./formations.js";
+import { formationExtent, formationGroundExtent, searchPoint, updateFormationAlerts } from "./formations.js";
 
 const SEPARATION_MIN_OVERLAP = 2;
 // How many sweeps `separateEnemies` may take to settle a crowd: one sweep only
@@ -23,6 +23,25 @@ const IDLE_SCAN_ANGLE = 0.34; // rad (~19.5deg) either side of the front.
 const IDLE_THINK_MIN = 2.6; // Seconds between new headings: longer than the old
 const IDLE_THINK_SPAN = 3.2; // 1.7-3.7s, i.e. a new heading every 2.6-5.8s.
 const IDLE_TURN_RATE = 1.7; // rad/s cap, so a full scan swings in ~0.4s.
+
+// Looking for a target that just slipped out of sight: the unit walks to where
+// it last saw the target, clamped to its own searchPoint envelope, sweeps the
+// ground there, and only then goes back to its post. The old code aimed at a
+// point clamped to the guard leash instead - usually behind the unit - so it
+// snapped round on the first frame and then stood still until a 1.8s timer ran
+// out, without ever moving towards the sighting.
+const SEARCH_JOG = 0.62; // of `speed`: looking is a jog, not a charge.
+const SEARCH_ARRIVE = 14; // Within a body of the sighting: searched.
+const SEARCH_SWEEP = 2.2; // Seconds spent sweeping the spot itself.
+const SEARCH_GLANCE = 1.2; // Seconds spent looking at a sighting too far to walk.
+const SEARCH_TIMEOUT_MAX = 9; // Cap on the walk itself, whatever the distance.
+const SEARCH_SPREAD = 1.05; // rad (~60deg) either side of the sighting.
+const SEARCH_TURN_RATE = 2.6; // rad/s while looking...
+const RETURN_TURN_RATE = 3.2; // ...and while walking back to the post.
+// A sighting further out than this only earns a glance: walking after a target
+// that blinked out at the edge of sight would drag a rank out of the line for
+// information the unit cannot use.
+const LOST_SIGHT_LOOK = 240;
 
 // How many places a formation looks at before settling. The scan keeps the best
 // ground it has seen instead of taking the first clear patch, so this is a search
@@ -213,7 +232,10 @@ export function createEnemies({
         seesPlayer: false,
         lastSeenX: slot.x,
         lastSeenY: slot.y,
-        investigateTimer: 0,
+        // Seconds left of the walk to a remembered sighting, and of the sweep
+        // that follows it. Both are 0 on a unit that is where it belongs.
+        searchTimer: 0,
+        sweepTimer: 0,
         shotCooldown: 0.8 + random() * 1.5,
         homeAngle: heading,
         // A full-strength random phase, so a formation does not re-roll every
@@ -264,7 +286,8 @@ export function createEnemies({
       seesPlayer: false,
       lastSeenX: player.x,
       lastSeenY: player.y,
-      investigateTimer: 0,
+      searchTimer: 0,
+      sweepTimer: 0,
       shotCooldown: 2,
       attackCooldown: 2.2,
       contactCooldown: 0,
@@ -386,6 +409,121 @@ export function createEnemies({
     getChariotTravelSpeed,
   });
 
+  // Turn on the spot towards a bearing at a capped rate. The old code wrote the
+  // facing straight from `atan2`, which is the snap the search used to open with.
+  function turnToward(enemy, bearing, rate, delta) {
+    const turn = shortestAngleDifference(enemy.angle, bearing);
+    enemy.angle += clamp(turn, -rate * delta, rate * delta);
+  }
+
+  // Step along `bearing`, but only as fast as the unit is actually facing that
+  // way: one that still has to come about turns on the spot instead of
+  // moonwalking towards its goal.
+  function strideAt(enemy, bearing, speed, delta) {
+    const pace = speed * clamp(Math.cos(shortestAngleDifference(enemy.angle, bearing)), 0, 1);
+    moveEntitySafely(enemy, Math.cos(bearing) * pace * delta, Math.sin(bearing) * pace * delta, enemy.radius);
+  }
+
+  // Look around a heading: re-roll a target inside `spread` of `base` on a timer
+  // and ease towards it. Shared by the standing scan and the search sweep, so a
+  // unit looking for something sweeps the ground the way it always has.
+  // `!(idleTimer > 0)` is also false for NaN, so an enemy that never got a timer
+  // (older save, a hand-built rig) reseeds instead of writing a non-finite
+  // heading the way the old wanderAngle did.
+  function scanGround(enemy, base, spread, rate, delta) {
+    enemy.idleTimer -= delta;
+    if (!(enemy.idleTimer > 0)) {
+      enemy.idleTimer = IDLE_THINK_MIN + random() * IDLE_THINK_SPAN;
+      enemy.idleTarget = base + (random() - 0.5) * 2 * spread;
+    }
+    turnToward(enemy, enemy.idleTarget ?? base, rate, delta);
+  }
+
+  // Guard has priority. Infantry still holding their rank do not leave the line
+  // to go looking: the line is what they are there to protect, and a target that
+  // walked out of their sight is exactly what the guard post is for. Only a unit
+  // that has already broken rank (its formation is alerted), one fighting a
+  // player on foot, or one with no rank to keep (a chariot, a boss) walks to the
+  // sighting. (Ranged units are turned away in beginSearch, before this runs.)
+  function mayLeavePost(enemy) {
+    if (enemy.formationId === undefined) return true;
+    if (!enemy.holdsRank) return true;
+    if (player.mode === "foot") return true;
+    return enemy.alerted === true;
+  }
+
+  // The frame a unit loses sight of its target: remember where, and work out
+  // whether the unit may walk there. Everyone looks towards the spot, so a
+  // target that vanishes reads as being looked for rather than as forgotten.
+  function beginSearch(enemy) {
+    enemy.idleTimer = 0; // the next sweep re-rolls around the sighting
+    // Ranged units keep the behaviour they had: they hold their ground and
+    // their fire discipline, so nothing about them starts hunting the target.
+    if (enemy.ranged) {
+      enemy.searchTimer = 0;
+      enemy.sweepTimer = 0;
+      return;
+    }
+    const sighting = Math.hypot(enemy.lastSeenX - enemy.x, enemy.lastSeenY - enemy.y);
+    if (!mayLeavePost(enemy) || sighting > LOST_SIGHT_LOOK) {
+      enemy.searchTimer = 0;
+      enemy.sweepTimer = SEARCH_GLANCE;
+      return;
+    }
+    const goal = searchPoint(player, enemy, enemy.lastSeenX, enemy.lastSeenY);
+    const walk = Math.hypot(goal.x - enemy.x, goal.y - enemy.y) / (enemy.speed * SEARCH_JOG);
+    enemy.searchTimer = Math.min(SEARCH_TIMEOUT_MAX, SEARCH_SWEEP + walk);
+    enemy.sweepTimer = 0;
+  }
+
+  // Walk to the remembered sighting. The budget covers the walk and the sweep
+  // that follows it, so a search is bounded even when the envelope is far away.
+  // A unit that gets nowhere near the spot within the budget gives up and takes
+  // the glance instead of walking after it forever.
+  function searchWalk(enemy, delta) {
+    enemy.searchTimer = Math.max(0, enemy.searchTimer - delta);
+    const goal = searchPoint(player, enemy, enemy.lastSeenX, enemy.lastSeenY);
+    const span = Math.hypot(goal.x - enemy.x, goal.y - enemy.y);
+    if (span > SEARCH_ARRIVE && enemy.searchTimer > 0) {
+      const bearing = Math.atan2(goal.y - enemy.y, goal.x - enemy.x);
+      turnToward(enemy, bearing, SEARCH_TURN_RATE, delta);
+      strideAt(enemy, bearing, enemy.speed * SEARCH_JOG, delta);
+      return;
+    }
+    enemy.searchTimer = 0;
+    // Arriving earns a proper sweep of the spot; running out of budget earns a
+    // glance from wherever the search gave up.
+    enemy.sweepTimer = Math.max(enemy.sweepTimer, span <= SEARCH_ARRIVE ? SEARCH_SWEEP : SEARCH_GLANCE);
+  }
+
+  // Look for the target where it was last seen. The sweep re-centres on the
+  // sighting every frame, so a unit never turns its back on the spot while it is
+  // still looking.
+  function sweepSighting(enemy, delta) {
+    enemy.sweepTimer = Math.max(0, enemy.sweepTimer - delta);
+    if (enemy.sweepTimer === 0) {
+      enemy.idleTimer = 0; // the standing scan re-rolls around the front again
+      return;
+    }
+    const bearing = Math.atan2(enemy.lastSeenY - enemy.y, enemy.lastSeenX - enemy.x);
+    scanGround(enemy, bearing, SEARCH_SPREAD, SEARCH_TURN_RATE, delta);
+  }
+
+  // Back to the post at a walk, turning into the heading instead of snapping
+  // round to face it the way the old code did.
+  function walkHome(enemy, delta) {
+    const homeDistance = Math.hypot(enemy.homeX - enemy.x, enemy.homeY - enemy.y);
+    if (homeDistance <= 8) {
+      // Standing watch: rotation only - never a move - so the slot, the leash
+      // and the footprint the renderer draws all stay exactly as they were.
+      scanGround(enemy, enemy.homeAngle ?? enemy.angle, IDLE_SCAN_ANGLE, IDLE_TURN_RATE, delta);
+      return;
+    }
+    const bearing = Math.atan2(enemy.homeY - enemy.y, enemy.homeX - enemy.x);
+    turnToward(enemy, bearing, RETURN_TURN_RATE, delta);
+    strideAt(enemy, bearing, enemy.speed * 0.55, delta);
+  }
+
   function updateUnits(delta) {
     // One pass decides, per formation, whether the player is standing inside its
     // footprint; the brains below only read the mirrored flag.
@@ -402,6 +540,9 @@ export function createEnemies({
       const distance = Math.hypot(target.x - enemy.x, target.y - enemy.y);
       const seesTarget = distance < enemy.sightRange
         && hasLineOfSight(enemy.x, enemy.y, target.x, target.y);
+      // The frame a unit loses sight of its target is the frame it starts to
+      // look for it; a re-sighting ends the search where the unit stands.
+      if (enemy.seesPlayer && !seesTarget) beginSearch(enemy);
       enemy.seesPlayer = seesTarget;
       enemy.shotCooldown = Math.max(0, enemy.shotCooldown - delta);
       enemy.hitFlash = Math.max(0, enemy.hitFlash - delta);
@@ -410,7 +551,8 @@ export function createEnemies({
       if (seesTarget) {
         enemy.lastSeenX = target.x;
         enemy.lastSeenY = target.y;
-        enemy.investigateTimer = 1.8;
+        enemy.searchTimer = 0;
+        enemy.sweepTimer = 0;
         const angle = Math.atan2(target.y - enemy.y, target.x - enemy.x);
         enemy.angle = angle;
         behaviours[enemy.behaviour].onSight(enemy, target, distance, angle, delta);
@@ -418,41 +560,11 @@ export function createEnemies({
         // where each inline branch used to return.
         if (state.mode === "over") return;
 
-      } else if (enemy.investigateTimer > 0) {
-        enemy.investigateTimer = Math.max(0, enemy.investigateTimer - delta);
-        // `ranged` is the "shoots, so it holds position" flag, not the brain: the
-        // catapult is a boss, lobs stones and still walks to a sighting.
-        if (!enemy.ranged) {
-          const goal = leashPoint(player, enemy, enemy.lastSeenX, enemy.lastSeenY);
-          const angle = Math.atan2(goal.y - enemy.y, goal.x - enemy.x);
-          enemy.angle = angle;
-          if (Math.hypot(goal.x - enemy.x, goal.y - enemy.y) > 34) {
-            moveEntitySafely(enemy, Math.cos(angle) * enemy.speed * 0.62 * delta, Math.sin(angle) * enemy.speed * 0.62 * delta, enemy.radius);
-          }
-        }
+      } else if (enemy.searchTimer > 0 || enemy.sweepTimer > 0) {
+        if (enemy.searchTimer > 0) searchWalk(enemy, delta);
+        if (enemy.searchTimer === 0) sweepSighting(enemy, delta);
       } else {
-        const homeDistance = Math.hypot(enemy.homeX - enemy.x, enemy.homeY - enemy.y);
-        if (homeDistance > 8) {
-          const angle = Math.atan2(enemy.homeY - enemy.y, enemy.homeX - enemy.x);
-          enemy.angle = angle;
-          moveEntitySafely(enemy, Math.cos(angle) * enemy.speed * 0.55 * delta, Math.sin(angle) * enemy.speed * 0.55 * delta, enemy.radius);
-        } else {
-          // Idle units scan the ground in front of their formation. This is
-          // rotation only - never a move - so the slot, the leash and the
-          // renderer's footprint all stay exactly as they were; and it only runs
-          // while the player is out of sight, because every branch above that
-          // sees the target has already written a facing.
-          enemy.idleTimer -= delta;
-          // `!(idleTimer > 0)` is also false for NaN, so an enemy that never got
-          // a timer (older save, a hand-built test rig) re-seeds itself instead
-          // of writing a non-finite heading the way the old `wanderAngle` did.
-          if (!(enemy.idleTimer > 0)) {
-            enemy.idleTimer = IDLE_THINK_MIN + random() * IDLE_THINK_SPAN;
-            enemy.idleTarget = (enemy.homeAngle ?? enemy.angle) + (random() - 0.5) * 2 * IDLE_SCAN_ANGLE;
-          }
-          const turn = shortestAngleDifference(enemy.angle, enemy.idleTarget ?? enemy.homeAngle);
-          enemy.angle += clamp(turn, -IDLE_TURN_RATE * delta, IDLE_TURN_RATE * delta);
-        }
+        walkHome(enemy, delta);
       }
       resolveInfantryCollision(enemy);
     }

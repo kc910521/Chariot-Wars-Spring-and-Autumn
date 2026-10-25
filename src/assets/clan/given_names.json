@@ -1,0 +1,532 @@
+{
+  "givenNames": [
+    {
+      "name": "黑",
+      "weight": 3,
+      "namingStory": {
+        "reason": "你出生时肤色黝黑，父亲遂以「黑」为名。",
+        "named_by": "father"
+      }
+    },
+    {
+      "name": "白",
+      "weight": 2,
+      "namingStory": {
+        "reason": "你出生时肤色白皙，祖母见之，便以「白」为名。",
+        "named_by": "grandmother"
+      }
+    },
+    {
+      "name": "赤",
+      "weight": 2,
+      "namingStory": {
+        "reason": "你出生时面色赤红，父亲便取「赤」为名，以记当时的情形。",
+        "named_by": "father"
+      }
+    },
+    {
+      "name": "丑",
+      "weight": 1,
+      "namingStory": {
+        "reason": "你出生时相貌与寻常婴儿不同，家中长辈便以「丑」为名，记下这段往事。",
+        "named_by": "elder"
+      }
+    },
+    {
+      "name": "石",
+      "weight": 3,
+      "namingStory": {
+        "reason": "你出生时体格结实，祖父希望你如山石般坚实耐劳，遂取「石」为名。",
+        "named_by": "grandfather"
+      }
+    },
+    {
+      "name": "虎",
+      "weight": 2,
+      "namingStory": {
+        "reason": "你出生之夜，家中猎人谈及山中猛虎，父亲借虎之威势为你取名。",
+        "named_by": "father"
+      }
+    },
+    {
+      "name": "豹",
+      "weight": 1,
+      "namingStory": {
+        "reason": "你父亲曾在山林中见到猎豹，认为此兽迅捷矫健，遂取「豹」为名。",
+        "named_by": "father"
+      }
+    },
+    {
+      "name": "牛",
+      "weight": 2,
+      "namingStory": {
+        "reason": "你家以耕作为生，父亲盼你如耕牛般健壮耐劳，便取「牛」为名。",
+        "named_by": "father"
+      }
+    },
+    {
+      "name": "馬",
+      "weight": 2,
+      "namingStory": {
+        "reason": "你出生时家中刚添置一匹良马，祖父便取「馬」为名，以记家中这件喜事。",
+        "named_by": "grandfather"
+      }
+    },
+    {
+      "name": "駒",
+      "weight": 2,
+      "namingStory": {
+        "reason": "你出生时，家中一匹母马刚产下幼驹，父亲遂取「駒」为名，记念此事。",
+        "named_by": "father"
+      }
+    },
+    {
+      "name": "甲",
+      "weight": 2,
+      "namingStory": {
+        "reason": "你出生时，家中正在修缮甲胄，祖父遂取「甲」为名，寄望你日后能够承担家族之责。",
+        "named_by": "grandfather"
+      }
+    },
+    {
+      "name": "戈",
+      "weight": 1,
+      "namingStory": {
+        "reason": "你父亲曾随军服役，家中留有一柄旧戈，便取「戈」为名，以记家族与兵事的渊源。",
+        "named_by": "father"
+      }
+    },
+    {
+      "name": "弓",
+      "weight": 1,
+      "namingStory": {
+        "reason": "你家中常有人习射，父亲取「弓」为名，以纪念家中常用的兵器。",
+        "named_by": "father"
+      }
+    },
+    {
+      "name": "獲",
+      "weight": 2,
+      "namingStory": {
+        "reason": "你出生前后，父亲外出狩猎有所收获，认为是家中喜兆，遂取「獲」为名。",
+        "named_by": "father"
+      }
+    },
+    {
+      "name": "良",
+      "weight": 3,
+      "namingStory": {
+        "reason": "你父亲希望你日后待人有度、行事端正，遂取「良」为名，以寄托对子女品行的期望。",
+        "named_by": "father"
+      }
+    },
+    {
+      "name": "善",
+      "weight": 2,
+      "namingStory": {
+        "reason": "你祖父一生重视行善积德，希望后辈待人宽厚，遂取「善」为名。",
+        "named_by": "grandfather"
+      }
+    },
+    {
+      "name": "信",
+      "weight": 3,
+      "namingStory": {
+        "reason": "你父亲曾因失信而失去重要的盟友，故为你取「信」为名，告诫你立身须守诺。",
+        "named_by": "father"
+      }
+    },
+    {
+      "name": "直",
+      "weight": 2,
+      "namingStory": {
+        "reason": "你父亲不喜曲意逢迎，希望你日后处事坦直，遂取「直」为名。",
+        "named_by": "father"
+      }
+    },
+    {
+      "name": "方",
+      "weight": 2,
+      "namingStory": {
+        "reason": "你祖父常以规矩方正训诫子孙，遂取「方」为名，希望你行事有准则。",
+        "named_by": "grandfather"
+      }
+    },
+    {
+      "name": "和",
+      "weight": 3,
+      "namingStory": {
+        "reason": "你出生前，家族曾因田地与财产发生争执，父亲盼家中此后和睦，遂取「和」为名。",
+        "named_by": "father"
+      }
+    },
+    {
+      "name": "寧",
+      "weight": 3,
+      "namingStory": {
+        "reason": "你出生之时，家乡战事暂歇，祖父盼乱世中的家人能够平安，遂取「寧」为名。",
+        "named_by": "grandfather"
+      }
+    },
+    {
+      "name": "安",
+      "weight": 3,
+      "namingStory": {
+        "reason": "你出生后不久，家人结束迁徙，终于安顿下来，父亲遂取「安」为名，以记定居之事。",
+        "named_by": "father"
+      }
+    },
+    {
+      "name": "平",
+      "weight": 3,
+      "namingStory": {
+        "reason": "你出生时，家中多年积怨终于平息，祖父取「平」为名，希望你少受纷争之苦。",
+        "named_by": "grandfather"
+      }
+    },
+    {
+      "name": "吉",
+      "weight": 2,
+      "namingStory": {
+        "reason": "你出生前后，家中祭祀顺利，长辈认为是吉兆，遂取「吉」为名。",
+        "named_by": "elder"
+      }
+    },
+    {
+      "name": "慶",
+      "weight": 2,
+      "namingStory": {
+        "reason": "你出生之日，家中恰逢长辈归来或亲族团聚，父亲喜而取「慶」为名。",
+        "named_by": "father"
+      }
+    },
+    {
+      "name": "成",
+      "weight": 3,
+      "namingStory": {
+        "reason": "你出生之时，家中一桩延续多年的事务恰好办成，祖父便取「成」为名，寓意事情能够有始有终。",
+        "named_by": "grandfather"
+      }
+    },
+    {
+      "name": "立",
+      "weight": 2,
+      "namingStory": {
+        "reason": "你父亲年轻时曾离乡谋生，历经艰难才得以立足，遂取「立」为名，希望你将来也能自立。",
+        "named_by": "father"
+      }
+    },
+    {
+      "name": "升",
+      "weight": 2,
+      "namingStory": {
+        "reason": "你父亲曾从家族中的低微职位逐步得到重用，遂取「升」为名，希望你将来也能有所进益。",
+        "named_by": "father"
+      }
+    },
+    {
+      "name": "堅",
+      "weight": 2,
+      "namingStory": {
+        "reason": "你出生时正逢寒冬，祖父感叹家人须坚忍方能度过艰难，遂取「堅」为名。",
+        "named_by": "grandfather"
+      }
+    },
+    {
+      "name": "壯",
+      "weight": 2,
+      "namingStory": {
+        "reason": "你父亲希望你成年后体魄强健，能够承担劳作与守卫家园之责，遂取「壯」为名。",
+        "named_by": "father"
+      }
+    },
+    {
+      "name": "勇",
+      "weight": 2,
+      "namingStory": {
+        "reason": "你父亲年轻时曾因怯于承担责任而留下遗憾，遂取「勇」为名，希望你遇事敢于担当。",
+        "named_by": "father"
+      }
+    },
+    {
+      "name": "武",
+      "weight": 2,
+      "namingStory": {
+        "reason": "你祖父曾参与守城或军旅事务，希望你有能力保护家人，遂取「武」为名。",
+        "named_by": "grandfather"
+      }
+    },
+    {
+      "name": "旦",
+      "weight": 2,
+      "namingStory": {
+        "reason": "你出生时天色将明，家人盼望困顿就此过去，父亲遂取「旦」为名。",
+        "named_by": "father"
+      }
+    },
+    {
+      "name": "辰",
+      "weight": 2,
+      "namingStory": {
+        "reason": "你出生时，祖父正依据时日记录家中事务，遂取「辰」为名，以纪你的出生之时。",
+        "named_by": "grandfather"
+      }
+    },
+    {
+      "name": "初",
+      "weight": 2,
+      "namingStory": {
+        "reason": "你是家中多年后再次出生的男孩，父亲取「初」为名，寓意家族迎来新的开始。",
+        "named_by": "father"
+      }
+    },
+    {
+      "name": "季",
+      "weight": 2,
+      "namingStory": {
+        "reason": "你在家中兄弟中排行最幼，长辈便以「季」为名，记你的排行。",
+        "named_by": "elder"
+      }
+    },
+    {
+      "name": "仲",
+      "weight": 2,
+      "namingStory": {
+        "reason": "你在兄弟中排行居中，家中长辈取「仲」为名，以记你的排行。",
+        "named_by": "elder"
+      }
+    },
+    {
+      "name": "友",
+      "weight": 2,
+      "namingStory": {
+        "reason": "你父亲年轻时曾受友人救助，遂取「友」为名，希望你珍视交谊。",
+        "named_by": "father"
+      }
+    },
+    {
+      "name": "順",
+      "weight": 2,
+      "namingStory": {
+        "reason": "你出生前后，家中事务逐渐顺遂，祖母遂取「順」为名，盼你一生少受坎坷。",
+        "named_by": "grandmother"
+      }
+    },
+    {
+      "name": "固",
+      "weight": 1,
+      "namingStory": {
+        "reason": "你家曾在迁徙途中失去居所，父亲希望此后家业稳固，遂取「固」为名。",
+        "named_by": "father"
+      }
+    },
+    {
+      "name": "黑臀",
+      "weight": 1,
+      "namingStory": {
+        "reason": "你出生时臀部带有明显的青黑色胎记，家中长辈便以此特征为名。",
+        "named_by": "elder"
+      }
+    },
+    {
+      "name": "無忌",
+      "weight": 1,
+      "namingStory": {
+        "reason": "你父亲希望你不因畏惧而退缩，遇到应承担之事时能够坦然面对，遂取「無忌」为名。",
+        "named_by": "father"
+      }
+    },
+    {
+      "name": "重",
+      "weight": 1,
+      "namingStory": {
+        "reason": "你出生时家中长辈认为你体格厚实、骨架沉稳，遂取「重」为名，以记你初生时的模样。",
+        "named_by": "grandfather"
+      }
+    },
+    {
+      "name": "耳",
+      "weight": 1,
+      "namingStory": {
+        "reason": "你出生时双耳形状格外显眼，家中长辈便取「耳」为名，以记你的特征。",
+        "named_by": "elder"
+      }
+    },
+    {
+      "name": "夷",
+      "weight": 1,
+      "namingStory": {
+        "reason": "你家族曾迁居于不同族群往来的边地，长辈取「夷」为名，以记家族的迁居经历。",
+        "named_by": "grandfather"
+      }
+    },
+    {
+      "name": "黑臀",
+      "weight": 2,
+      "namingStory": {
+        "reason": "你出生时，家中长辈注意到你臀部有一块明显的黑色胎记，便以「黑臀」为名。",
+        "named_by": "elder"
+      }
+    },
+    {
+      "name": "黑肱",
+      "weight": 2,
+      "namingStory": {
+        "reason": "你出生时一条手臂颜色异于常人，父亲便以「黑肱」为名，希望众人一眼便能认出你。",
+        "named_by": "father"
+      }
+    },
+    {
+      "name": "竪牛",
+      "weight": 1,
+      "namingStory": {
+        "reason": "你幼时总跟在牛群后面，祖父笑称你像个牧牛的竪童，便取名「竪牛」。",
+        "named_by": "grandfather"
+      }
+    },
+    {
+      "name": "穀於菟",
+      "weight": 1,
+      "namingStory": {
+        "reason": "你出生时家中长辈以楚地旧俗为你取了一个带有虎意的名字，希望你如猛虎般强健。",
+        "named_by": "elder"
+      }
+    },
+    {
+      "name": "無知",
+      "weight": 2,
+      "namingStory": {
+        "reason": "你幼时不喜争辩，父亲反而说大智若愚，给你取名「無知」，盼你少受世俗纷扰。",
+        "named_by": "father"
+      }
+    },
+    {
+      "name": "蠆",
+      "weight": 2,
+      "namingStory": {
+        "reason": "你出生时正逢蝎虫出没的时节，祖母希望你外表沉默、遇敌时却能一击制胜，遂以「蠆」为名。",
+        "named_by": "grandmother"
+      }
+    },
+    {
+      "name": "奊",
+      "weight": 1,
+      "namingStory": {
+        "reason": "你出生时手脚姿态异于常儿，家中长辈便用一个少见的古字为你命名。",
+        "named_by": "elder"
+      }
+    },
+    {
+      "name": "丑父",
+      "weight": 2,
+      "namingStory": {
+        "reason": "你出生时容貌并不出众，父亲以「丑父」为名，盼你不重外表而重胆识与信义。",
+        "named_by": "father"
+      }
+    },
+    {
+      "name": "易牙",
+      "weight": 1,
+      "namingStory": {
+        "reason": "你幼时嗅觉灵敏，常能分辨肉食滋味，母亲便以「易牙」为名，希望你日后有一技傍身。",
+        "named_by": "mother"
+      }
+    },
+    {
+      "name": "豫讓",
+      "weight": 1,
+      "namingStory": {
+        "reason": "你出生时家人盼你行事谨慎、凡事预作筹谋，祖父便为你取名「豫讓」。",
+        "named_by": "grandfather"
+      }
+    },
+    {
+      "name": "盜跖",
+      "weight": 1,
+      "namingStory": {
+        "reason": "你幼时胆大好动，常翻墙越沟、来去无踪，族中长辈半是责备半是戏谑地叫你「盜跖」。",
+        "named_by": "clan_elder"
+      }
+    },
+    {
+      "name": "尸佼",
+      "weight": 1,
+      "namingStory": {
+        "reason": "你出生时家中正为祖先举行祭礼，父亲取古字为名，盼你记得宗族根本。",
+        "named_by": "father"
+      }
+    },
+    {
+      "name": "甘蠅",
+      "weight": 1,
+      "namingStory": {
+        "reason": "你幼时善于观察飞虫，常能一箭命中空中小物，父亲便以「甘蠅」为名，盼你练成好箭术。",
+        "named_by": "father"
+      }
+    },
+    {
+      "name": "輪扁",
+      "weight": 1,
+      "namingStory": {
+        "reason": "你出生在世代制作车轮的工匠之家，祖父便用家中营生为你取名，希望你继承手艺。",
+        "named_by": "grandfather"
+      }
+    },
+    {
+      "name": "工倕",
+      "weight": 1,
+      "namingStory": {
+        "reason": "你自幼喜欢削木、制器，家中长辈以工匠之名为你命名，盼你手艺胜过父辈。",
+        "named_by": "elder"
+      }
+    },
+    {
+      "name": "史佚",
+      "weight": 1,
+      "namingStory": {
+        "reason": "你出生时父亲正在整理旧简与族中往事，便取名「史佚」，盼你记事明辨、不忘前人。",
+        "named_by": "father"
+      }
+    },
+    {
+      "name": "醫和",
+      "weight": 1,
+      "namingStory": {
+        "reason": "你出生时家中医者正为乡人诊病，母亲盼你一生平和、懂得救人，便取名「醫和」。",
+        "named_by": "mother"
+      }
+    },
+    {
+      "name": "巫皋",
+      "weight": 1,
+      "namingStory": {
+        "reason": "你出生时恰逢族中祭祀，长辈希望你敬畏鬼神、熟知礼俗，便取了一个与巫祝传统相连的名字。",
+        "named_by": "clan_elder"
+      }
+    },
+    {
+      "name": "混",
+      "weight": 1,
+      "namingStory": {
+        "reason": "你出生时正值大水汇流，祖父取「混」为名，盼你胸怀广阔，能容纳百川。",
+        "named_by": "grandfather"
+      }
+    },
+    {
+      "name": "渾",
+      "weight": 2,
+      "namingStory": {
+        "reason": "你生来体格厚实，性情直率，父亲取「渾」为名，盼你保持浑厚本色，不受外物轻易改变。",
+        "named_by": "father"
+      }
+    },
+    {
+      "name": "昆",
+      "weight": 3,
+      "namingStory": {
+        "reason": "你出生时家中长辈希望你承继宗族、友爱兄弟，遂取「昆」为名。",
+        "named_by": "elder"
+      }
+    }
+  ]
+}
