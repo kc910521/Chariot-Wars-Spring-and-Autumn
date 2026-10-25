@@ -19,14 +19,22 @@ const GUARD_LEASH = 38;
 const GUARD_BRACE = 10;
 const GUARD_BRACE_RANGE = 200;
 
-// The renderer draws the dashed footprint from these extents, so they have to
-// span the whole leash envelope or units legitimately poke out of their border.
-export const FORMATION_MARGIN = 54;
+// The apron around the outermost slot: the line's declared ground. One rect is
+// used for everything the player can see and everything the line answers to - the
+// renderer dashes it, a new formation reserves it, the alert border is this rect
+// plus a margin, and (once awake) it is the ground the ranks defend. It has to
+// span the whole idle envelope (leash 38 + brace 10) or a unit legitimately pokes
+// out of its own border; the extra over that is deliberate empty ground, not a
+// leash: a line that wakes at its border looks like it owns that apron.
+export const FORMATION_MARGIN = 80;
 
 // Ground clearance: the ranks have to stand on clear, uniform footing, so the box
 // tested at spawn time is the slots themselves plus a margin for the bodies
-// standing on them - not the wider leash envelope the renderer dashes, which a
-// wall at its very edge may legitimately touch.
+// standing on them - not the wider apron the renderer dashes, which a wall at its
+// very edge may legitimately touch. It is deliberately not grown with
+// FORMATION_MARGIN: a wall inside the apron may be walked against once the line
+// is awake (enemies never collide with obstacles, so that is a visual overlap),
+// while narrowing the ground a line may spawn on is a real spawn failure.
 export const FORMATION_GROUND_MARGIN = 26;
 
 function slotExtent(pattern, margin) {

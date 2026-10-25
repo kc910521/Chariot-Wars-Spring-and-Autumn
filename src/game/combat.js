@@ -272,7 +272,7 @@ export function createCombatSystem({
     if (player.health === 0) {
       if (player.mode === "chariot") {
         burst(player.x, player.y, "#f0c46a");
-        // dismountPlayer();
+        dismountPlayer();
       } else {
         updateHud();
         onDefeat();
