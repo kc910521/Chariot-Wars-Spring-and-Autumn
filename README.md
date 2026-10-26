@@ -51,8 +51,8 @@ h5game/
 ├── src/
 │   ├── main.js                   # Browser entry point
 │   ├── i18n/
-│   │   ├── index.js              # Locale selection, translation and DOM updates
-│   │   └── locales.js            # Simplified Chinese and English messages
+│   │   ├── index.js              # Loads the JSON resources, locale selection, translation and DOM updates
+│   │   └── locales.js            # Locale registry plus lookup/fallback rules (no copy)
 │   ├── utils/
 │   │   ├── math.js               # Shared clamp and distance helpers
 │   │   └── random.js             # Seeded PRNG for reproducible battles
@@ -90,6 +90,9 @@ h5game/
 │   ├── platform/
 │   │   └── launch.js             # Host seam: `launchQuery()` reads `?seed=` (小游戏 reads wx launch options)
 │   ├── assets/
+│   │   ├── i18n/
+│   │   │   ├── zh-CN.json        # Simplified Chinese copy (one flat key per message)
+│   │   │   └── en.json           # English copy, key-for-key with zh-CN where translated
 │   │   └── audio.js              # Centralized sound playback
 │   └── ui/
 │       ├── elements.js           # DOM element registry
@@ -104,9 +107,9 @@ h5game/
 └── assets/                       # Reserved for imported art, music, and sound effects
 ```
 
-界面支持简体中文和英文，默认使用简体中文。文案集中在 `src/i18n/locales.js`，`src/i18n/index.js` 负责翻译、插值、静态 DOM 更新及语言偏好保存；语言切换不会重置战局。新增或修改界面文案时，需同时补齐两种语言，并使用稳定的翻译 key，避免在游戏规则或绘制逻辑中散落展示文字。公共纯逻辑仅在确有复用时抽取到职责明确的 `src/utils/` 模块。
+界面支持简体中文和英文，默认使用简体中文。文案按语言放在 `src/assets/i18n/zh-CN.json` 与 `src/assets/i18n/en.json`，每个文件是一张扁平 key 表；`src/i18n/locales.js` 只保留语言注册表与查找/回退规则（当前语言 → 默认语言 → key 本身），`src/i18n/index.js` 在启动时通过 ES 模块的 JSON 导入把这两份资源注册进去，并负责翻译、插值、静态 DOM 更新及语言偏好保存；语言切换不会重置战局。新增或修改界面文案时，需同时补齐两种语言，并使用稳定的翻译 key，避免在游戏规则或绘制逻辑中散落展示文字。公共纯逻辑仅在确有复用时抽取到职责明确的 `src/utils/` 模块。
 
-本项目没有构建步骤或 package manifest，语法检查与测试都直接交给 Node：
+本项目没有构建步骤或 package manifest，语法检查与测试都直接交给 Node（需 Node ≥ 22.12：文案资源用 import attributes 直接导入 JSON；浏览器端同样需要支持 JSON 模块，如 Chrome 123+ / Safari 17.2+ / Firefox 138+）：
 
 ```sh
 find src scripts \( -name '*.js' -o -name '*.mjs' \) -print0 | xargs -0 -n1 node --check   # 语法检查

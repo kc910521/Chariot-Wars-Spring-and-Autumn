@@ -46,8 +46,8 @@ import {
 import { createRadarChart } from "../src/ui/radar.js";
 import { createShopScene } from "../src/ui/shop-scene.js";
 import { createInfoPanel, itemInfo } from "../src/ui/shop-info.js";
-import { translate } from "../src/i18n/index.js";
-import { locales } from "../src/i18n/locales.js";
+import { setLocale, translate } from "../src/i18n/index.js";
+import { defaultLocale, hasTranslation, registerLocale, supportedLocales, translator } from "../src/i18n/locales.js";
 
 let passed = 0;
 function test(name, run) {
@@ -2426,13 +2426,13 @@ test("a hovered upgrade moves the preview ring and marks the labels it changes",
 });
 
 test("every radar axis has a label in both locales", () => {
-  for (const locale of Object.keys(locales)) {
+  for (const locale of Object.keys(supportedLocales)) {
     for (const key of statKeys) {
-      assert.ok(locales[locale][statLabelKeys[key]], `${locale} is missing ${statLabelKeys[key]}`);
+      assert.ok(hasTranslation(locale, statLabelKeys[key]), `${locale} is missing ${statLabelKeys[key]}`);
     }
     for (const key of ["shop.stats.chartLabel", "shop.rig.caption", "shop.camp.caption", "shop.dossier.label",
       "shop.collision.label", "shop.collision.description", "shop.info.label", "shop.shortGold"]) {
-      assert.ok(locales[locale][key], `${locale} is missing ${key}`);
+      assert.ok(hasTranslation(locale, key), `${locale} is missing ${key}`);
     }
   }
 });
@@ -2757,6 +2757,62 @@ test("a shop info panel with no element is a no-op", () => {
     panel.paint();
     panel.paint(itemInfo("horse", "shop.horse", "…"));
   });
+});
+
+console.log("[unit] i18n");
+
+test("every supported locale registered its resource file", () => {
+  for (const locale of Object.keys(supportedLocales)) {
+    for (const key of ["app.title", "menu.title", "shop.title", "battle.pausedTitle"]) {
+      assert.ok(hasTranslation(locale, key), `${locale} is missing ${key}`);
+    }
+  }
+});
+
+test("every key in index.html has a translation in every locale", () => {
+  const html = readFileSync(new URL("../index.html", import.meta.url), "utf8");
+  const keys = new Set([...html.matchAll(/data-i18n(?:-aria-label|-title|-content)?="([^"]+)"/g)]
+    .map((match) => match[1]));
+  assert.ok(keys.size > 40, `only ${keys.size} static translation keys found in index.html`);
+  for (const locale of Object.keys(supportedLocales)) {
+    for (const key of keys) assert.ok(hasTranslation(locale, key), `${locale} is missing ${key}`);
+  }
+});
+
+test("translate reads the resource file of the active locale", () => {
+  const previousDocument = globalThis.document;
+  globalThis.document = { documentElement: { lang: "" } };
+  try {
+    assert.equal(translate("menu.title"), "逐鹿中原");
+    assert.equal(setLocale("en"), "en");
+    assert.equal(translate("menu.title"), "Claim the Central Plains");
+    assert.equal(globalThis.document.documentElement.lang, "en", "the page language did not follow the locale");
+    assert.throws(() => setLocale("fr"), /Unsupported locale/, "an unknown locale was accepted");
+    setLocale(defaultLocale);
+  } finally {
+    globalThis.document = previousDocument;
+  }
+});
+
+test("translate interpolates values and leaves unknown placeholders visible", () => {
+  const t = translator(defaultLocale);
+  assert.equal(t("shop.info.label", { name: "弩架" }), "弩架：");
+  assert.match(t("shop.location"), /\{battlefield\}/, "a missing value was not left visible");
+  assert.equal(t("shop.info.label", { name: 3 }), "3：");
+});
+
+test("a bound translator is cached per locale", () => {
+  assert.equal(translator("en"), translator("en"));
+  assert.notEqual(translator("en"), translator("zh-CN"));
+});
+
+test("an unsupported locale falls back to the default one", () => {
+  assert.equal(translator("fr")("menu.title"), translator(defaultLocale)("menu.title"));
+  assert.throws(() => registerLocale("fr", {}), /Unknown locale/, "an unknown locale was registered");
+});
+
+test("a missing key falls back to the key itself instead of a blank string", () => {
+  assert.equal(translator(defaultLocale)("no.such.key"), "no.such.key");
 });
 
 console.log(`\n[unit] PASS (${passed} checks)`);
