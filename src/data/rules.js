@@ -74,7 +74,7 @@ export const effectRules = Object.freeze({
     // spend a visible unit's share of `maxLive`.
   }),
   // Fallback fade for particles that do not carry their own `maxLife`.
-  particleFadeSeconds: 0.52,
+  particleFadeSeconds: 0.90,
 });
 
 export const campaignRules = Object.freeze({
