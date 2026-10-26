@@ -598,6 +598,17 @@ h1 span {
   height: clamp(220px, 48vh, 430px);
   grid-template-columns: repeat(2, minmax(0, 1fr));
   align-content: start;
+  /* `auto` rows are sized from each card's *unwrapped* max-content height, which
+     is the card's 104px floor. As soon as the three rows needed more than this
+     fixed height - a narrow two-column ledger, or English copy that always wraps
+     - the rows stayed at 104px and the cards were stretched back down to it, so
+     the wrapped effect line and the price spilled out of the card (measured 78px
+     at 1200x700). The card below is later in the DOM, so it painted over the
+     spill and the hit test landed on its `h4`: the price looked doubled up and
+     could not be clicked at all (0/5 buttons at 1280x720 and 1200x700). Rows
+     that are as tall as their content keep every card whole, and the panel does
+     what its fixed height promises: it scrolls. */
+  grid-auto-rows: max-content;
   gap: 10px;
   overflow-y: auto;
   overscroll-behavior: contain;
