@@ -2,3 +2,5 @@
 .playwright-mcp/*
 .playwright-mcp/**
 .DS_Store
+# Private migration-skill config (absolute local paths). The skill itself is tracked.
+.agents/skills/*/config/projects.yaml

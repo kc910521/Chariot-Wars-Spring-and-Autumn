@@ -1,0 +1,63 @@
+# Copy this file to your private project configuration and fill in real values.
+# Keep source and target roots separate. Do not commit secrets or machine-specific tokens.
+projects:
+  source:
+    name: "source-project"
+    root: "/ABSOLUTE/PATH/TO/SOURCE"
+    platform: "H5"
+    framework: "unknown"
+    language: "JavaScript"
+    runtime_version: "unknown"
+    base_branch: "main"
+    commands:
+      install: ""
+      lint: ""
+      test: ""
+      build: ""
+      run: ""
+      visual_test: ""
+  target:
+    name: "target-project"
+    root: "/ABSOLUTE/PATH/TO/TARGET"
+    platform: "WeChat Mini Game"
+    framework: "unknown"
+    language: "JavaScript"
+    runtime_version: "unknown"
+    base_branch: "main"
+    commands:
+      install: ""
+      lint: ""
+      test: ""
+      build: ""
+      run: ""
+      visual_test: ""
+
+migration:
+  # safe_default prevents automatic target edits. Use "auto_after_validation" only
+  # if you explicitly want the agent to migrate eligible, validated features automatically.
+  authorization_mode: "safe_default"
+  readiness_policy: "user_confirmation_required"
+  tiny_change_threshold_non_test_lines: 20
+  tiny_change_policy: "ask_user_if_skip_manual_source_verification"
+  feature_branch_policy: "same_name_on_target"
+  existing_target_branch_policy: "stop_and_ask"
+  source_diff_policy: "feature_branch_changes_since_merge_base"
+  allow_source_edits_during_target_migration: false
+  allow_commit: false
+  allow_push: false
+  require_official_documentation_research: true
+  require_plan_before_target_write: true
+  require_tests_and_parity_review: true
+
+# Optional explicit mapping. Add only verified mappings; don't guess file correspondence.
+file_mappings:
+  - source: "src/example-source.js"
+    target: "src/example-target.js"
+    notes: "Replace with a verified mapping or remove this example."
+
+# Optional platform-specific parity criteria. Examples:
+parity_criteria:
+  - "Same gameplay rules and state transitions"
+  - "Equivalent user input and control response"
+  - "Equivalent visible layout, text, animation, and feedback"
+  - "Equivalent error handling and edge-case behavior"
