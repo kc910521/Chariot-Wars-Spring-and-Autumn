@@ -5,7 +5,7 @@ import { pathToFileURL } from "node:url";
 import { resolve } from "node:path";
 import { createHash } from "node:crypto";
 import { writeFileSync } from "node:fs";
-import { effectRules, projectileRules } from "../src/data/rules.js";
+import { campaignRules, effectRules, projectileRules } from "../src/data/rules.js";
 
 const projectRoot = resolve(import.meta.dirname, "..");
 
@@ -203,9 +203,18 @@ globalThis.document = {
 const preRenderQueue = [];
 let nextFrameTime = 0;
 
+// The smoke device's local storage: a Map behind the Web Storage API. The
+// post-victory rest is the one value that has to outlive a boot, so the harness
+// keeps it the way a browser would - as strings, one per key.
+const deviceStorage = new Map();
+
 globalThis.window = {
   devicePixelRatio: 2,
-  localStorage: { getItem: () => null, setItem() {} },
+  localStorage: {
+    getItem: (key) => (deviceStorage.has(key) ? deviceStorage.get(key) : null),
+    setItem(key, value) { deviceStorage.set(key, String(value)); },
+    removeItem(key) { deviceStorage.delete(key); },
+  },
   location: { reload() {} },
   addEventListener(type, handler) {
     if (!listeners.window.has(type)) listeners.window.set(type, []);
@@ -417,6 +426,16 @@ check("the prologue tells the given name's story",
   `line="${query("#prologue-given").textContent}"`);
 check("the prologue states the ambition",
   query("#prologue-ambition").textContent === translate("prologue.ambition"));
+// The run's length is rolled with the name, before the battle stream is re-seeded,
+// and the card states it: the last stage is the one the whole run is for.
+check("the story rolled a last stage inside the rule range",
+  game.campaign.finalStage >= campaignRules.finalStageMin
+    && game.campaign.finalStage < campaignRules.finalStageMin + campaignRules.finalStageSpan,
+  `finalStage=${game.campaign.finalStage}`);
+check("the story ends with the stage it will be settled on",
+  query("#prologue-final").hidden === false
+    && query("#prologue-final").textContent === translate("prologue.final", { stage: game.campaign.finalStage }),
+  `line="${query("#prologue-final").textContent}"`);
 check("the objective is unnamed until the battle begins",
   query("#objective-label").textContent === translate("battle.objective"),
   `label="${query("#objective-label").textContent}"`);
@@ -860,6 +879,150 @@ check("the defeat card offers the retry action and hides the pause control",
   query("#overlay-button").firstElementChild.textContent === translate("battle.retry")
     && query("#start-button").hidden === true,
   `action="${query("#overlay-button").firstElementChild.textContent}" startHidden=${query("#start-button").hidden}`);
+
+// ---- the last stage, the victory card, and the rest that follows it ----------
+//
+// The campaign's length is rolled before the first battle, so a run can be walked
+// to its end without playing ten stages: retry after the defeat above, then tell
+// the stage manager that this is the one. Everything below is the real runtime
+// path — the squad spawns through placeBoss, the champions die through the same
+// damageEnemy the combat system calls, the extraction opens when the last of them
+// falls, and the walk to it ends the run instead of opening the shop.
+const { VICTORY_LOCK_KEY } = await import(
+  pathToFileURL(resolve(projectRoot, "src/game/victory-lock.js")).href
+);
+const { countdownLabel, lockWindowLabel } = await import(
+  pathToFileURL(resolve(projectRoot, "src/ui/labels.js")).href
+);
+
+query("#overlay-button").dispatch("click");
+check("the retry opens a battle again", game.state.mode === "running", `mode=${game.state.mode}`);
+
+// A numbered boss stage still fields exactly one champion: the squad belongs to
+// the last stage alone. Stage 4 is a boss stage by the interval rule, so this is
+// the shape every other boss battle has had.
+{
+  const numberedStage = campaignRules.bossStageMinimum + 1;
+  game.campaign.finalStage = 0;
+  game.campaign.stage = numberedStage;
+  game.stageManager.restartStage();
+  runFrames(1);
+  const [champion] = game.state.bosses;
+  check("a numbered boss stage is not the last battle",
+    game.state.finalBattle === false && game.state.bosses.length === 1,
+    `finalBattle=${game.state.finalBattle} bosses=${game.state.bosses.length}`);
+  check("a numbered boss stage keeps the numbered readout",
+    query("#wave").textContent === String(numberedStage).padStart(2, "0")
+      && !query("#wave").classList.contains("is-final"),
+    `wave="${query("#wave").textContent}"`);
+  check("a single champion keeps its own name",
+    query("#objective-label").textContent === translate("battle.boss")
+      && query("#objective-count").textContent === `${Math.ceil(champion.health)} / ${champion.maxHealth}`,
+    `label="${query("#objective-label").textContent}" count="${query("#objective-count").textContent}"`);
+}
+
+const finalStage = game.campaign.stage;
+game.campaign.finalStage = finalStage;
+game.stageManager.restartStage();
+runFrames(2);
+check("the stage the campaign ends on is the last battle", game.state.finalBattle === true,
+  `finalStage=${game.campaign.finalStage} stage=${game.campaign.stage}`);
+check("the last battle opens with the whole squad",
+  game.state.bosses.length === campaignRules.finalSquad.length,
+  `bosses=${game.state.bosses.length}`);
+check("the squad stands on the battlefield",
+  game.state.enemies.length >= campaignRules.finalSquad.length,
+  `enemies=${game.state.enemies.length}`);
+check("the stage box says FINAL instead of a number",
+  query("#wave").textContent === translate("battle.finalStage")
+    && query("#wave").classList.contains("is-final"),
+  `wave="${query("#wave").textContent}"`);
+check("the banner announces every champion",
+  query("#boss-warning").hidden === false
+    && query("#boss-warning-title").textContent === translate("battle.finalWarning")
+    && query("#boss-warning-subtitle").textContent === translate("battle.bossSquadBanner", {
+      name: translate(game.state.bosses[0].nameKey), count: game.state.bosses.length,
+    }),
+  `title="${query("#boss-warning-title").textContent}" subtitle="${query("#boss-warning-subtitle").textContent}"`);
+
+const squadTotal = game.state.bosses.reduce((sum, boss) => sum + boss.maxHealth, 0);
+check("the objective bar totals the squad instead of one champion",
+  query("#objective-count").textContent === `${squadTotal} / ${squadTotal}`,
+  `count="${query("#objective-count").textContent}"`);
+
+const [firstVictim, ...remaining] = game.state.bosses;
+game.damageEnemy(firstVictim, 1e6);
+check("one champion down does not end the squad", game.state.bossDefeated === false,
+  `destroyed=${game.state.bosses.filter((boss) => boss.destroyed).length}/${game.state.bosses.length}`);
+for (const boss of remaining) game.damageEnemy(boss, 1e6);
+check("the last champion down ends the squad", game.state.bossDefeated === true,
+  `destroyed=${game.state.bosses.filter((boss) => boss.destroyed).length}/${game.state.bosses.length}`);
+
+runFrames(2);
+check("the extraction opens on the last stage", game.state.phase === "extract",
+  `phase=${game.state.phase}`);
+const extraction = game.state.extractionPoint;
+const victoryScore = game.state.score;
+const goldBeforeVictory = game.campaign.totalGold;
+game.player.x = extraction.x;
+game.player.y = extraction.y;
+runFrames(1);
+check("reaching the extraction point wins the run instead of opening the shop",
+  game.state.mode === "victory", `mode=${game.state.mode}`);
+check("the victory card takes the field, not the pause card",
+  !query("#victory-screen").classList.contains("hidden")
+    && query("#game-overlay").classList.contains("hidden"),
+  `victoryHidden=${query("#victory-screen").classList.contains("hidden")}`);
+check("the card states the victory", query("#victory-title").textContent === translate("victory.title"),
+  `title="${query("#victory-title").textContent}"`);
+check("the card names the run that was won", query("#victory-subtitle").textContent
+  === translate("victory.subtitle", { name: identity.fullName, stage: finalStage }),
+  `subtitle="${query("#victory-subtitle").textContent}"`);
+check("the card reports the score and the spoils", query("#victory-stats").textContent
+  === translate("victory.stats", { score: victoryScore, gold: game.campaign.totalGold }),
+  `stats="${query("#victory-stats").textContent}"`);
+check("the spoils are banked before the run ends", game.campaign.totalGold >= goldBeforeVictory,
+  `gold=${game.campaign.totalGold} before=${goldBeforeVictory}`);
+check("the card states the rest it is about to enforce", query("#victory-note").textContent
+  === translate("victory.lockNote", { time: lockWindowLabel() }),
+  `note="${query("#victory-note").textContent}"`);
+
+const storedVictory = JSON.parse(deviceStorage.get(VICTORY_LOCK_KEY) ?? "null");
+check("the victory is written to storage as the card appears",
+  storedVictory !== null && storedVictory.stage === finalStage && storedVictory.score === victoryScore,
+  `stored=${deviceStorage.get(VICTORY_LOCK_KEY)}`);
+check("the victory card leaves the loop's time base alone", game.state.lastTime === nextFrameTime,
+  `lastTime=${game.state.lastTime} frameClock=${nextFrameTime}`);
+
+query("#victory-return").dispatch("click");
+runFrames(1);
+check("the card returns to the menu", game.state.mode === "menu", `mode=${game.state.mode}`);
+check("the menu rests instead of offering a new run",
+  query("#menu-lock").hidden === false && query("#menu-start").hidden === true,
+  `lockHidden=${query("#menu-lock").hidden} startHidden=${query("#menu-start").hidden}`);
+check("the resting card prints the countdown", query("#menu-lock-title").textContent
+  === translate("menu.locked", { time: countdownLabel(game.victoryLock.remainingMs()) }),
+  `title="${query("#menu-lock-title").textContent}"`);
+check("the resting card names the run that earned it", query("#menu-lock-detail").textContent
+  === translate("menu.lockedLast", { name: identity.fullName, stage: finalStage, score: victoryScore }),
+  `detail="${query("#menu-lock-detail").textContent}"`);
+
+// The card is not the gate: a start that arrives anyway must be refused, or a
+// stale keypress would open the prologue behind the rest.
+dispatchWindow("keydown", { key: "Enter" });
+runFrames(1);
+check("a start during the rest is refused", game.state.mode === "menu", `mode=${game.state.mode}`);
+
+// Rewind the record instead of waiting out the window, then prove the menu opens
+// again: that is the whole life cycle, expiry included.
+game.victoryLock.reset();
+runFrames(1);
+check("a cleared or expired rest unlocks the menu",
+  query("#menu-lock").hidden === true && query("#menu-start").hidden === false,
+  `lockHidden=${query("#menu-lock").hidden} startHidden=${query("#menu-start").hidden}`);
+dispatchWindow("keydown", { key: "Enter" });
+check("a run starts again once the rest is over", game.state.mode === "prologue",
+  `mode=${game.state.mode}`);
 
 check("no errors after UI interactions", loggedErrors.length === 0, loggedErrors[0]);
 checkCamera("after UI interactions");

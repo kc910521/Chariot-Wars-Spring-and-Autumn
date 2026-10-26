@@ -20,6 +20,7 @@ import { bindControls } from "../ui/controls.js";
 import { createScreens } from "../ui/screens.js";
 import { createShopScene } from "../ui/shop-scene.js";
 import { createStageManager } from "./stages.js";
+import { createVictoryLock } from "./victory-lock.js";
 import { createPlayerIdentity } from "./identity.js";
 import { getGameElements } from "../ui/elements.js";
 import { applyTranslations, getLocale, setLocale, translate } from "../i18n/index.js";
@@ -54,7 +55,8 @@ function boot() {
   const {
     canvas, menuScreen, prologueScreen, battleScreen, shopScreen, menuStartButton, nextBattleButton,
     prologueNameElement, prologueBirthElement, prologueNameLineElement, prologueClanElement,
-    prologueGivenElement, prologueAmbitionElement, prologueStartButton,
+    prologueGivenElement, prologueAmbitionElement, prologueFinalElement,
+    prologueStartButton,
     shopItemsElement, shopStatsElement, shopGoldElement, shopScoreElement, shopKillsElement,
     shopStageElement, shopLocationElement, shopMessageElement, scoreElement,
     shopRigCanvas, shopCampCanvas, shopRigCaptionElement, shopCampCaptionElement,
@@ -66,12 +68,19 @@ function boot() {
     touchPadElement, touchHintElement, touchControlsElement,
     touchJoystickElement, touchJoystickKnob, touchFireElement,
     bossWarningElement, bossWarningTitleElement, bossWarningSubtitleElement,
+    victoryScreen, victoryEyebrow, victoryTitle, victorySubtitle, victoryStats, victoryNote,
+    victoryReturnButton, menuLockElement, menuLockTitleElement, menuLockDetailElement,
     soundButton, soundIcon, fatalErrorReloadButton,
   } = elements;
   const context = canvas.getContext("2d");
   // Read once here so no engine module has to know about `location` (or `wx`).
   const seedSource = () => launchQuery().seed;
   const { keys, touchInput, view, world, camera, player, campaign, state } = createGameState({ seedSource });
+  // The post-victory rest, read from local storage through the platform facade.
+  // `?reset=1` clears it for one boot and nothing else: the switch a developer
+  // needs when walking the flow a second time in the same browser.
+  const victoryLock = createVictoryLock();
+  if (launchQuery().reset === "1") victoryLock.reset();
   const playTone = createAudio(state).playTone;
   // The dossier's two canvases: the live team preview and the camp fire. They
   // only animate while the shop screen is up, so they never compete with the
@@ -91,8 +100,8 @@ function boot() {
   const updateHud = createHud({
     state,
     player,
+    campaign,
     getCampaignFunds: () => campaign.totalGold,
-    getCampaignStage: () => campaign.stage,
     // The battle objective is named after the player, so the HUD reads the same
     // identity the prologue showed. Null before a run starts, which falls back
     // to the plain objective label.
@@ -114,27 +123,41 @@ function boot() {
     getHorseCount: () => campaign.horseCount,
     getRoster: () => campaign.roster,
   });
-  const draw = renderer.draw;
-  const { setMode } = createScreens({
+  // The frame's draw: the field first, then the one number a DOM card has to keep
+  // live (the resting countdown on the menu). The screens are built below; the
+  // ref keeps this function callable during construction without a TDZ read.
+  const screensRef = { current: null };
+  function draw() {
+    renderer.draw();
+    screensRef.current?.paint();
+  }
+  const screens = createScreens({
     state,
     campaign,
     draw,
+    victoryLock,
     // The shop's preview runs on its own clock and must start and stop with the
     // screen, not with the battle loop.
     onModeChange: (mode) => shopScene.setActive(mode === "shop"),
     elements: {
-      menuScreen, prologueScreen, battleScreen, shopScreen, overlay, startLabel, startButton,
+      menuScreen, prologueScreen, battleScreen, shopScreen, victoryScreen, overlay, startLabel,
+      startButton, menuStartButton, menuLockElement, menuLockTitleElement, menuLockDetailElement,
       overlayEyebrow, overlayTitle, overlayCopy, overlayButton,
+      victoryEyebrow, victoryTitle, victorySubtitle, victoryStats, victoryNote, victoryReturnButton,
     },
   });
+  const { setMode } = screens;
+  screensRef.current = screens;
 
-  // The story card is painted, never rolled: `startRun()` below picks the name,
-  // and a language switch only repaints this same identity.
+  // The story card is painted, never rolled: `startRun()` below picks the name
+  // and the length of the run, and a language switch only repaints this same
+  // identity and ending.
   const prologue = createPrologue({
     elements: {
       prologueNameElement, prologueBirthElement, prologueNameLineElement,
-      prologueClanElement, prologueGivenElement, prologueAmbitionElement,
+      prologueClanElement, prologueGivenElement, prologueAmbitionElement, prologueFinalElement,
     },
+    getFinalStage: () => campaign.finalStage,
   });
 
   // Battle banner copy is injected by callers so combat/stage modules stay DOM-free.
@@ -151,9 +174,23 @@ function boot() {
     if (tone) playTone(tone.frequency, tone.duration, tone.type, tone.volume);
   }
   function announceBoss() {
+    const [first] = state.bosses;
+    // Nothing to announce means nothing on the banner: a squad stage that failed
+    // to spawn a champion is a bug, but it is not worth a card that reads
+    // "undefined".
+    if (!first) return;
+    // A squad names the whole line instead of one champion and an epithet, and
+    // the last battle says so in its title.
+    const subtitleText = state.bosses.length > 1
+      ? translate("battle.bossSquadBanner", {
+        name: translate(first.nameKey), count: state.bosses.length,
+      })
+      : `${translate(first.nameKey)} · ${translate(first.epithetKey)}`;
     announceBanner({
-      titleText: translate("battle.bossWarning", { stage: campaign.stage }),
-      subtitleText: `${translate(state.boss.nameKey)} · ${translate(state.boss.epithetKey)}`,
+      titleText: translate(state.finalBattle ? "battle.finalWarning" : "battle.bossWarning", {
+        stage: campaign.stage,
+      }),
+      subtitleText,
       duration: 5.5,
       tone: { frequency: 190, duration: 0.5, type: "sawtooth", volume: 0.045 },
     });
@@ -179,7 +216,7 @@ function boot() {
     damagePlayer, damageCompanion,
   });
   const {
-    spawnFormation, spawnBoss, burst, dust, addMeleeEffect, damageEnemy, updateUnits,
+    spawnFormation, spawnBoss, spawnBossSquad, burst, dust, addMeleeEffect, damageEnemy, updateUnits,
   } = enemySystem;
 
   const projectiles = createProjectileSystem({
@@ -228,22 +265,40 @@ function boot() {
       shopStageElement, shopLocationElement, shopMessageElement,
     },
     circleIntersectsObstacle: collision.circleIntersectsObstacle,
-    updateHud, setMode, spawnBoss, announceBoss, resizeCanvas, playTone, hideBanner,
+    updateHud, setMode, spawnBoss, spawnBossSquad, announceBoss, resizeCanvas, playTone, hideBanner,
+    lockVictory: (summary) => victoryLock.lock(summary),
   });
   const {
-    beginMission, resetCampaign, resetMission, beginExtraction, enterShop, rollForNextBattle, restartStage,
+    beginMission, resetCampaign, resetMission, beginExtraction, enterShop, enterVictory,
+    rollForNextBattle, restartStage, rollFinalStage,
   } = stageManager;
 
-  // Menu -> prologue. The name is rolled with the campaign's stream before
-  // createBattle() re-seeds it, so `?seed=7` names the same player on every
-  // reload while the battle below is drawn from a stream this roll never
-  // touched. A shop visit, a retry or a language switch reuses the identity:
-  // only a new run names a new player.
+  // Menu -> prologue. The name and the length of the run are rolled with the
+  // campaign's stream before createBattle() re-seeds it, so `?seed=7` names the
+  // same player and ends the same stage on every reload while the battle below
+  // is drawn from a stream neither roll touched. A shop visit, a retry or a
+  // language switch reuses both: only a new run draws them again.
   function startRun() {
+    // The menu already replaces 出征 with the resting card while the lock is
+    // live, but a stale click on a hidden button can survive a frame boundary:
+    // the gate belongs here as well, and refusing simply re-opens the menu.
+    if (!victoryLock.releaseIfExpired()) {
+      setMode("menu");
+      return;
+    }
     resetCampaign();
     campaign.identity = createPlayerIdentity(campaign.random);
+    rollFinalStage();
     prologue.show(campaign.identity);
     setMode("prologue");
+  }
+
+  // The victory card's only button: the run is over, so the campaign goes back to
+  // nothing and the menu (now locked) shows what the next wait is for.
+  function endRun() {
+    resetCampaign();
+    resetMission();
+    setMode("menu");
   }
 
   function update(delta) {
@@ -260,7 +315,12 @@ function boot() {
     if (state.phase === "combat") state.spawnTimer -= delta;
     if (state.phase === "combat" && state.spawnTimer <= 0) {
       const nextFormation = formationPatterns[(state.formationsSpawned + state.wave - 1) % formationPatterns.length];
-      if (state.enemies.length <= campaignRules.enemyLimit - nextFormation.slots.length) spawnFormation();
+      // The last stage carries a squad of eight on top of the ordinary waves, so
+      // it gets the larger cap; every other battle keeps the usual one.
+      const enemyLimit = state.finalBattle
+        ? campaignRules.finalStageEnemyLimit
+        : campaignRules.enemyLimit;
+      if (state.enemies.length <= enemyLimit - nextFormation.slots.length) spawnFormation();
       state.spawnTimer = Math.max(
         campaignRules.spawnIntervalMin,
         campaignRules.spawnIntervalBase - state.wave * campaignRules.spawnIntervalStep,
@@ -313,7 +373,10 @@ function boot() {
     }
     if (state.phase === "extract" && state.extractionPoint
       && distanceBetween(player.x, player.y, state.extractionPoint.x, state.extractionPoint.y) <= state.extractionPoint.radius) {
-      enterShop();
+      // The same walk ends the campaign on the last stage and opens the shop on
+      // every other one.
+      if (state.finalBattle) enterVictory();
+      else enterShop();
     }
   }
 
@@ -328,9 +391,10 @@ function boot() {
     resizeCanvas,
     battleScreen,
     touchInput,
+    endRun,
     elements: {
       startButton, menuStartButton, prologueStartButton, nextBattleButton, overlayButton,
-      soundButton, soundIcon, touchJoystickElement, touchJoystickKnob,
+      victoryReturnButton, soundButton, soundIcon, touchJoystickElement, touchJoystickKnob,
     },
   });
 
@@ -357,9 +421,12 @@ function boot() {
   // live battle (enemies, hull, score) without scraping the HUD. Read-only by
   // convention — gameplay code never reads from it. `combat` and `stageManager`
   // are on it so a harness can drive a real dismount and a real next battle
-  // instead of reaching into module internals.
+  // instead of reaching into module internals, `damageEnemy` for the same reason
+  // on the last stage's champion squad, and `victoryLock` so a test can rewind a
+  // record instead of waiting out the rest.
   globalThis.__h5game = {
     state, player, campaign, world, view, camera, combat, stageManager, equipmentShop, shopScene,
+    damageEnemy, victoryLock,
   };
 
   startGameLoop({

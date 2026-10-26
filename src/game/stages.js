@@ -8,10 +8,17 @@ import { createRandomSeed, createSeededRandom } from "../utils/random.js";
 import { createBattlefield } from "./map.js";
 import { CHARIOT_CONTROL_CONFIG } from "./player.js";
 
+// How long a run is: the last stage is drawn from the rule range with one roll of
+// whatever stream is handed in. Pure, so the range and the draw can be pinned in
+// a test without building a campaign.
+export function pickFinalStage(random) {
+  return campaignRules.finalStageMin + Math.floor(random() * campaignRules.finalStageSpan);
+}
+
 export function createStageManager({
   campaign, state, player, world, view, camera, equipmentShop, seedSource = () => null,
-  elements, circleIntersectsObstacle, updateHud, setMode, spawnBoss, announceBoss,
-  resizeCanvas, playTone, hideBanner,
+  elements, circleIntersectsObstacle, updateHud, setMode, spawnBoss, spawnBossSquad, announceBoss,
+  resizeCanvas, playTone, hideBanner, lockVictory = () => {},
 }) {
   const {
     shopGoldElement, shopScoreElement, shopKillsElement,
@@ -24,11 +31,34 @@ export function createStageManager({
   function resetCampaign() {
     campaign.totalGold = 0;
     campaign.stage = 1;
+    campaign.finalStage = 0;
     campaign.equipment = emptyEquipment();
     campaign.horseCount = 1;
     campaign.roster = [];
     campaign.nextPersonnelId = 1;
     campaign.identity = null;
+    // The battle flags belong to the run too: leaving `finalBattle` set would keep
+    // the next prologue claiming to be the last stage, and a stale squad roster
+    // would be the HUD's first read on the menu.
+    state.finalBattle = false;
+    state.bosses = [];
+    state.bossDefeated = false;
+    state.bossStage = false;
+  }
+
+  // How long a run is, drawn from the campaign's stream at the same moment the
+  // name is: createBattle() re-seeds the stream below, so a pinned `?seed=` still
+  // produces exactly the battle it did before the last stage was rolled, while
+  // the length of the campaign itself varies from run to run.
+  function rollFinalStage() {
+    campaign.finalStage = pickFinalStage(campaign.random);
+    return campaign.finalStage;
+  }
+
+  // The last stage is decided by the stage number alone: it is a boss stage even
+  // when the interval rule would not have made it one.
+  function isFinalBattle() {
+    return campaign.finalStage > 0 && campaign.stage >= campaign.finalStage;
   }
 
   function beginMission(isNewRun = false) {
@@ -51,17 +81,20 @@ export function createStageManager({
     campaign.terrain = battlefield.terrain;
     campaign.clouds = battlefield.clouds;
     resetMission();
-    state.bossStage = campaign.stage % campaignRules.bossStageInterval === 0
-      && campaign.stage >= campaignRules.bossStageMinimum;
+    const finalBattle = isFinalBattle();
+    state.finalBattle = finalBattle;
+    state.bossStage = finalBattle || (campaign.stage % campaignRules.bossStageInterval === 0
+      && campaign.stage >= campaignRules.bossStageMinimum);
     state.bossDefeated = false;
-    state.boss = null;
+    state.bosses = [];
     state.bossWarningTimer = 0;
     hideBanner();
     state.objectiveTarget = state.bossStage ? 1
       : campaignRules.objectiveBase
         + Math.min(campaign.stage - 1, campaignRules.objectiveStageCap) * campaignRules.objectiveStep;
     state.spawnTimer = 0.8;
-    if (state.bossStage) spawnBoss();
+    if (finalBattle) spawnBossSquad();
+    else if (state.bossStage) spawnBoss();
     updateHud();
     setMode("running");
     if (state.bossStage) announceBoss();
@@ -171,6 +204,25 @@ export function createStageManager({
     setMode("shop");
   }
 
+  // The last battle ends the run instead of opening the shop: the spoils are
+  // banked, the champions are announced as beaten, and the campaign locks itself
+  // for a while (the lock is written here, not when the card is dismissed, so a
+  // tab closed on the victory screen still counts as a victory).
+  function enterVictory() {
+    if (state.mode !== "running") return;
+    for (const drop of state.drops) campaign.totalGold += drop.value;
+    state.drops = [];
+    state.bullets = [];
+    hideBanner();
+    lockVictory({
+      name: campaign.identity ? campaign.identity.fullName : "",
+      stage: campaign.stage,
+      score: state.score,
+    });
+    setMode("victory");
+    playTone(660, 0.3, "sine", 0.035);
+  }
+
   function rollForNextBattle() {
     campaign.stage += 1;
     createBattle();
@@ -183,7 +235,7 @@ export function createStageManager({
   }
 
   return {
-    beginMission, resetCampaign, resetMission, beginExtraction, enterShop, refreshShop, rollForNextBattle,
-    restartStage,
+    beginMission, resetCampaign, resetMission, beginExtraction, enterShop, refreshShop, enterVictory,
+    rollForNextBattle, restartStage, rollFinalStage,
   };
 }

@@ -11,10 +11,19 @@ const SELECTORS = {
   prologueClanElement: "#prologue-clan",
   prologueGivenElement: "#prologue-given",
   prologueAmbitionElement: "#prologue-ambition",
+  // The sixth line, the one that names the stage the run will end on. It only
+  // appears once the campaign has rolled a length (campaign.finalStage).
+  prologueFinalElement: "#prologue-final",
   prologueStartButton: "#prologue-start",
   battleScreen: "#battle-screen",
   shopScreen: "#shop-screen",
   menuStartButton: "#menu-start",
+  // The resting card that stands where 出征 would be while the post-victory lock
+  // is live: a headline with the countdown and a line about the run that earned
+  // it, and nothing to press.
+  menuLockElement: "#menu-lock",
+  menuLockTitleElement: "#menu-lock-title",
+  menuLockDetailElement: "#menu-lock-detail",
   nextBattleButton: "#next-battle",
   shopItemsElement: "#shop-items",
   shopStatsElement: "#shop-stats",
@@ -42,6 +51,15 @@ const SELECTORS = {
   overlayTitle: "#overlay-title",
   overlayCopy: "#overlay-copy",
   overlayButton: "#overlay-button",
+  // The victory card: its own overlay over the field, shown by the last stage
+  // instead of the shop.
+  victoryScreen: "#victory-screen",
+  victoryEyebrow: "#victory-eyebrow",
+  victoryTitle: "#victory-title",
+  victorySubtitle: "#victory-subtitle",
+  victoryStats: "#victory-stats",
+  victoryNote: "#victory-note",
+  victoryReturnButton: "#victory-return",
   startButton: "#start-button",
   startLabel: "#start-label",
   objectiveCountElement: "#objective-count",

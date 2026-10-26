@@ -1,8 +1,9 @@
 import { projectileRules } from "../data/rules.js";
 import { getLocale, translate } from "../i18n/index.js";
+import { stageLabel } from "./labels.js";
 
 export function createHud({
-  state, player, getCampaignFunds, getCampaignStage, getPlayerName = () => null, elements,
+  state, player, campaign, getCampaignFunds, getPlayerName = () => null, elements,
 }) {
   let lastFootMode;
   let lastLocale;
@@ -33,7 +34,11 @@ export function createHud({
     const onFoot = player.mode === "foot";
     const locale = getLocale();
     scoreElement.textContent = String(state.score).padStart(5, "0");
-    waveElement.textContent = String(getCampaignStage()).padStart(2, "0");
+    // The last battle of a run is named rather than numbered. "FINAL" is not a
+    // number, so it carries a class the stylesheet sizes down instead of running
+    // past the 86px stat box; a numbered stage keeps the type it always had.
+    waveElement.textContent = stageLabel(campaign, state);
+    waveElement.classList.toggle("is-final", Boolean(state.finalBattle));
     goldElement.textContent = String(getCampaignFunds());
     modeElement.textContent = translate(onFoot ? "battle.foot" : "battle.chariot");
     modeElement.classList.toggle("on-foot", onFoot);
@@ -51,34 +56,53 @@ export function createHud({
     objectiveCountElement.textContent = `${Math.min(state.kills, state.objectiveTarget)} / ${state.objectiveTarget}`;
     objectiveProgressElement.style.width = `${Math.min(100, state.kills / state.objectiveTarget * 100)}%`;
     const extracting = state.phase === "extract" && state.extractionPoint;
-    const bossAlive = state.bossStage && !state.bossDefeated;
+    const bossAlive = state.bossStage && !state.bossDefeated && state.bosses.length > 0;
     // The objective is the player's own, so it carries their name once the
     // prologue has rolled one. `battle.objective` stays behind as the plain
-    // label for anything that runs before a run starts.
+    // label for anything that runs before a run starts, and a boss fight or a
+    // retreat is labelled by what it is rather than by whose it is.
     const playerName = extracting || bossAlive ? null : getPlayerName();
-    objectiveLabelElement.textContent = playerName
+    let objectiveLabel = playerName
       ? translate("battle.objectiveNamed", { name: playerName })
       : translate(extracting ? "battle.extractDistance" : bossAlive ? "battle.boss" : "battle.objective");
-    extractionGuideElement.hidden = !extracting;
-    if (bossAlive && state.boss) {
-      objectiveCountElement.textContent = `${Math.ceil(state.boss.health)} / ${state.boss.maxHealth}`;
-      objectiveProgressElement.style.width = `${Math.max(0, state.boss.health / state.boss.maxHealth * 100)}%`;
-      objectiveProgressElement.classList.add("boss-health");
-    } else {
-      objectiveProgressElement.classList.remove("boss-health");
+    let objectiveCount = `${Math.min(state.kills, state.objectiveTarget)} / ${state.objectiveTarget}`;
+    let objectiveProgress = Math.min(100, state.kills / state.objectiveTarget * 100);
+    let squadHealth = false;
+
+    if (bossAlive) {
+      // The bar is the whole squad's health, not one champion's: the last stage
+      // wastes no HUD space on eight separate bars, and the sum drops as each
+      // body falls.
+      const total = state.bosses.reduce((sum, unit) => sum + unit.maxHealth, 0);
+      const alive = state.bosses.reduce(
+        (sum, unit) => sum + (unit.destroyed ? 0 : Math.max(0, unit.health)), 0,
+      );
+      objectiveCount = `${Math.ceil(alive)} / ${total}`;
+      objectiveProgress = total > 0 ? Math.max(0, alive / total * 100) : 0;
+      squadHealth = true;
+      if (state.bosses.length > 1) {
+        const first = state.bosses.find((unit) => !unit.destroyed) ?? state.bosses[0];
+        objectiveLabel = translate("battle.bossSquad", {
+          count: state.bosses.length, name: translate(first.nameKey),
+        });
+      }
     }
+
     if (extracting) {
       const dx = state.extractionPoint.x - player.x;
       const dy = state.extractionPoint.y - player.y;
       const distance = Math.hypot(dx, dy);
-      objectiveCountElement.textContent = translate("battle.steps", { distance: Math.ceil(distance) });
-      objectiveProgressElement.style.width = `${Math.max(0, Math.min(100, 100 - distance / 10))}%`;
+      objectiveCount = translate("battle.steps", { distance: Math.ceil(distance) });
+      objectiveProgress = Math.max(0, Math.min(100, 100 - distance / 10));
       extractionDistanceElement.textContent = translate("battle.distance", { distance: Math.ceil(distance) });
       extractionArrowElement.style.setProperty("--guide-angle", `${Math.atan2(dy, dx) + Math.PI / 2}rad`);
-    } else if (!bossAlive) {
-      objectiveCountElement.textContent = `${Math.min(state.kills, state.objectiveTarget)} / ${state.objectiveTarget}`;
-      objectiveProgressElement.style.width = `${Math.min(100, state.kills / state.objectiveTarget * 100)}%`;
     }
+
+    objectiveLabelElement.textContent = objectiveLabel;
+    objectiveCountElement.textContent = objectiveCount;
+    objectiveProgressElement.style.width = `${objectiveProgress}%`;
+    objectiveProgressElement.classList.toggle("boss-health", squadHealth);
+    extractionGuideElement.hidden = !extracting;
     updateCharge();
   }
 

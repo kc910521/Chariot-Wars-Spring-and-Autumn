@@ -88,4 +88,17 @@ export const campaignRules = Object.freeze({
   spawnIntervalMin: 4.2,
   spawnIntervalBase: 7.2,
   spawnIntervalStep: 0.2,
+  // The campaign ends in a last stage drawn from this range, and that stage is
+  // never one of the numbered boss stages: it is the last battle of the run.
+  finalStageMin: 3,
+  finalStageSpan: 4,
+  // The last stage opens with a fixed squad instead of one rolled champion — two
+  // elephants (204 HP each), two lions (78) and four catapults (55), 784 HP
+  // together on this build's champion table. The cap has to sit above the squad
+  // or the ordinary waves would stop arriving behind it (the squad alone is 8
+  // bodies, and a formation is up to 6 more).
+  finalSquad: Object.freeze([
+    "elephant", "elephant", "lion", "lion", "catapult", "catapult", "catapult", "catapult",
+  ]),
+  finalStageEnemyLimit: 52,
 });

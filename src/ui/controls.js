@@ -2,11 +2,11 @@ import { translate } from "../i18n/index.js";
 
 export function bindControls({
   state, keys, startRun, beginMission, rollForNextBattle, restartStage, setMode, resizeCanvas,
-  battleScreen, touchInput, elements,
+  battleScreen, touchInput, endRun, elements,
 }) {
   const {
     startButton, menuStartButton, prologueStartButton, nextBattleButton, overlayButton,
-    soundButton, soundIcon,
+    victoryReturnButton, soundButton, soundIcon,
     touchJoystickElement, touchJoystickKnob,
   } = elements;
 
@@ -55,6 +55,9 @@ export function bindControls({
   menuStartButton.addEventListener("click", () => startRun());
   prologueStartButton.addEventListener("click", () => beginMission());
   nextBattleButton.addEventListener("click", rollForNextBattle);
+  // The victory card's only button: the run is over, so the campaign goes back to
+  // nothing and the menu (now locked) shows what the next wait is for.
+  victoryReturnButton.addEventListener("click", () => endRun());
   overlayButton.addEventListener("click", () => {
     if (state.mode === "paused") setMode("running");
     else if (state.mode === "over") restartStage();

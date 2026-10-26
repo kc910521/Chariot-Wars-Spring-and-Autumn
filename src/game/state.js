@@ -47,6 +47,10 @@ export function createGameState({ seedSource = () => null } = {}) {
     // and the two story keys behind it. Reset with the rest of the run, and
     // never re-rolled by a retry — it belongs to the campaign, not the battle.
     identity: null,
+    // The last stage of this run, rolled with the name before the first battle
+    // (see stages.rollFinalStage). 0 means "not rolled yet", which never matches
+    // a stage number.
+    finalStage: 0,
   };
   const state = {
     mode: "menu",
@@ -70,7 +74,12 @@ export function createGameState({ seedSource = () => null } = {}) {
     phase: "combat",
     extractionPoint: null,
     bossStage: false,
-    boss: null,
+    // Every champion of the battle, in spawn order: one for a numbered boss
+    // stage, the whole squad for the last one. `state.bosses` is the roster; the
+    // individual units also live in `state.enemies`, which is what moves them.
+    bosses: [],
+    // True for the one battle that ends the campaign instead of the shop.
+    finalBattle: false,
     bossDefeated: false,
     bossWarningTimer: 0,
     // Set by damagePlayer(), consumed by the renderer's red vignette.

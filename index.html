@@ -41,6 +41,10 @@
           <article><span aria-hidden="true">03</span><strong data-i18n="menu.feature.3.title">整备再战</strong><p data-i18n="menu.feature.3.copy">调整战车属性、增购战马并招募车员，迎战新的随机战场。</p></article>
         </div>
         <button class="primary-action" id="menu-start" type="button"><span data-i18n="menu.start">击鼓出征</span><span aria-hidden="true">→</span></button>
+        <div class="lock-card" id="menu-lock" hidden aria-live="polite">
+          <strong class="lock-card-title" id="menu-lock-title"></strong>
+          <span class="lock-card-detail" id="menu-lock-detail"></span>
+        </div>
         <p class="menu-footnote" data-i18n="controls.chariot">W / ↑ 地图向上 · S / ↓ 地图向下 · A D / ← → 转向并漂移 · 空格发弩</p>
       </section>
 
@@ -55,6 +59,7 @@
           <p class="prologue-line" id="prologue-clan" style="--line-index: 2"></p>
           <p class="prologue-line" id="prologue-given" style="--line-index: 3"></p>
           <p class="prologue-line" id="prologue-ambition" style="--line-index: 4"></p>
+          <p class="prologue-line" id="prologue-final" style="--line-index: 5" hidden></p>
           <div class="prologue-actions">
             <button class="primary-action" id="prologue-start" type="button"><span data-i18n="prologue.begin">出征</span><span aria-hidden="true">→</span></button>
           </div>
@@ -149,6 +154,17 @@
                 <h2 id="overlay-title" data-i18n="overlay.title">将军，请下令</h2>
                 <p id="overlay-copy" data-i18n="overlay.copy">驾驭战车，冲破敌阵，争夺中原。</p>
                 <button class="overlay-button" id="overlay-button" type="button"><span data-i18n="menu.start">击鼓出征</span><span aria-hidden="true">→</span></button>
+              </div>
+            </div>
+            <div class="game-overlay victory-overlay hidden" id="victory-screen" role="dialog" aria-modal="true" aria-labelledby="victory-title">
+              <div class="overlay-card victory-card">
+                <span class="overlay-icon victory-icon" aria-hidden="true">✦</span>
+                <p class="eyebrow" id="victory-eyebrow" data-i18n="victory.eyebrow">天下已定</p>
+                <h2 id="victory-title" data-i18n="victory.title">凯旋</h2>
+                <p class="victory-subtitle" id="victory-subtitle"></p>
+                <p class="victory-stats" id="victory-stats"></p>
+                <p class="victory-note" id="victory-note"></p>
+                <button class="overlay-button" id="victory-return" type="button"><span data-i18n="victory.return">收兵回营</span><span aria-hidden="true">→</span></button>
               </div>
             </div>
             <div class="touch-controls" data-i18n-aria-label="battle.touch" aria-label="触屏操作">

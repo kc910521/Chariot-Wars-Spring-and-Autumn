@@ -15,9 +15,23 @@ python3 -m http.server 8000     # 备选：使用系统自带 Python
 
 ## 游戏流程
 
-主菜单开始新征途 → 序章抽出本局的中文姓名（氏 + 名）并讲述这个名字的由来 → 驾车完成战场目标（普通战局讨伐指定数量的敌军；第 4、6、8… 战局迎战随机首领并将其击败）→ 驾车前往随机生成并持续指引的撤离区域 → 在凯旋商店整备并手动开始下一战。地图、敌军编队和战利品会在征途中变化；装备、战马和存活车员会保留到下一战。
+主菜单开始新征途 → 序章抽出本局的中文姓名（氏 + 名）并讲述这个名字的由来，同时告知本局将在哪一战结束 → 驾车完成战场目标（普通战局讨伐指定数量的敌军；第 4、6、8… 战局迎战随机首领并将其击败）→ 驾车前往随机生成并持续指引的撤离区域 → 在凯旋商店整备并手动开始下一战。每一局都在第 10–13 战局中的某一战迎来终局：八名首领结阵而来，击败全部首领并撤离后进入凯旋卡，随后回营休整一段时间才能再次出征。地图、敌军编队和战利品会在征途中变化；装备、战马和存活车员会保留到下一战。
 
 新征途开局时会按权重抽一次姓名：氏名取自 `src/assets/clan/clan_names.json`（如趙、魏、屈、東郭，权重 10 到 2），名取自 `src/assets/clan/given_names.json`（如黑、虎、無忌、盜跖，权重 3 到 1），两者直接相接成「趙黑」这样的姓名。抽中的两行各带一个 `namingStory.reason` 键，序章用它讲「氏从哪来」和「名为何取」，因此新增一个名字只需在表里加一行并补齐两种语言的说明。姓名是数据而不是文案：无论界面语言是哪一种，姓名始终是这两个汉字，只有它周围的句子会翻译。姓名存放在 `campaign.identity` 上，只在开始新征途时重新抽取；重试战局、进入商店、打下一战或切换语言都会沿用同一个名字，战场目标标签也会一直显示「趙黑的目标」。`?seed=` 同时固定这一次抽签，便于复盘。
+
+## 终局与休战
+
+一局有多长，在抽姓名的同一刻就已定下：`startRun()` 先抽姓名，再用同一条 `campaign.random` 抽终局战局（`campaignRules.finalStageMin` 起始、`finalStageSpan` 跨度，即第 10–13 战局之一），之后 `createBattle()` 才重新播种。抽签发生在播种之前，所以 `?seed=` 仍然逐帧复现同一场战斗，而一局的长度本身逐局不同。终局由战局号单独判定（`stages.isFinalBattle()`）：即使间隔规则本不认为它是首领战，终局也一定是首领战。序章的第六行由这条抽签补上（`prologue.final`），`#prologue-final` 在没有终局时保持 `hidden`。
+
+终局的首领不再是随机一位，而是 `campaignRules.finalSquad` 里的固定阵容：两面象兵、两位狮王馭者、四辆投石车，按 784 点总耐久（本作的 `bossTypes` 表：2×204 + 2×78 + 4×55）环绕玩家列阵。`enemies.spawnBossSquad()` 让每位首领各占一个方位，被地形挡住时逐级收小半径；确实无处可放时退到夹取后的落点，而不是在终局中途抛错。终局仍会刷新普通敌军，因此它的编队上限单独放宽到 `finalStageEnemyLimit`（52），否则八名首领就会把普通波次挡在门外。`state.bosses` 保存整支车队（阵亡者也留在册上，便于统计），`state.bossDefeated` 只在**最后一位**倒下时为真——这是开启撤离点的唯一条件。
+
+战场 HUD 用 `ui/labels.js` 的 `stageLabel()` 决定战局栏写什么：平时是两位数字，终局改写 `battle.finalStage`（中文「终局」、英文 `FINAL`），并带上 `.is-final` 让样式把字号收小一档，以免五个字符撑破原本只放两位数字的格子。本役目标栏在首领战里显示整支车队的总耐久（`battle.bossSquad`，例：「8 将 · 象兵」），条随每一具倒下而下降；预警横幅在终局读作 `battle.finalWarning`，副标题为 `battle.bossSquadBanner`。
+
+走到撤离点在终局不再开店，而是 `stages.enterVictory()`：战利先入军府，`setMode("victory")` 打开凯旋卡（`#victory-screen`，与暂停/失利卡同一层，但独立一张：`#victory-title`、`#victory-subtitle`、`#victory-stats`、`#victory-note`、`#victory-return`），卡上写明这一局是谁、打到第几战局、战功与军资，并提前说明接下来要休整多久。卡片唯一按钮回到主菜单，此时菜单上的「击鼓出征」已被休战卡（`#menu-lock`）取代：它只有两行文字、没有可点的目标。
+
+休战记录写在 Local Storage 的 `chariot-wars.victory.v1` 上，经由 `src/platform/storage.js` 的门面（浏览器驱动把载荷写成 JSON 文本，读取时由 `parseVictoryRecord()` 校验每一栏）。写入发生在 `enterVictory()` 内、卡片出现的同一刻，所以即便玩家在凯旋卡上直接关掉标签页，这一局也算赢了。窗口长度只有 `VICTORY_LOCK_MINUTES` 一处：`VICTORY_LOCK_MS` 与卡上的每一段文案（`menu.timeHours`/`menu.timeMinutes`/`menu.timeSeconds` 等）都由它派生，单测会断言这层派生关系。当前构建把它设成 1 分钟，以便在真机上一口气看完「锁定 → 倒计时 → 到期 → 再出征」；把 `src/game/victory-lock.js` 的 `VICTORY_LOCK_MINUTES` 改成 `24 * 60` 即为上线的二十四小时。到期时键会被删除而不是留在存储里；窗口尚在时再次胜利不会延长等待（以第一次胜利的时间戳为准）；记录损坏、缺栏，或时间戳比现在晚出 60 秒以上（时钟被回拨、或被人改过）时，一律按「没有记录」处理——这样的时钟只会让玩家少休一次，不会把存档锁死。它是节奏装置而不是反作弊手段：改系统时间或清站点数据都能绕过。
+
+浏览器端的倒计时不是每帧重绘的 canvas，而是一个每秒才变一次的字符串：`ui/screens.js` 的 `paint()` 由帧循环里的 `draw()` 调用，只在主菜单可见时重算，并且只有文案真的变了才写 DOM。开新局前的门槛有两条：菜单上换成休战卡，`startRun()` 自身也会 `releaseIfExpired()` 复核一次，因此一个残留的按键或点击不会绕到序章后面。开发时用 `?reset=1` 可以只为这一次启动清掉记录（与 `?seed=` 共用 `launchQuery()`）；它不清别的任何东西。
 
 ## 操作
 
@@ -36,7 +50,7 @@ python3 -m http.server 8000     # 备选：使用系统自带 Python
 
 战车高速正面冲撞可对可冲撞的敌人造成伤害，基础为 1 点；每级轴与轮辋升级额外增加 2 点（Lv1/Lv2/Lv3 分别为 3/5/7 点）。普通接触不造成冲撞伤害，重甲单位等免疫冲撞伤害的敌人仍不会受伤。机动和战马只影响战车速度与转向，不会直接增加冲撞伤害；弩架只提高弩箭伤害。
 
-冲撞步卒或弓手会将其撞倒，片刻后重新起身；重甲步卒可被撞倒，但不会受到车轮冲撞伤害，仍可被武器击伤。高速冲阵会以醒目的金色冲击特效刮伤敌军，并受到密集步卒反击。敌军刀剑与戈的近战攻击有不同的挥击特效，也会伤害车体；步卒会在攻击距离保持稳定，不再贴身前后抖动。战场上有轻薄、缓慢飘移的云影，不会遮挡单位。战马数量由购置决定，最多四匹，战马可见地随战车行进。敌方弓手、投石兵和弓车会在视线畅通时发射带抛物线的箭矢或石弹；墙木会遮挡低空弹道。战场上有浅滩、沙地和草地，分别会显著、中度和轻微减慢所有单位。步卒编队会护住后排远程单位，只在战车未进入阵型范围时保持阵线；战车一旦驶入阵型范围，整条阵线会一起压上来，追出有限的距离后收兵回位，不会无休止地追击，也不会被逐个引走。第 4、6、8… 战局会出现象兵、狮王馭者或投石车首领，首领战仍会持续刷新普通敌军；击败首领后前往撤离点。受伤单位会在地面留下有限数量的血迹。战车遭受弩箭、战车冲撞或高速撞上障碍会损伤车体；耐久耗尽后下车继续作战。敌军会掉落铜钱、银锭或金饼，接触拾取；达成目标后，未拾取的战利也会在凯旋时收归军府。
+冲撞步卒或弓手会将其撞倒，片刻后重新起身；重甲步卒可被撞倒，但不会受到车轮冲撞伤害，仍可被武器击伤。高速冲阵会以醒目的金色冲击特效刮伤敌军，并受到密集步卒反击。敌军刀剑与戈的近战攻击有不同的挥击特效，也会伤害车体；步卒会在攻击距离保持稳定，不再贴身前后抖动。战场上有轻薄、缓慢飘移的云影，不会遮挡单位。战马数量由购置决定，最多四匹，战马可见地随战车行进。敌方弓手、投石兵和弓车会在视线畅通时发射带抛物线的箭矢或石弹；墙木会遮挡低空弹道。战场上有浅滩、沙地和草地，分别会显著、中度和轻微减慢所有单位。步卒编队会护住后排远程单位，只在战车未进入阵型范围时保持阵线；战车一旦驶入阵型范围，整条阵线会一起压上来，追出有限的距离后收兵回位，不会无休止地追击，也不会被逐个引走。第 4、6、8… 战局会出现象兵、狮王馭者或投石车首领，首领战仍会持续刷新普通敌军；击败首领后前往撤离点。每一局还会在开战前抽定一个终局战局（第 10–13 之一），那一战必定是首领战：两头象兵、两头狮王馭者与四辆投石车同时结阵而来，且当战局标签改读「终局」，战绩栏的血条统计的是整支车队，而非某一位首领。八名首领全部倒下才开启撤离点；走到撤离点不再是开店，而是以凯旋卡结束这一局。受伤单位会在地面留下有限数量的血迹。战车遭受弩箭、战车冲撞或高速撞上障碍会损伤车体；耐久耗尽后下车继续作战。敌军会掉落铜钱、银锭或金饼，接触拾取；达成目标后，未拾取的战利也会在凯旋时收归军府。
 
 ## 项目结构
 
@@ -46,8 +60,8 @@ h5game/
 ├── README.md
 ├── scripts/
 │   ├── perf-test.mjs             # Frame-budget benchmark for the per-frame loops
-│   ├── smoke-test.mjs            # Boots main.js against a stub DOM, walks menu → prologue → battle
-│   └── unit-test.mjs             # Rules, collision, ballistics, bow aim, blood, RNG, naming and shop geometry
+│   ├── smoke-test.mjs            # Boots main.js against a stub DOM: menu → prologue → battle → shop → defeat → the last stage → victory card → resting menu
+│   └── unit-test.mjs             # Rules, collision, ballistics, bow aim, blood, RNG, naming, shop geometry, the last stage and the post-victory rest
 ├── styles/
 │   └── game.css
 ├── src/
@@ -70,7 +84,8 @@ h5game/
 │   │   ├── loop.js               # requestAnimationFrame loop with failure isolation
 │   │   ├── state.js              # Player, campaign, and battle state creation
 │   │   ├── map.js                # Procedural battlefield scatter, driven by the element catalog
-│   │   ├── stages.js             # Campaign stages, objectives, extraction, progression
+│   │   ├── stages.js             # Campaign stages, objectives, extraction, the drawn last stage and the victory hand-off
+│   │   ├── victory-lock.js       # The post-victory rest: one storage key, one window, expiry and clock-skew handling
 │   │   ├── identity.js           # Weighted name roll: one clan, one given name, their story keys
 │   │   ├── collision.js          # Obstacle/terrain collision, movement clamping, indexed line of sight
 │   │   ├── elements.js           # Element runtime: shapes, sight, movement cost, drift, footprint queries
@@ -92,7 +107,8 @@ h5game/
 │   │   ├── sprites.js            # Unit art: chariot rig and foot figure, shared by battlefield and shop
 │   │   └── renderer.js           # Canvas rendering for terrain, units, and effects
 │   ├── platform/
-│   │   └── launch.js             # Host seam: `launchQuery()` reads `?seed=` (小游戏 reads wx launch options)
+│   │   ├── launch.js             # Host seam: `launchQuery()` reads `?seed=` and `?reset=1` (小游戏 reads wx launch options)
+│   │   └── storage.js            # Storage facade over `window.localStorage`: JSON payloads, a cache, never throws at the game
 │   ├── assets/
 │   │   ├── clan/
 │   │   │   ├── clan_names.json   # Clan names: weight, story key and naming source per row
@@ -104,9 +120,10 @@ h5game/
 │   └── ui/
 │       ├── elements.js           # DOM element registry
 │       ├── controls.js           # Keyboard, touch, and screen event bindings
-│       ├── hud.js                # Battle HUD updates
-│       ├── prologue.js           # The story card: five lines built from the rolled identity
-│       ├── screens.js            # Menu, prologue, pause, and defeat screen state
+│       ├── hud.js                # Battle HUD updates, including the FINAL readout and the squad health total
+│       ├── labels.js             # Pure label helpers: the stage readout, the countdown and the rest's window
+│       ├── prologue.js           # The story card: five lines from the rolled identity, plus the stage the run ends on
+│       ├── screens.js            # Menu (with the resting card), prologue, pause, defeat and victory screen state
 │       ├── shop.js               # Shop ledger: tabs, item cards, hover previews
 │       ├── shop-info.js          # The one description panel: standing rule, hovered or picked item
 │       ├── radar.js              # Five-axis stat chart (SVG), current vs preview
@@ -121,8 +138,8 @@ h5game/
 
 ```sh
 find src scripts \( -name '*.js' -o -name '*.mjs' \) -print0 | xargs -0 -n1 node --check   # 语法检查
-node scripts/unit-test.mjs                       # 规则、碰撞、弹道、血迹、相机、随机数、姓名抽取与商店雷达/营地几何/信息栏
-node scripts/smoke-test.mjs                      # 用 stub DOM 启动 main.js 并跑战斗帧
+node scripts/unit-test.mjs                       # 规则、碰撞、弹道、血迹、相机、随机数、姓名抽取、商店几何、终局抽签与休战
+node scripts/smoke-test.mjs                      # 用 stub DOM 启动 main.js，跑战斗帧直到凯旋卡与休战后的菜单
 node scripts/perf-test.mjs                       # 逐帧性能预算：敌军 AI、随从齐射、下车随从、弹道
 H5_SEED=7 node scripts/smoke-test.mjs            # 换一个随机种子复跑同一套冒烟检查
 ```
@@ -159,6 +176,6 @@ Descriptions are the one thing the shop does not repeat per card. `ui/shop-info.
 
 Each battlefield narrows the catalog with a `mix`: obstacle entries are shares of the same 46-obstacle target, terrain entries replace the default patch counts, and a kind a mix leaves out never spawns there - that is the whole difference between a flooded crossing and a fortified pass. The obstacle budget is a target rather than a count of tries, because a tree that would touch another tree is dropped: a tree-heavy marsh therefore lands the same number of obstacles as a wall-heavy pass instead of thinning out. Formations spawn through a ground ladder - dry, then uniform, then merely clear, then the old slot-centre rule - and the rung that placed a line is recorded as `groundTier`. The test is `rectHitsObstacle` against the rank box (`formationGroundExtent`), not against slot centres, so a 28px palisade standing between two ranks now rejects the ground; the last rung is pinned at zero spawns.
 
-The player's name is data, not copy. `data/names.js` freezes the two tables shipped in `src/assets/clan/`, `game/identity.js` rolls one row from each with a single weighted draw per table, and `ui/prologue.js` turns the result into five lines: birth, name, the clan's story, the given name's story, ambition. The two story lines are translation keys carried by the rolled rows, so a new name in the table grows its own prologue without new wiring, and the unit test fails if a row ever points at a key no locale defines. The name itself is never translated - only interpolated - which is why `campaign.identity` is rolled once per run and only repainted on a language switch. It is drawn before `createBattle()` re-seeds `campaign.random`, so `?seed=` names the same player without shifting the battle by a single draw.
+The player's name is data, not copy. `data/names.js` freezes the two tables shipped in `src/assets/clan/`, `game/identity.js` rolls one row from each with a single weighted draw per table, and `ui/prologue.js` turns the result into five lines: birth, name, the clan's story, the given name's story, ambition - plus a sixth that names the stage the run will be settled on, once `campaign.finalStage` is known. The two story lines are translation keys carried by the rolled rows, so a new name in the table grows its own prologue without new wiring, and the unit test fails if a row ever points at a key no locale defines. The name itself is never translated - only interpolated - which is why `campaign.identity` is rolled once per run and only repainted on a language switch. It is drawn before `createBattle()` re-seeds `campaign.random`, so `?seed=` names the same player without shifting the battle by a single draw, and the last stage is drawn from that same pre-seed moment for the same reason.
 
 Random draws that affect gameplay go through `campaign.random`, a Mulberry32 stream seeded per battle by `src/utils/random.js`, so a battle can be replayed deterministically. Purely cosmetic jitter may still use `Math.random()`. The renderer skips terrain, decals, units, projectiles, and effects outside the camera view. Canvas-drawn art and synthesized tones remain the active rendering/audio paths.

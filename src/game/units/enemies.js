@@ -1,5 +1,5 @@
 import { addBloodStain } from "../blood.js";
-import { effectRules } from "../../data/rules.js";
+import { campaignRules, effectRules } from "../../data/rules.js";
 import { clamp, shortestAngleDifference } from "../../utils/math.js";
 import { rectHitsAnyObstacle, rectTerrain } from "../elements.js";
 import { spawnParticle } from "../particles.js";
@@ -251,6 +251,43 @@ export function createEnemies({
     }
   }
 
+  // One unit for the champion roster, placed at a free spot: the shape every
+  // boss shares (facing, idle timers, attack clocks) lives here so a single
+  // champion and a squad of eight cannot drift apart.
+  function placeBoss(boss, x, y) {
+    // Bosses idle before they spot the player, so they need a real facing to fall
+    // back on: the idle branch writes `angle` while searching, and a champion
+    // spawned without one would store `undefined` there - a non-finite canvas
+    // transform.
+    const aim = Math.atan2(player.y - y, player.x - x);
+    const unit = {
+      ...boss,
+      boss: true,
+      maxHealth: boss.health,
+      x,
+      y,
+      angle: aim,
+      homeAngle: aim,
+      idleTarget: aim,
+      idleTimer: random() * (IDLE_THINK_MIN + IDLE_THINK_SPAN),
+      homeX: x,
+      homeY: y,
+      seesPlayer: false,
+      lastSeenX: player.x,
+      lastSeenY: player.y,
+      searchTimer: 0,
+      sweepTimer: 0,
+      shotCooldown: 2,
+      attackCooldown: 2.2,
+      contactCooldown: 0,
+      hitFlash: 0,
+      knockedDown: 0,
+    };
+    state.bosses.push(unit);
+    state.enemies.push(unit);
+    return unit;
+  }
+
   function spawnBoss() {
     const boss = bossTypes[Math.floor(random() * bossTypes.length)];
     let position;
@@ -267,35 +304,38 @@ export function createEnemies({
     if (!position) {
       throw new Error(`Unable to place boss "${boss.nameKey}" on this battlefield.`);
     }
+    return placeBoss(boss, position.x, position.y);
+  }
 
-    // Bosses idle before they spot the player, so they need a real facing to fall
-    // back on: `spawnBoss` never set `wanderAngle`, and the idle branch wrote
-    // `undefined` into `angle`, which is a non-finite canvas transform.
-    const aim = Math.atan2(player.y - position.y, player.x - position.x);
-    state.boss = {
-      ...boss,
-      boss: true,
-      maxHealth: boss.health,
-      x: position.x,
-      y: position.y,
-      angle: aim,
-      homeAngle: aim,
-      idleTarget: aim,
-      idleTimer: random() * (IDLE_THINK_MIN + IDLE_THINK_SPAN),
-      homeX: position.x,
-      homeY: position.y,
-      seesPlayer: false,
-      lastSeenX: player.x,
-      lastSeenY: player.y,
-      searchTimer: 0,
-      sweepTimer: 0,
-      shotCooldown: 2,
-      attackCooldown: 2.2,
-      contactCooldown: 0,
-      hitFlash: 0,
-      knockedDown: 0,
-    };
-    state.enemies.push(state.boss);
+  // The last battle: the squad from the rule table, ringed around the player.
+  // Each champion gets its own bearing, so the fight opens from every side, and
+  // the walk radius shrinks until a free spot turns up — a squad that fails to
+  // place would either drop a champion or throw in the middle of the campaign's
+  // last battle, and the fallback (a clamped spot) is the lesser evil.
+  function spawnBossSquad() {
+    const squad = campaignRules.finalSquad;
+    const created = [];
+    squad.forEach((type, index) => {
+      const boss = bossTypes.find((row) => row.type === type);
+      if (!boss) throw new Error(`Unknown final-squad boss type "${type}".`);
+      const bearing = (index / squad.length) * Math.PI * 2 + (random() - 0.5) * 0.28;
+      let position = null;
+      let fallback = null;
+      for (let attempt = 0; attempt < 24; attempt += 1) {
+        const distance = 560 - attempt * 22;
+        const angle = bearing + (attempt % 2 ? 1 : -1) * Math.floor(attempt / 2) * 0.16;
+        const x = Math.max(boss.radius + 20, Math.min(world.width - boss.radius - 20, player.x + Math.cos(angle) * distance));
+        const y = Math.max(boss.radius + 20, Math.min(world.height - boss.radius - 20, player.y + Math.sin(angle) * distance));
+        if (!circleIntersectsObstacle(x, y, boss.radius + 8)) {
+          position = { x, y };
+          break;
+        }
+        if (!fallback) fallback = { x, y };
+      }
+      const spot = position ?? fallback;
+      created.push(placeBoss(boss, spot.x, spot.y));
+    });
+    return created;
   }
 
   function burst(x, y, color) {
@@ -377,7 +417,11 @@ export function createEnemies({
       enemy.destroyed = true;
       state.score += enemy.score;
       state.kills += 1;
-      if (enemy.boss) state.bossDefeated = true;
+      if (enemy.boss) {
+        // The extraction opens when the *last* champion falls: a squad stage is
+        // over once all of its bosses are down, not after the first one.
+        state.bossDefeated = state.bosses.every((unit) => unit.destroyed);
+      }
       dropLoot(enemy);
       burst(enemy.x, enemy.y, enemy.deathBurst);
       playTone(125, 0.12, "triangle", 0.03);
@@ -610,5 +654,5 @@ export function createEnemies({
     }
   }
 
-  return { resolveInfantryCollision, spawnFormation, spawnBoss, burst, dust, addMeleeEffect, damageEnemy, updateUnits, separateEnemies };
+  return { resolveInfantryCollision, spawnFormation, spawnBoss, spawnBossSquad, burst, dust, addMeleeEffect, damageEnemy, updateUnits, separateEnemies };
 }

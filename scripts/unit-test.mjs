@@ -51,6 +51,15 @@ import { createInfoPanel, itemInfo } from "../src/ui/shop-info.js";
 import { prologueLines } from "../src/ui/prologue.js";
 import { setLocale, translate } from "../src/i18n/index.js";
 import { defaultLocale, hasTranslation, registerLocale, supportedLocales, translator } from "../src/i18n/locales.js";
+import { createStorage, localStorageDriver } from "../src/platform/storage.js";
+import { launchQuery } from "../src/platform/launch.js";
+import { pickFinalStage } from "../src/game/stages.js";
+import {
+  VICTORY_LOCK_KEY, VICTORY_LOCK_MINUTES, VICTORY_LOCK_MS, createVictoryLock, parseVictoryRecord,
+} from "../src/game/victory-lock.js";
+import { countdownLabel, lockWindowLabel, stageLabel } from "../src/ui/labels.js";
+import zhCN from "../src/assets/i18n/zh-CN.json" with { type: "json" };
+import en from "../src/assets/i18n/en.json" with { type: "json" };
 
 let passed = 0;
 function test(name, run) {
@@ -1549,6 +1558,9 @@ function formationRig({ sight = { on: true }, seed = 11, obstacles = [], terrain
     enemies: [], particles: [], drops: [], footCompanions: [], formations: [],
     formationsSpawned: 0, wave: 1, elapsed: 0, mode: "running", score: 0, kills: 0,
     bloodStains: [], meleeEffects: [], bullets: [], groundArrows: [], shake: 0,
+    // The champion roster: `spawnBoss`/`spawnBossSquad` fill it, and the squad
+    // stage reads it back to decide when the battle is won.
+    bosses: [], bossStage: false, bossDefeated: false, finalBattle: false,
   };
   const player = {
     x: world.width / 2, y: world.height / 2, radius: 17, mode: "chariot", angle: 0, speed: 0,
@@ -2132,7 +2144,7 @@ test("a boss that has not seen the player still has a finite facing", () => {
   rig.sight.on = false;
   rig.enemies.spawnBoss();
   for (let frame = 0; frame < 5; frame += 1) rig.enemies.updateUnits(1 / 60);
-  const boss = rig.state.boss;
+  const boss = rig.state.bosses[0];
   // `spawnBoss` never set `wanderAngle`, so the idle branch stored `undefined`
   // in `angle` and every later transform was NaN.
   assert.ok(Number.isFinite(boss.angle), `boss angle became ${boss.angle}`);
@@ -2843,14 +2855,14 @@ test("the prologue is five lines, and only the story around the name is translat
   const identity = createPlayerIdentity(createSeededRandom(7));
   const zh = translator("zh-CN");
   const en = translator("en");
-  const lines = prologueLines(identity, zh);
+  const lines = prologueLines(identity, 0, zh);
   assert.deepEqual(lines.map((line) => line.slot), ["birth", "name", "clan", "given", "ambition"]);
   assert.equal(lines[1].text, zh("prologue.name", { name: identity.fullName }));
   assert.equal(lines[2].text, zh(identity.clanReasonKey));
   assert.equal(lines[3].text, zh(identity.givenReasonKey));
 
   // The name is data, not copy: the English story carries the same characters.
-  const english = prologueLines(identity, en);
+  const english = prologueLines(identity, 0, en);
   assert.ok(english[1].text.includes(identity.fullName), "the English story lost the name");
   assert.notEqual(english[1].text, lines[1].text, "the English story was not translated");
   for (const line of english) {
@@ -2862,7 +2874,7 @@ test("the prologue is five lines, and only the story around the name is translat
 test("the prologue card declares every line the story writes", () => {
   const html = readFileSync(new URL("../index.html", import.meta.url), "utf8");
   for (const id of ["prologue-name", "prologue-birth", "prologue-name-line", "prologue-clan",
-    "prologue-given", "prologue-ambition", "prologue-start"]) {
+    "prologue-given", "prologue-ambition", "prologue-final", "prologue-start"]) {
     assert.ok(html.includes(`id="${id}"`), `index.html is missing #${id}`);
   }
   // The card is hidden in the markup: it must not flash before the first run
@@ -2926,4 +2938,396 @@ test("a missing key falls back to the key itself instead of a blank string", () 
   assert.equal(translator(defaultLocale)("no.such.key"), "no.such.key");
 });
 
+console.log("[unit] storage facade");
+
+// A driver is three functions, so a test driver is a Map with a wrapper. The
+// facade's own job is the caching and the "never throw at the game" contract.
+function memoryStorage(seed = {}) {
+  const values = new Map(Object.entries(seed));
+  const storage = createStorage({
+    driver: {
+      read: (key) => (values.has(key) ? values.get(key) : null),
+      write: (key, value) => values.set(key, value),
+      erase: (key) => values.delete(key),
+    },
+    onError: () => {},
+  });
+  return { values, storage };
+}
+
+test("a driver that throws cannot stop the game from reading or writing", () => {
+  const errors = [];
+  const broken = (action) => () => {
+    throw new Error(`${action} failed`);
+  };
+  const storage = createStorage({
+    driver: { read: broken("read"), write: broken("write"), erase: broken("erase") },
+    onError: (action, key) => errors.push(`${action}:${key}`),
+  });
+  assert.equal(storage.get("missing"), null, "a failed read is a missing value");
+  assert.equal(storage.get("missing", 7), 7, "and it still answers the fallback");
+  storage.set("k", { a: 1 });
+  assert.deepEqual(storage.get("k"), { a: 1 }, "the cache keeps the value the driver could not");
+  storage.remove("k");
+  assert.equal(storage.get("k"), null, "a failed erase still forgets the value");
+  // The second read of "missing" and of "k" are answered by the cache, so each
+  // failure is reported once — the point is that every one of them is reported
+  // with the action and the key, and that none of them escapes to the caller.
+  assert.deepEqual(errors, ["read:missing", "write:k", "erase:k", "read:k"],
+    "every failure is reported once, with the action and the key");
+});
+
+test("the facade writes through and re-reads after an invalidate", () => {
+  const { values, storage } = memoryStorage();
+  storage.set("chariot-wars.test", "one");
+  assert.equal(values.get("chariot-wars.test"), "one", "the driver was written through");
+  // Somebody else writes the same key: the cache has to be told to look again.
+  values.set("chariot-wars.test", "two");
+  assert.equal(storage.get("chariot-wars.test"), "one", "the cache answers first");
+  storage.invalidate("chariot-wars.test");
+  assert.equal(storage.get("chariot-wars.test"), "two", "invalidate re-hits the driver");
+  storage.remove("chariot-wars.test");
+  assert.equal(values.has("chariot-wars.test"), false, "remove reaches the driver");
+});
+
+test("a driver that fetches over the network feeds the cache instead", () => {
+  // The shape a web-service driver will have: it cannot answer synchronously, so
+  // it hands the facade what it fetched and the game keeps reading from there.
+  const remote = { "chariot-wars.locale": "en" };
+  const storage = createStorage({
+    driver: {
+      read: (key) => remote[key] ?? null,
+      write: (key, value) => { remote[key] = value; },
+      erase: (key) => { delete remote[key]; },
+    },
+    onError: () => {},
+  });
+  storage.hydrate({ "chariot-wars.locale": "zh-CN" });
+  assert.equal(storage.get("chariot-wars.locale"), "zh-CN", "hydrate wins until invalidated");
+  storage.invalidate();
+  assert.equal(storage.get("chariot-wars.locale"), "en", "an invalidate falls back to the driver");
+  storage.set("chariot-wars.victory.v1", { wonAt: 1 });
+  assert.deepEqual(storage.snapshot(), {
+    "chariot-wars.locale": "en", "chariot-wars.victory.v1": { wonAt: 1 },
+  }, "the snapshot is what such a driver uploads");
+});
+
+// The shipped driver is the one piece of the facade that talks to the platform,
+// and the H5 platform stores UTF-16 strings only: a payload becomes JSON text on
+// the way in and the reader parses it back.
+test("the browser driver stores JSON text and forgets a removed key", () => {
+  const previous = globalThis.window.localStorage;
+  const values = new Map();
+  globalThis.window.localStorage = {
+    getItem: (key) => (values.has(key) ? values.get(key) : null),
+    setItem: (key, value) => values.set(key, String(value)),
+    removeItem: (key) => values.delete(key),
+  };
+  try {
+    const storage = createStorage({ driver: localStorageDriver });
+    storage.set("chariot-wars.victory.v1", { wonAt: 5, name: "子車黑" });
+    assert.equal(typeof values.get("chariot-wars.victory.v1"), "string", "localStorage only holds strings");
+    assert.deepEqual(JSON.parse(values.get("chariot-wars.victory.v1")), { wonAt: 5, name: "子車黑" });
+    storage.invalidate();
+    assert.deepEqual(parseVictoryRecord(storage.get("chariot-wars.victory.v1")), {
+      wonAt: 5, name: "子車黑", stage: 0, score: 0,
+    }, "a fresh read is the same record");
+    storage.remove("chariot-wars.victory.v1");
+    assert.equal(values.has("chariot-wars.victory.v1"), false, "removal reaches the store");
+  } finally {
+    globalThis.window.localStorage = previous;
+  }
+});
+
+test("a host that refuses storage unlocks the campaign instead of failing", () => {
+  const previous = globalThis.window;
+  // `localStorage` raises on a `file:` origin and in a browser that blocks site
+  // data; the driver must degrade to "no stored value" rather than throw at boot.
+  globalThis.window = {};
+  Object.defineProperty(globalThis.window, "localStorage", {
+    get() { throw new Error("SecurityError: storage is blocked"); },
+  });
+  try {
+    const storage = createStorage({ driver: localStorageDriver, onError: () => {} });
+    assert.equal(storage.get(VICTORY_LOCK_KEY), null, "a blocked store reads as empty");
+    storage.set(VICTORY_LOCK_KEY, { wonAt: 1 });
+    storage.remove(VICTORY_LOCK_KEY);
+    const lock = createVictoryLock({ storage });
+    assert.equal(lock.remainingMs(), 0, "and the campaign is not locked");
+    assert.equal(lock.releaseIfExpired(), true);
+  } finally {
+    globalThis.window = previous;
+  }
+});
+
+
+console.log("[unit] the rest after a victory");
+
+test("the rest is measured in whole minutes of one window", () => {
+  assert.ok(Number.isInteger(VICTORY_LOCK_MINUTES) && VICTORY_LOCK_MINUTES > 0,
+    `the window must be a positive whole number of minutes, got ${VICTORY_LOCK_MINUTES}`);
+  assert.equal(VICTORY_LOCK_MS, VICTORY_LOCK_MINUTES * 60 * 1000,
+    "milliseconds are derived, so one edit moves both");
+  assert.equal(lockWindowLabel(), countdownLabel(VICTORY_LOCK_MS),
+    "the card quotes the same window the gate enforces");
+});
+
+test("a victory locks the campaign for exactly one window", () => {
+  const { values, storage } = memoryStorage();
+  let now = 1_000_000;
+  const lock = createVictoryLock({ storage, now: () => now, windowMs: 60_000 });
+  assert.equal(lock.remainingMs(), 0, "no record means no rest");
+  assert.equal(lock.releaseIfExpired(), true, "and a run may start");
+
+  assert.equal(lock.lock({ name: "子車黑", stage: 13, score: 9600 }), true);
+  assert.deepEqual(values.get(VICTORY_LOCK_KEY), {
+    v: 1, wonAt: 1_000_000, name: "子車黑", stage: 13, score: 9600,
+  }, "the payload is the documented one, under the documented key");
+  assert.equal(lock.remainingMs(), 60_000);
+  assert.equal(lock.releaseIfExpired(), false, "the window is live");
+
+  now += 59_999;
+  assert.equal(lock.releaseIfExpired(), false, "one millisecond short is still locked");
+  now += 1;
+  assert.equal(lock.remainingMs(), 0, "the window ends on the millisecond");
+  assert.equal(lock.releaseIfExpired(), true, "and the campaign opens again");
+  assert.equal(values.has(VICTORY_LOCK_KEY), false, "the spent record is deleted, not kept");
+});
+
+test("a second victory inside the window does not extend it", () => {
+  const { values, storage } = memoryStorage();
+  let now = 1_000_000;
+  const lock = createVictoryLock({ storage, now: () => now, windowMs: 60_000 });
+  lock.lock({ name: "甲", stage: 10, score: 1 });
+  now += 30_000;
+  assert.equal(lock.lock({ name: "乙", stage: 11, score: 2 }), false, "a live window refuses the write");
+  assert.equal(values.get(VICTORY_LOCK_KEY).wonAt, 1_000_000, "the first victory keeps its timestamp");
+  assert.equal(values.get(VICTORY_LOCK_KEY).name, "甲", "and its run");
+  assert.equal(lock.remainingMs(), 30_000, "so the wait is the remainder, not a fresh window");
+});
+
+test("a corrupt or impossible record unlocks the campaign", () => {
+  for (const raw of ["", "nope", "{oops", "[]", "null", "{}", { wonAt: 0 }, { wonAt: -5 },
+    { wonAt: "later" }, { wonAt: null }, { wonAt: Number.NaN }]) {
+    assert.equal(parseVictoryRecord(raw), null, `${JSON.stringify(raw)} must not parse`);
+    const { storage } = memoryStorage({ [VICTORY_LOCK_KEY]: raw });
+    const lock = createVictoryLock({ storage, now: () => 5_000_000, windowMs: 60_000 });
+    assert.equal(lock.remainingMs(), 0, `${JSON.stringify(raw)} must not lock`);
+    assert.equal(lock.releaseIfExpired(), true, `${JSON.stringify(raw)} must not throw`);
+  }
+  // The same payload as text, which is how the browser hands it back.
+  assert.deepEqual(parseVictoryRecord(JSON.stringify({
+    wonAt: 12, name: "子車黑", stage: 12, score: 2400,
+  })), { wonAt: 12, name: "子車黑", stage: 12, score: 2400 });
+  assert.deepEqual(parseVictoryRecord({ wonAt: "12" }), {
+    wonAt: 12, name: "", stage: 0, score: 0,
+  }, "a record with no name still parses, its extra fields defaulted");
+});
+
+test("a record dated in the future is a moved clock, not a life sentence", () => {
+  // A clock set back by a minute or two is treated as noise: the window restarts.
+  const noise = memoryStorage({ [VICTORY_LOCK_KEY]: { wonAt: 1_030_000 } });
+  const noisy = createVictoryLock({ storage: noise.storage, now: () => 1_000_000, windowMs: 60_000 });
+  assert.equal(noisy.remainingMs(), 60_000, "a small skew still locks, from the whole window");
+
+  // A record a week in the future is not a victory this device could have won.
+  const forged = memoryStorage({ [VICTORY_LOCK_KEY]: { wonAt: 1_000_000 + 7 * 24 * 3600 * 1000 } });
+  const forgedLock = createVictoryLock({ storage: forged.storage, now: () => 1_000_000, windowMs: 60_000 });
+  assert.equal(forgedLock.remainingMs(), 0, "an impossible record is ignored");
+  assert.equal(forgedLock.releaseIfExpired(), true, "and the campaign opens");
+});
+
+test("the countdown names hours above an hour and seconds below it", () => {
+  assert.equal(countdownLabel(60_000), translate("menu.timeMinutes", { minutes: 1 }), "a whole minute");
+  assert.equal(countdownLabel(45_000), translate("menu.timeSecondsOnly", { seconds: 45 }),
+    "seconds only");
+  assert.equal(countdownLabel(100_000), translate("menu.timeSeconds", { minutes: 1, seconds: 40 }));
+  assert.equal(countdownLabel(VICTORY_LOCK_MS), translate("menu.timeMinutes", {
+    minutes: VICTORY_LOCK_MINUTES,
+  }), "the shipped window, as the card prints it");
+  assert.equal(countdownLabel(24 * 3600 * 1000), translate("menu.timeHoursOnly", { hours: 24 }),
+    "a day is a day, not 24h 0m");
+  assert.equal(countdownLabel(3_660_000), translate("menu.timeHours", { hours: 1, minutes: 1 }));
+  assert.equal(countdownLabel(1), translate("menu.timeSecondsOnly", { seconds: 1 }),
+    "the last second still reads as a second");
+});
+
+test("the ending and the rest exist in both locales, placeholders included", () => {
+  const slots = (text) => [...String(text).matchAll(/\{(\w+)\}/g)].map((match) => match[1]).sort();
+  const tables = { "zh-CN": zhCN, en };
+  for (const key of [
+    "battle.finalStage", "battle.bossSquad", "battle.bossSquadBanner", "battle.finalWarning",
+    "victory.eyebrow", "victory.title", "victory.subtitle", "victory.stats",
+    "victory.lockNote", "victory.return",
+    "menu.locked", "menu.lockedLast",
+    "menu.timeHours", "menu.timeHoursOnly", "menu.timeMinutes", "menu.timeSeconds",
+    "menu.timeSecondsOnly", "prologue.final",
+  ]) {
+    const zh = tables["zh-CN"][key];
+    const english = tables.en[key];
+    assert.ok(zh && english, `missing translation: ${key}`);
+    assert.deepEqual(slots(zh), slots(english), `placeholder mismatch in ${key}`);
+  }
+  // The countdown never renders a raw number where a unit belongs: every branch
+  // carries its own suffix, so the label reads the same in a screenshot and in a
+  // log line.
+  for (const key of ["menu.timeHours", "menu.timeHoursOnly", "menu.timeMinutes",
+    "menu.timeSeconds", "menu.timeSecondsOnly"]) {
+    assert.ok(/[时h]|[分m]|[秒s]/.test(tables.en[key]), `${key} has no unit`);
+  }
+});
+
+console.log("[unit] the last stage");
+
+test("the last stage is drawn from the rule range and only from it", () => {
+  assert.equal(pickFinalStage(() => 0), campaignRules.finalStageMin);
+  assert.equal(pickFinalStage(() => 0.999999),
+    campaignRules.finalStageMin + campaignRules.finalStageSpan - 1);
+  const seen = new Set();
+  const random = createSeededRandom(createRandomSeed(7));
+  for (let run = 0; run < 200; run += 1) {
+    const stage = pickFinalStage(random);
+    assert.ok(stage >= campaignRules.finalStageMin
+      && stage < campaignRules.finalStageMin + campaignRules.finalStageSpan, `stage ${stage}`);
+    seen.add(stage);
+  }
+  // Every stage in the range turns up in 200 runs: a short campaign must be as
+  // reachable as a long one.
+  assert.equal(seen.size, campaignRules.finalStageSpan, `only ${[...seen].join("/")} were drawn`);
+  // The same seed draws the same last stage, so `?seed=` still pins a run.
+  assert.equal(
+    pickFinalStage(createSeededRandom(createRandomSeed(7))),
+    pickFinalStage(createSeededRandom(createRandomSeed(7))),
+  );
+});
+
+test("the squad table is eight champions and a fixed 784 HP", () => {
+  const squad = campaignRules.finalSquad;
+  assert.equal(squad.length, 8);
+  const counts = {};
+  let health = 0;
+  for (const type of squad) {
+    const row = bossTypes.find((boss) => boss.type === type);
+    assert.ok(row, `the squad names a real champion type (${type})`);
+    counts[type] = (counts[type] ?? 0) + 1;
+    health += row.health;
+  }
+  assert.deepEqual(counts, { elephant: 2, lion: 2, catapult: 4 },
+    "two elephants to break the line, two lions to chase, four catapults to bombard");
+  // The weight follows this build's champion table (2 x 204 + 2 x 78 + 4 x 55),
+  // so a retune of any row has to be looked at with the squad in hand: the HUD
+  // prints the sum, and eight champions that melt are not the last battle.
+  assert.equal(health, 784, "the HUD's total is what the rule table adds up to");
+  assert.ok(campaignRules.finalStageEnemyLimit >= squad.length + 6,
+    "the enemy cap has to leave room for a formation behind the squad");
+});
+
+test("a squad is only beaten when its last champion falls", () => {
+  const rig = formationRig();
+  const squad = rig.enemies.spawnBossSquad();
+  assert.equal(squad.length, 8, "the squad is spawned whole");
+  assert.equal(rig.state.bosses.length, 8, "every champion joins the roster");
+  assert.equal(rig.state.enemies.length, 8, "and the battlefield");
+  for (const boss of squad.slice(0, -1)) rig.enemies.damageEnemy(boss, 1e6, "sword");
+  assert.equal(rig.state.bossDefeated, false, "seven of eight is not a victory");
+  assert.equal(rig.state.bosses.filter((boss) => boss.destroyed).length, 7);
+  rig.enemies.damageEnemy(squad[7], 1e6, "sword");
+  assert.equal(rig.state.bossDefeated, true, "the last champion ends the squad");
+  // The roster keeps the fallen, because the HUD still totals the whole squad.
+  assert.equal(rig.state.bosses.length, 8);
+  assert.equal(rig.state.bosses.filter((boss) => boss.destroyed).length, 8);
+});
+
+test("a squad is placed around the player, one bearing each", () => {
+  const rig = formationRig();
+  const squad = rig.enemies.spawnBossSquad();
+  const spots = new Set(squad.map((boss) => `${Math.round(boss.x)},${Math.round(boss.y)}`));
+  assert.equal(spots.size, 8, "no two champions share a spot");
+  // The rig's field is empty, so every champion lands on the first candidate:
+  // one ring, one radius. When the ground is blocked the walk closes the radius
+  // instead, which is why this asserts equality and not an exact constant.
+  const distances = squad.map((boss) => Math.hypot(boss.x - rig.player.x, boss.y - rig.player.y));
+  assert.ok(distances.every((distance) => distance > 400 && distance <= 640),
+    `champions open at ${distances.map((d) => d.toFixed(0)).join("/")}px`);
+  assert.ok(distances.every((distance) => Math.abs(distance - distances[0]) < 1),
+    "an unblocked squad opens on a single ring");
+  for (const boss of squad) {
+    assert.ok(Number.isFinite(boss.x) && Number.isFinite(boss.y),
+      `${boss.type} at ${boss.x},${boss.y}`);
+    assert.ok(boss.x >= 0 && boss.x <= arena.width, `x ${boss.x} left the field`);
+    assert.ok(boss.y >= 0 && boss.y <= arena.height, `y ${boss.y} left the field`);
+    assert.ok(boss.boss === true && boss.maxHealth === boss.health, "a squad member is a boss");
+  }
+  // One champion per bearing, so the fight does not open from two sides only.
+  const bearings = squad.map((boss) => Math.atan2(boss.y - rig.player.y, boss.x - rig.player.x));
+  const spread = Math.max(...bearings) - Math.min(...bearings);
+  assert.ok(spread > Math.PI, `the squad must ring the player, spread ${spread.toFixed(2)}rad`);
+});
+
+test("the stage box names the last battle instead of numbering it", () => {
+  const zh = translator("zh-CN");
+  const english = translator("en");
+  assert.equal(stageLabel({ stage: 4 }, { finalBattle: false }, zh), "04", "a numbered stage is padded");
+  assert.equal(stageLabel({ stage: 12 }, { finalBattle: false }, zh), "12");
+  assert.equal(stageLabel({ stage: 12 }, { finalBattle: true }, zh), zh("battle.finalStage"),
+    "the last battle is named");
+  assert.notEqual(stageLabel({ stage: 12 }, { finalBattle: true }, zh), "12");
+  assert.equal(stageLabel({ stage: 12 }, { finalBattle: true }, english), "FINAL",
+    "the English readout is the word the stat box was sized for");
+  // A state object that predates the flag (or a campaign that has not rolled a
+  // last stage yet) must not read as the last battle.
+  assert.equal(stageLabel({ stage: 3 }, {}, zh), "03");
+  assert.equal(stageLabel({ stage: 3 }, null, zh), "03");
+});
+
+test("the story card grows a sixth line that names the last stage", () => {
+  const identity = createPlayerIdentity(createSeededRandom(createRandomSeed(11)));
+  const five = prologueLines(identity);
+  assert.equal(five.length, 5, "a card with no known ending stays five lines");
+  const six = prologueLines(identity, 12);
+  assert.equal(six.length, 6);
+  assert.equal(six[5].slot, "final");
+  assert.ok(six[5].text.includes("12"), `the line names the stage, got "${six[5].text}"`);
+  assert.ok(six.slice(0, 5).every((line, index) => line.text === five[index].text),
+    "the ending is appended, not woven into the story");
+  assert.equal(prologueLines(null, 12).length, 0, "no identity, no card");
+});
+
+test("index.html carries the victory card and the resting card", () => {
+  const html = readFileSync(new URL("../index.html", import.meta.url), "utf8");
+  for (const id of ["victory-screen", "victory-eyebrow", "victory-title", "victory-subtitle",
+    "victory-stats", "victory-note", "victory-return", "menu-lock", "menu-lock-title",
+    "menu-lock-detail"]) {
+    assert.ok(html.includes(`id="${id}"`), `index.html is missing #${id}`);
+  }
+  // Both cards are hidden in the markup: neither may flash before a run has
+  // earned it, and the victory card must not cover the menu at boot.
+  const victoryTag = html.match(/<div[^>]*id="victory-screen"[^>]*>/)?.[0] ?? "";
+  assert.ok(victoryTag.includes("hidden"), `the victory card is not hidden at boot: ${victoryTag}`);
+  assert.match(html, /id="menu-lock"[^>]*hidden/, "the resting card is not hidden at boot");
+});
+
+test("?reset=1 reaches the launch query, and a bare launch is empty", () => {
+  const previous = globalThis.location;
+  try {
+    globalThis.location = { search: "?seed=7&reset=1" };
+    assert.deepEqual(launchQuery(), { seed: "7", reset: "1" }, "both switches are read");
+    globalThis.location = { search: "?seed=7" };
+    assert.deepEqual(launchQuery(), { seed: "7" }, "no reset means no key to act on");
+    globalThis.location = { search: "" };
+    assert.deepEqual(launchQuery(), {}, "a plain launch says nothing");
+  } finally {
+    globalThis.location = previous;
+  }
+  // The game is untouched by a host with no URL: it boots with a random seed.
+  const previousWindow = globalThis.window;
+  globalThis.window = {};
+  try {
+    assert.deepEqual(launchQuery(), {}, "a host without a URL still boots");
+  } finally {
+    globalThis.window = previousWindow;
+  }
+});
+
 console.log(`\n[unit] PASS (${passed} checks)`);
+
