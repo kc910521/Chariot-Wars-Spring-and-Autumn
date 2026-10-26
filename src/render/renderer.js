@@ -1,10 +1,17 @@
 import { translate } from "../i18n/index.js";
+import { calculateChariotKit } from "../data/equipment.js";
 import { effectRules } from "../data/rules.js";
 import { cloudDrift, elementCullMargin } from "../game/elements.js";
 import { createElementRenderer } from "./elements.js";
 import { createSpriteArt, spritePalette } from "./sprites.js";
 
-export function createRenderer({ canvas, context, view, camera, world, player, state, getObstacles, getTerrain, getClouds, getHorseCount, getRoster }) {
+export function createRenderer({
+  canvas, context, view, camera, world, player, state,
+  getObstacles, getTerrain, getClouds, getHorseCount, getRoster,
+  // Optional so a harness can build a renderer with no campaign behind it: the
+  // chassis then falls back to the stock rig and the field shows no stumps.
+  getEquipment = () => null, getStumps = () => [],
+}) {
   // Obstacles, terrain patches and clouds are catalog art (src/render/elements.js):
   // the renderer keeps the camera and the culling, the element layer keeps the
   // silhouettes and their palettes.
@@ -185,6 +192,10 @@ export function createRenderer({ canvas, context, view, camera, world, player, s
     } else if (kind === "chariot") {
       // Same painter as the shop's rig preview: horse team, crew dots and flag
       // all come from campaign state, never from a second copy of the art.
+      // The player's bought chassis (crossbow rack, box, axle blades) is derived
+      // from the equipment levels once per frame; an enemy chariot buys nothing and
+      // keeps the stock deck, because its kit comes from `visual.overlays`.
+      const kit = isPlayer ? calculateChariotKit(getEquipment() ?? {}) : null;
       sprites.drawChariotRig({
         robeColor: isPlayer ? spritePalette.playerRobe : unit.visual.robe,
         horseCount: isPlayer ? getHorseCount() : 1,
@@ -192,6 +203,9 @@ export function createRenderer({ canvas, context, view, camera, world, player, s
         crew: isPlayer ? getRoster().filter((member) => member.alive !== false) : [],
         overlays: isPlayer ? [] : unit.visual?.overlays ?? [],
         banner: isPlayer ? spritePalette.playerBanner : spritePalette.enemyBanner,
+        crossbows: kit?.crossbows ?? 0,
+        bodyScale: kit?.bodyScale ?? 1,
+        bladeLength: kit?.bladeLength ?? 0,
       });
     } else {
       sprites.drawFootFigure({
@@ -349,9 +363,16 @@ export function createRenderer({ canvas, context, view, camera, world, player, s
       context.restore();
     }
 
+    // Stumps sit under everything that moves: a felled tree leaves scenery, and the
+    // chariot that cut it down drives straight over the top of it.
+    for (const stump of getStumps()) {
+      if (!inView(stump.x, stump.y, stump.radius * 2.4)) continue;
+      elements.drawStump(stump);
+    }
+
     for (const obstacle of getObstacles()) {
       if (!inView(obstacle.x, obstacle.y, elementCullMargin(obstacle))) continue;
-      elements.drawObstacle(obstacle);
+      elements.drawObstacle(obstacle, state.elapsed);
     }
 
     for (const arrow of state.groundArrows) {

@@ -1,4 +1,4 @@
-import { chariotRules } from "./rules.js";
+import { chariotArtRules, chariotRules } from "./rules.js";
 
 export const equipment = [
   {
@@ -129,3 +129,28 @@ export function getPlayerArrowCount(equipmentLevels) {
     .slice(0, equipmentLevels.weaponRack)
     .reduce((count, level) => count + level.additionalArrows, 0);
 }
+
+// What the shared chariot art needs to know about the campaign's purchases: the
+// crossbows on the deck, how much the hull grew, and how far the axle blades
+// reach. Read by the battlefield renderer and by the shop's rig preview, so the
+// dossier shows the carriage the next battle will actually drive.
+export function calculateChariotKit(equipmentLevels) {
+  return {
+    // One crossbow rides the stock deck, and the rack grows with the very
+    // purchase that adds bolts to a volley - the art can never promise a shot the
+    // damage table refuses.
+    crossbows: getPlayerArrowCount(equipmentLevels),
+    bodyScale: 1 + chariotArtRules.bodyGrowthPerLevel * (equipmentLevels.chariotBox ?? 0),
+    bladeLength: chariotArtRules.bladeLengths[equipmentLevels.axleCap ?? 0] ?? 0,
+  };
+}
+
+// The one purchase that changes a rule instead of a pixel: a maxed axle cap cuts
+// a tree down at full speed instead of costing the hull points. The renderer
+// draws its blades from the same table, so the promise the art makes is the rule
+// that runs.
+export function hasMaxedAxleCap(equipmentLevels) {
+  const axleCap = equipment.find((item) => item.id === "axleCap");
+  return (equipmentLevels.axleCap ?? 0) >= axleCap.levels.length;
+}
+

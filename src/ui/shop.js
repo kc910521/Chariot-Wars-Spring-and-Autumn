@@ -110,7 +110,7 @@ export function renderShop({
   // The dossier follows the campaign; every hover then re-targets it. `update`
   // clears a stale preview, so a card that lost the pointer mid-click cannot
   // leave the rig showing a team the player never bought.
-  scene?.update({ horseCount, crew: roster });
+  scene?.update({ horseCount, crew: roster, levels: equipmentLevels });
   if (rigCaptionElement) {
     rigCaptionElement.textContent = translate("shop.rig.caption", {
       horses: horseCount,
@@ -131,7 +131,11 @@ export function renderShop({
     const levels = preview?.levels ?? equipmentLevels;
     const horsesOwned = preview?.horses ?? horseCount;
     radar.update(current, calculateChariotStats(levels, horsesOwned));
-    scene?.preview(preview ? { horseCount: horsesOwned, crew: preview.crew ?? roster } : null);
+    scene?.preview(preview ? {
+      horseCount: horsesOwned,
+      crew: preview.crew ?? roster,
+      levels,
+    } : null);
   }
 
   previewStats();

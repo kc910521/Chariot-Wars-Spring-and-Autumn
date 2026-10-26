@@ -197,7 +197,7 @@
   "equipment.shaftWheelRim.name": "轴与轮辋",
   "equipment.shaftWheelRim.description": "提高机动，增加战车速度与转向响应；每级另增加 2 点冲撞伤害。",
   "equipment.axleCap.name": "轴帽",
-  "equipment.axleCap.description": "提高稳定，增加战车最大耐久。",
+  "equipment.axleCap.description": "提高稳定，增加战车最大耐久；车轮随之装上旋刃，刃长逐级增加。升满后可全速撞倒树木，撞树不再损失耐久，只留下树桩。",
   "equipment.chariotBox.name": "车箱",
   "equipment.chariotBox.description": "容量仅用于显示；升级车箱可增加弓手与戟士的名额。",
   "horse.description": "增加机动与可见战马数量；机动影响速度和转向，不增加单次冲撞伤害。",

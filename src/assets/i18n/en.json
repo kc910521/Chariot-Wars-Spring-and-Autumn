@@ -197,7 +197,7 @@
   "equipment.shaftWheelRim.name": "Shaft & Wheel Rim",
   "equipment.shaftWheelRim.description": "Improves mobility, speed, and steering; each level also adds 2 collision damage.",
   "equipment.axleCap.name": "Axle Cap",
-  "equipment.axleCap.description": "Improves stability and increases maximum chariot health.",
+  "equipment.axleCap.description": "Improves stability and increases maximum chariot health. Each level fits longer blades to the wheels; at max level a full-speed run fells a tree instead of costing hull points, leaving only a stump.",
   "equipment.chariotBox.name": "Chariot Box",
   "equipment.chariotBox.description": "Capacity is display-only; upgrades add slots for archers and halberdiers.",
   "horse.description": "Adds mobility and visible horses. Mobility affects speed and steering, not collision damage.",

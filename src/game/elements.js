@@ -67,6 +67,34 @@ export function elementGap(first, second) {
     - elementBoundingRadius(first) - elementBoundingRadius(second);
 }
 
+// --- felling -----------------------------------------------------------------
+// A fellable row can leave the field for good, which only the axles can do (see
+// the axleCap rules). Whether a type can be felled at all is a data column, so
+// the axes never compare a type string.
+
+export function isFellable(element) {
+  return obstacleRow(element)?.fellable === true;
+}
+
+// Cut a tree down: it leaves `campaign.obstacles` and a stump takes its place in
+// `campaign.stumps`. Both are replaced, never spliced in place - the collision
+// system keys its sight index on the obstacle list's identity and length, so a new
+// array is exactly what makes the rebuilt index correct without a notification.
+// The stump is scenery: it is not an obstacle, so nothing collides with it and no
+// sight ray stops on it.
+export function fellTree(campaign, tree) {
+  campaign.obstacles = campaign.obstacles.filter((obstacle) => obstacle !== tree);
+  campaign.stumps = [...(campaign.stumps ?? []), {
+    x: tree.x,
+    y: tree.y,
+    // A stump is much smaller than the crown it carried: the root ball and the
+    // sawn face, not the thing you used to drive around.
+    radius: Math.max(5, (tree.radius ?? elementBoundingRadius(tree)) * 0.34),
+    rotation: (tree.x * 0.017 + tree.y * 0.031) % Math.PI,
+  }];
+  return campaign.stumps[campaign.stumps.length - 1];
+}
+
 // Movement cost at a point. Overlapping patches resolve through the row's
 // `combine` column: `min` keeps the worst ground underfoot (the default), and
 // `multiply` compounds instead.

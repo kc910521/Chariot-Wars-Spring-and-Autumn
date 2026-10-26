@@ -72,9 +72,15 @@ export const obstacleKinds = deepFreeze({
     shape: "circle",
     blocksMovement: true,
     blocksSight: true,
+    // A maxed axle cap cuts this row down instead of shaking it: see
+    // hasMaxedAxleCap() and fellTree().
+    fellable: true,
     weight: 0.42,
     rejectExisting: true,
     size: { radius: [22, 40] },
+    // Dalbergia hupeana (黄檀): a light, open crown of pinnate leaf sprays on a
+    // slim forked trunk, not a solid canopy ball - a stand of these still reads as
+    // trees at this pixel size without painting one flat green mass.
     visual: {
       kind: "canopy",
       trunk: ["#9a7546", "#62452e", "#332a20"],
@@ -88,19 +94,20 @@ export const obstacleKinds = deepFreeze({
         "rgba(76, 107, 63, 0.4)",
       ],
       shadow: "rgba(43, 37, 25, 0.22)",
-      canopyEdge: "rgba(43, 61, 39, 0.28)",
-      trunkEdge: "rgba(42, 34, 24, 0.55)",
       twig: "rgba(45, 40, 29, 0.58)",
-      // Cluster rings come in two tones, picked by cluster index parity: [even, odd].
-      clusterRim: ["rgba(183, 188, 118, 0.72)", "rgba(163, 179, 111, 0.78)"],
-      clusterBody: ["rgba(83, 119, 70, 0.72)", "rgba(104, 132, 79, 0.66)"],
-      clusterFade: "rgba(49, 77, 48, 0)",
-      lobes: 14,
-      leaves: 24,
-      // Cluster rects in units of the radius: [offsetX, offsetY, width, height].
+      trunkEdge: "rgba(42, 34, 24, 0.55)",
+      // Pinnate sprays: each anchor in `clusters` grows one stem with `leaflets`
+      // leaflets, sized as a share of the crown radius.
+      leaflets: 6,
+      leafletScale: 0.075,
+      // Ambient sway, in radians at the crown, and its rate. A tree that never
+      // moves reads as a backdrop decal; this is just enough to keep it alive.
+      sway: 0.045,
+      swayRate: 1.15,
+      // Spray anchors in units of the radius: [offsetX, offsetY, stemLength].
       clusters: [
-        [-0.43, -0.26, 0.43, 0.31], [-0.12, -0.48, 0.42, 0.36], [0.29, -0.38, 0.44, 0.32],
-        [0.48, -0.02, 0.39, 0.34], [0.13, 0.22, 0.49, 0.35], [-0.34, 0.2, 0.4, 0.33],
+        [-0.43, -0.26, 0.43], [-0.12, -0.48, 0.42], [0.29, -0.38, 0.44],
+        [0.48, -0.02, 0.39], [0.13, 0.22, 0.49], [-0.34, 0.2, 0.4],
       ],
     },
   },

@@ -85,7 +85,9 @@ export function rigTransform(box, width, height, options = {}) {
 }
 
 export function rigPreview(horseCount, width, height, options = {}) {
-  const box = chariotRigBox(horseCount);
+  // `options.kit` is the campaign's chassis art: a bought box and axle blades make
+  // the rig bigger, and the fit has to follow or the preview clips them.
+  const box = chariotRigBox(horseCount, options.kit ?? null);
   return { box, ...rigTransform(box, width, height, options) };
 }
 

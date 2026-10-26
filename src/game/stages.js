@@ -80,6 +80,9 @@ export function createStageManager({
     campaign.obstacles = battlefield.obstacles;
     campaign.terrain = battlefield.terrain;
     campaign.clouds = battlefield.clouds;
+    // A stump belongs to the battlefield, not to the campaign: the next battle
+    // stands on its own ground, so the felled trees start from none.
+    campaign.stumps = [];
     resetMission();
     const finalBattle = isFinalBattle();
     state.finalBattle = finalBattle;

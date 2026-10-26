@@ -22,6 +22,13 @@ export function createCollisionSystem({ campaign, world }) {
     return obstacleList.some((obstacle) => elementIntersects(x, y, radius, obstacle));
   }
 
+  // Which element stopped a move. `circleIntersectsObstacle` only ever answers
+  // yes/no, and the impact handler needs the tree itself: to shake the one that was
+  // hit, and to fell it. Same predicate, so the two can never disagree.
+  function obstacleAt(x, y, radius, obstacleList = campaign.obstacles) {
+    return obstacleList.find((obstacle) => elementIntersects(x, y, radius, obstacle)) ?? null;
+  }
+
   // The cell bounds are the element's own extent grown by the probe radius: a
   // point that could collide with the element is always in a cell the element was
   // filed under, so the lookup is exact rather than a best guess.
@@ -112,6 +119,6 @@ export function createCollisionSystem({ campaign, world }) {
     if (!circleIntersectsObstacle(entity.x, nextY, radius)) entity.y = nextY;
   }
 
-  return { circleIntersectsObstacle, hasLineOfSight, moveEntitySafely };
+  return { circleIntersectsObstacle, hasLineOfSight, moveEntitySafely, obstacleAt };
 }
 

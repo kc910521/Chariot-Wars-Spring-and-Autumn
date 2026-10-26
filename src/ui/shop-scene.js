@@ -1,4 +1,5 @@
 import { createSpriteArt } from "../render/sprites.js";
+import { calculateChariotKit } from "../data/equipment.js";
 import { campSeats, crewBanner, crewFigure, playerRobe, projectRigBox, rigPreview } from "./shop-layout.js";
 
 // The preview runs on its own clock at 30fps. The battlefield gait is a pure
@@ -26,7 +27,7 @@ export function createShopScene({ rigCanvas, campCanvas }) {
   // `snapshot` is what the campaign owns, `preview` a hovered purchase. The
   // preview is dropped on every render, so a pointer that leaves mid-hover cannot
   // leave the dossier showing a chariot the player never bought.
-  let snapshot = { horseCount: 1, crew: [] };
+  let snapshot = { horseCount: 1, crew: [], levels: {} };
   let preview = null;
   let active = false;
   let elapsed = startTime;
@@ -49,6 +50,9 @@ export function createShopScene({ rigCanvas, campCanvas }) {
     return {
       horseCount: Math.max(1, Math.round(source.horseCount ?? snapshot.horseCount)),
       crew,
+      // The chassis the campaign has bought (or would buy, for a hover): the
+      // preview draws the same rack, box and blades the next battle will.
+      kit: calculateChariotKit(source.levels ?? snapshot.levels ?? {}),
       isPreview: preview !== null,
     };
   }
@@ -118,8 +122,8 @@ export function createShopScene({ rigCanvas, campCanvas }) {
     if (!rigArt) return;
     const view = measure(rigCanvas, rigContext);
     if (!view) return;
-    const { horseCount, crew, isPreview } = target();
-    const rig = rigPreview(horseCount, view.width, view.height);
+    const { horseCount, crew, isPreview, kit } = target();
+    const rig = rigPreview(horseCount, view.width, view.height, { kit });
     const context = rigContext;
 
     context.clearRect(0, 0, view.width, view.height);
@@ -136,6 +140,9 @@ export function createShopScene({ rigCanvas, campCanvas }) {
       elapsed: time,
       crew,
       banner: crewBanner,
+      crossbows: kit.crossbows,
+      bodyScale: kit.bodyScale,
+      bladeLength: kit.bladeLength,
     });
     context.restore();
 
@@ -323,6 +330,7 @@ export function createShopScene({ rigCanvas, campCanvas }) {
     snapshot = {
       horseCount: Math.max(1, Math.round(next?.horseCount ?? 1)),
       crew: next?.crew ?? [],
+      levels: next?.levels ?? {},
     };
     preview = null;
     if (active) draw(elapsed);
@@ -332,6 +340,9 @@ export function createShopScene({ rigCanvas, campCanvas }) {
     preview = next ? {
       horseCount: Math.max(1, Math.round(next.horseCount ?? snapshot.horseCount)),
       crew: next.crew ?? snapshot.crew,
+      // A hovered card carries the levels it would leave behind, so the dossier
+      // shows the box and the blades before the gold is spent.
+      levels: next.levels ?? snapshot.levels ?? {},
     } : null;
     if (active) draw(elapsed);
   }

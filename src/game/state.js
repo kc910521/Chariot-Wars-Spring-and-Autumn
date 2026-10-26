@@ -80,6 +80,10 @@ export function createGameState({ seedSource = () => null } = {}) {
     bosses: [],
     // True for the one battle that ends the campaign instead of the shop.
     finalBattle: false,
+    // Felled trees of the current battle (see fellTree in game/elements.js): the
+    // stump is scenery only, so it lives outside `obstacles`, which every collision
+    // and line-of-sight query reads. Refilled per battle by stages.createBattle.
+    stumps: [],
     bossDefeated: false,
     bossWarningTimer: 0,
     // Set by damagePlayer(), consumed by the renderer's red vignette.

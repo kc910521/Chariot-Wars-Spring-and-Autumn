@@ -5,9 +5,9 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
 import {
-  calculateArrowDamage, calculateChariotCollisionDamage, calculateChariotStats,
+  calculateArrowDamage, calculateChariotCollisionDamage, calculateChariotKit, calculateChariotStats,
   calculateHullHealth, calculateMobilityMultiplier, calculateProtectionChance,
-  emptyEquipment, equipment, horses, personnel,
+  emptyEquipment, equipment, getPlayerArrowCount, hasMaxedAxleCap, horses, personnel,
 } from "../src/data/equipment.js";
 import { campaignRules, chariotRules, effectRules, projectileRules } from "../src/data/rules.js";
 import { addBloodStain } from "../src/game/blood.js";
@@ -20,7 +20,7 @@ import { createCombatSystem } from "../src/game/combat.js";
 import { cloudKinds, elementRules, obstacleKinds, terrainKinds } from "../src/data/elements.js";
 import {
   clearsSight, cloudDrift, elementBoundingRadius, elementCullMargin, elementGap, elementIntersects,
-  elementSpeedAt, obstacleShape, rectHitsAnyObstacle, rectTerrain,
+  elementSpeedAt, fellTree, isFellable, obstacleShape, rectHitsAnyObstacle, rectTerrain,
 } from "../src/game/elements.js";
 import { createBattlefield } from "../src/game/map.js";
 import { createElementRenderer } from "../src/render/elements.js";
@@ -332,6 +332,17 @@ test("the indexed line of sight answers exactly like the full walk", () => {
   assert.ok(blocked > 50, `the sample must also contain blocked lines, got ${blocked}`);
 });
 
+test("obstacleAt names the element the move was rejected by", () => {
+  const wall = { type: "wall", x: 400, y: 300, width: 200, height: 40 };
+  const local = { obstacles: [campaign.obstacles[0], wall], terrain: [] };
+  const field = createCollisionSystem({ campaign: local, world });
+  assert.equal(field.obstacleAt(510, 320, 6), wall, "a point inside the wall must name the wall");
+  assert.equal(field.obstacleAt(500, 400, 6).type, "tree");
+  assert.equal(field.obstacleAt(100, 700, 6), null, "open ground names nothing");
+  // The two queries are the same predicate: whatever one rejects, the other names.
+  assert.equal(field.circleIntersectsObstacle(510, 320, 6), field.obstacleAt(510, 320, 6) !== null);
+});
+
 console.log("[unit] map elements");
 
 // The catalog is the contract: an instance carries only `type` and geometry, so a
@@ -392,6 +403,39 @@ test("every row's visual.kind has a silhouette, and its palettes are full", () =
   assert.equal(obstacleKinds.tree.visual.canopy.length, 4, "the canopy gradient reads four stops");
   assert.equal(cloudKinds.sky.visual.shade.length, 3, "the cloud shadow reads three stops");
 });
+
+test("a tree leans inside its declared wind, and one hit adds one decaying wobble", () => {
+  const art = obstacleKinds.tree.visual;
+  const hitRules = effectRules.treeHit;
+  const { treeSwayAngle } = createElementRenderer({ context: {} });
+  const tree = { type: "tree", x: 480, y: 320, radius: 30 };
+  const worst = art.sway + hitRules.angle;
+
+  let previous = treeSwayAngle(tree, 0, art, hitRules);
+  let moved = 0;
+  for (let frame = 1; frame <= 240; frame += 1) {
+    const angle = treeSwayAngle(tree, frame / 30, art, hitRules);
+    assert.ok(Number.isFinite(angle), `frame ${frame} leaned by ${angle}`);
+    assert.ok(Math.abs(angle) <= worst + 1e-9, `frame ${frame} leaned ${angle}, past the declared wind`);
+    if (Math.abs(angle - previous) > 1e-4) moved += 1;
+    previous = angle;
+  }
+  assert.ok(moved > 100, `an unhit tree is not swaying (${moved} moving frames)`);
+
+  // One hit: the wobble starts from the tree's own sway (no jump), peaks above it,
+  // and is completely gone when its window closes - a hit in the future does
+  // nothing yet, so the field cannot shake before the chariot arrives.
+  const hitTree = { ...tree, hitAt: 2 };
+  assert.equal(treeSwayAngle(hitTree, 2, art, hitRules), treeSwayAngle(tree, 2, art, hitRules));
+  const peak = Math.max(...Array.from({ length: 14 }, (_, step) =>
+    Math.abs(treeSwayAngle(hitTree, 2 + step / 60, art, hitRules))));
+  assert.ok(peak > art.sway, `a hit did not shake the tree (peak ${peak})`);
+  assert.ok(peak <= worst + 1e-9, `a hit shook the tree past the declared wind (peak ${peak})`);
+  assert.equal(treeSwayAngle(hitTree, 2 + hitRules.duration, art, hitRules), treeSwayAngle(tree, 2 + hitRules.duration, art, hitRules));
+  assert.equal(treeSwayAngle({ ...tree, hitAt: 5 }, 4.9, art, hitRules), treeSwayAngle(tree, 4.9, art, hitRules));
+  assert.equal(treeSwayAngle(tree, undefined, art, hitRules), treeSwayAngle(tree, 0, art, hitRules),
+    "a painter called without a clock must not paint NaN");
+});
 console.log("[unit] sprite art");
 
 // A recording 2d context: enough of the API for the unit painters to run, plus
@@ -430,10 +474,12 @@ function recordingContext() {
   return { context, bounds };
 }
 
-function measureRig(horseCount, crew = []) {
+function measureRig(horseCount, crew = [], kit = null) {
   const recorder = recordingContext();
   createSpriteArt({ context: recorder.context }).drawChariotRig({
     robeColor: "#17796f", horseCount, elapsed: 0.4, crew, banner: "#41b7a3",
+    // No kit is the stock rig: an enemy row that buys nothing paints it.
+    ...(kit ?? {}),
   });
   return recorder.bounds;
 }
@@ -463,6 +509,66 @@ test("the rig box grows with the team, so a preview never clips a bigger team", 
     previous = box;
   }
   assert.ok(chariotRigBox(4).height > chariotRigBox(1).height, "a full team is not taller than a single horse");
+});
+
+test("the chassis art follows the equipment levels, one level at a time", () => {
+  // Everything the rig needs is derived from the levels the campaign owns, so the
+  // shop preview and the battlefield cannot disagree about the carriage.
+  assert.deepEqual(calculateChariotKit(emptyEquipment()), { crossbows: 1, bodyScale: 1, bladeLength: 0 },
+    "an empty campaign must paint the stock rig");
+  let previous = calculateChariotKit(emptyEquipment());
+  for (const level of [1, 2, 3]) {
+    const levels = { weaponRack: level, axleCap: level, chariotBox: level };
+    const kit = calculateChariotKit(levels);
+    assert.equal(kit.crossbows, getPlayerArrowCount(levels),
+      `level ${level} shows ${kit.crossbows} crossbows but fires ${getPlayerArrowCount(levels)} bolts`);
+    assert.ok(kit.crossbows > previous.crossbows, `level ${level} did not add a crossbow`);
+    assert.ok(kit.bodyScale > previous.bodyScale, `level ${level} did not grow the box`);
+    assert.ok(kit.bladeLength > previous.bladeLength, `level ${level} did not lengthen the blades`);
+    assert.equal(hasMaxedAxleCap(levels), level === equipment.find((item) => item.id === "axleCap").levels.length,
+      `hasMaxedAxleCap disagrees with the axleCap table at level ${level}`);
+    previous = kit;
+  }
+  assert.equal(hasMaxedAxleCap({}), false, "no purchase is not a maxed axle cap");
+  assert.equal(hasMaxedAxleCap({ axleCap: 2 }), false, "the second level is not the last one");
+});
+
+test("the bought chassis still paints inside the box the shop scales into", () => {
+  // A maxed campaign is the widest silhouette the rig can have: four crossbows on
+  // the deck, the biggest box and the longest axle blades. The unbought kit rides
+  // along too, because the player always owns the first crossbow.
+  const axleLevels = equipment.find((item) => item.id === "axleCap").levels.length;
+  const kits = [
+    calculateChariotKit(emptyEquipment()),
+    calculateChariotKit({
+      weaponRack: equipment[0].levels.length,
+      axleCap: axleLevels,
+      chariotBox: equipment.find((item) => item.id === "chariotBox").levels.length,
+    }),
+  ];
+  const fullCrew = ["archer", "halberdier", "archer", "halberdier"].map((role) => ({ role }));
+  for (const kit of kits) {
+    for (const horseCount of [1, 2, 3, 4]) {
+      const box = chariotRigBox(horseCount, kit);
+      const drawn = measureRig(horseCount, fullCrew, kit);
+      assert.ok(box.minX <= drawn.minX && box.maxX >= drawn.maxX,
+        `a ${kit.crossbows}-crossbow ${horseCount}-horse rig paints past its box horizontally (${drawn.minX}..${drawn.maxX} vs ${box.minX}..${box.maxX})`);
+      assert.ok(box.minY <= drawn.minY && box.maxY >= drawn.maxY,
+        `a ${kit.crossbows}-crossbow ${horseCount}-horse rig paints past its box vertically (${drawn.minY}..${drawn.maxY} vs ${box.minY}..${box.maxY})`);
+      // The stock box is what an enemy row and the shop's default preview use, so a
+      // kit may only ever add room, never take it away.
+      const stock = chariotRigBox(horseCount);
+      assert.ok(box.minX <= stock.minX && box.maxX >= stock.maxX
+        && box.minY <= stock.minY && box.maxY >= stock.maxY,
+      `the kit shrank the ${horseCount}-horse box, so a stock rig could clip`);
+      assert.ok(stock.maxX >= measureRig(horseCount, fullCrew).maxX,
+        `the stock ${horseCount}-horse rig no longer fits the stock box`);
+    }
+  }
+  // The blades are the piece that reaches sideways, so a single horse - the team
+  // the blades outgrow - must be the one that grows the box.
+  const maxed = kits[1];
+  assert.ok(chariotRigBox(1, maxed).height > chariotRigBox(1).height, "the axle blades did not grow the box");
 });
 
 test("every overlay a data row asks for is painted by the shared art", () => {
@@ -659,6 +765,45 @@ test("clouds drift and wrap instead of flying off the map", () => {
   assert.equal(cloudDrift(cloud, 5, 2800), 10, "a cloud that leaves the right edge must come back on the left");
 });
 
+// Felling is the one thing that removes an element from a live battle, so these
+// pin what it leaves behind: a stump that blocks nothing, and an obstacle list
+// whose identity changed (the sight index keys on exactly that).
+test("a felled tree leaves a stump the field walks and shoots straight through", () => {
+  const tree = { type: "tree", x: 500, y: 400, radius: 40 };
+  const wall = { type: "wall", x: 400, y: 300, width: 200, height: 40 };
+  const local = { obstacles: [tree, wall], terrain: [], stumps: [] };
+  const field = createCollisionSystem({ campaign: local, world });
+
+  assert.equal(isFellable(tree), true, "the tree row must be fellable");
+  assert.equal(isFellable(wall), false, "a wall is not a tree");
+  assert.equal(isFellable({ type: "boulder", x: 0, y: 0, radius: 10 }), false, "an unknown type is not fellable");
+  assert.equal(field.hasLineOfSight(300, 400, 700, 400), false, "the standing tree must block the line");
+
+  const before = local.obstacles;
+  const stump = fellTree(local, tree);
+  assert.equal(local.obstacles.includes(tree), false, "the tree stayed on the field");
+  assert.equal(local.obstacles.length, 1, "felling must not touch the other obstacles");
+  assert.notEqual(local.obstacles, before, "the obstacle list must be replaced, or the sight index goes stale");
+  assert.equal(local.stumps.length, 1);
+  assert.equal(stump.x, tree.x);
+  assert.equal(stump.y, tree.y);
+  assert.ok(stump.radius > 0 && stump.radius < tree.radius,
+    `a stump is smaller than the tree that made it (${stump.radius} vs ${tree.radius})`);
+  assert.ok(Number.isFinite(stump.rotation), "the stump needs a tilt the painter can read");
+
+  assert.equal(field.circleIntersectsObstacle(tree.x, tree.y, 12), false, "the stump still blocks movement");
+  assert.equal(field.obstacleAt(tree.x, tree.y, 12), null, "the stump is not an obstacle");
+  assert.equal(field.hasLineOfSight(300, 400, 700, 400), true, "the stump still blocks sight");
+
+  // Two trees, two stumps, and a campaign object built before stumps existed still
+  // ends up with a list.
+  const bare = { obstacles: [{ ...tree }, { ...tree, x: 700 }] };
+  fellTree(bare, bare.obstacles[0]);
+  fellTree(bare, bare.obstacles[0]);
+  assert.equal(bare.obstacles.length, 0);
+  assert.equal(bare.stumps.length, 2, "a campaign without a stump list must still collect them");
+});
+
 console.log("[unit] chariot steering");
 
 
@@ -704,10 +849,12 @@ function simulateSteering({ relativeDeg = 180, magnitude = 0.3, frames = 120, st
       entity.y += dy;
     },
     // Backing into nothing must stay harmless: the reverse cap sits below the
-    // ram-damage speed, so damagePlayer() only ever runs on a real impact.
-    damagePlayer: () => {
+    // ram-damage speed, so handleObstacleImpact() only ever runs on a real impact.
+    // Nothing here is felled (obstacleAt answers null: an empty field).
+    handleObstacleImpact: () => {
       throw new Error("reversing should not damage the chariot");
     },
+    obstacleAt: () => null,
     state: { mode: "running" },
   });
   const samples = [];
@@ -2473,18 +2620,34 @@ test("the rig preview keeps the whole team inside its canvas", () => {
   // The three sizes the shop actually draws at: the desktop dossier, the narrow
   // strip and the phone strip.
   const boxes = [[320, 220], [180, 128], [120, 104]];
-  for (let horseCount = 1; horseCount <= horses.max; horseCount += 1) {
-    for (const [width, height] of boxes) {
-      const rig = rigPreview(horseCount, width, height);
-      const fit = projectRigBox(rig.box, rig);
-      const label = `${horseCount} horses in ${width}x${height}`;
-      assert.ok(rig.scale > 0, `${label}: scale collapsed`);
-      assert.ok(fit.minX >= -0.01 && fit.minY >= -0.01,
-        `${label}: rig spills off the top/left (${fit.minX}, ${fit.minY})`);
-      assert.ok(fit.maxX <= width + 0.01 && fit.maxY <= height + 0.01,
-        `${label}: rig spills off the bottom/right (${fit.maxX}, ${fit.maxY})`);
+  // The stock rig and the widest one the dossier can be asked to show: four
+  // crossbows on the deck, the biggest box and the longest axle blades.
+  const kits = [
+    null,
+    calculateChariotKit({
+      weaponRack: equipment[0].levels.length,
+      axleCap: equipment.find((item) => item.id === "axleCap").levels.length,
+      chariotBox: equipment.find((item) => item.id === "chariotBox").levels.length,
+    }),
+  ];
+  for (const kit of kits) {
+    for (let horseCount = 1; horseCount <= horses.max; horseCount += 1) {
+      for (const [width, height] of boxes) {
+        const rig = rigPreview(horseCount, width, height, kit ? { kit } : {});
+        const fit = projectRigBox(rig.box, rig);
+        const label = `${horseCount} horses in ${width}x${height}${kit ? " with a maxed chassis" : ""}`;
+        assert.ok(rig.scale > 0, `${label}: scale collapsed`);
+        assert.ok(fit.minX >= -0.01 && fit.minY >= -0.01,
+          `${label}: rig spills off the top/left (${fit.minX}, ${fit.minY})`);
+        assert.ok(fit.maxX <= width + 0.01 && fit.maxY <= height + 0.01,
+          `${label}: rig spills off the bottom/right (${fit.maxX}, ${fit.maxY})`);
+      }
     }
   }
+  // The blades really do reach further, so the fit has to make room for them.
+  const stock = rigPreview(1, 320, 220, {});
+  const maxed = rigPreview(1, 320, 220, { kit: kits[1] });
+  assert.ok(maxed.scale < stock.scale, "a maxed chassis is drawn at the same size as the stock one");
 });
 
 test("the rig box grows with the team instead of hiding it", () => {

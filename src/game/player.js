@@ -34,7 +34,12 @@ function shortestAngleDifference(from, to) {
   return Math.atan2(Math.sin(to - from), Math.cos(to - from));
 }
 
-export function createPlayerController({ player, world, keys, touchInput, moveEntitySafely, damagePlayer, state }) {
+// `handleObstacleImpact` owns what a rammed element does to the campaign (hull
+// damage, or a felled tree); this controller only reports the impact and which
+// element was in the way.
+export function createPlayerController({
+  player, world, keys, touchInput, moveEntitySafely, handleObstacleImpact, obstacleAt, state,
+}) {
   function readControls(delta) {
     if (player.mode === "foot") {
       const horizontal = Math.max(-1, Math.min(1,
@@ -151,7 +156,17 @@ export function createPlayerController({ player, world, keys, touchInput, moveEn
     if (player.x === previousX && player.y === previousY && travelSpeed > 1) {
       if (travelSpeed > 85 && player.impactCooldown === 0) {
         player.impactCooldown = 0.9;
-        damagePlayer(8, player.x - (velocityX / travelSpeed) * 30, player.y - (velocityY / travelSpeed) * 30);
+        // Both axes were rejected - that is why the chariot did not move - and each
+        // axis is tried on its own inside moveEntitySafely, so the element that
+        // stopped it is under one of the two single-axis targets. Asking here is
+        // what lets the impact shake (or fell) the very tree that was hit.
+        const obstacle = obstacleAt(previousX + velocityX * delta, previousY, player.radius)
+          ?? obstacleAt(previousX, previousY + velocityY * delta, player.radius);
+        handleObstacleImpact({
+          obstacle,
+          x: player.x - (velocityX / travelSpeed) * 30,
+          y: player.y - (velocityY / travelSpeed) * 30,
+        });
         if (state.mode === "over") return;
       }
       player.speed = 0;

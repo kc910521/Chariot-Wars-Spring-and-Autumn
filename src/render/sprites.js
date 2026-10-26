@@ -9,6 +9,23 @@
 
 export const CHARIOT_RIG_BASE_SCALE = 1.2;
 
+// Where the chassis pieces sit in the rig's local space. The box above and the
+// painter below read the same constants, so a moved wheel cannot silently escape
+// the fit-to-box the shop scales into.
+const WHEEL_X = -5;
+const WHEEL_Y = 13;
+const WHEEL_RADIUS = 9;
+// The hull scales about this point: the axle stays put and the nose, the tail and
+// the deck grow around it.
+const HULL_PIVOT_X = -2;
+// Crossbows on the front deck: a bank across the nose, one per slot, spaced so a
+// full rack of four still sits inside the stock hull.
+const CROSSBOW_ANCHOR_X = 4;
+const CROSSBOW_SPACING = 6;
+// Standing room at the back of the box, filled left/right then front/back. Kept
+// clear of the front deck (the rack) and of the axle hub in the middle.
+const CREW_SLOTS = Object.freeze([[-6.5, -5.4], [-6.5, 5.4], [-11.5, -5.4], [-11.5, 5.4]]);
+
 // Faction colours for the shared silhouettes. The world renderer and the shop's
 // dossier both paint from this table, so a preview cannot show a team in colours
 // the battlefield never uses.
@@ -26,13 +43,24 @@ export const spritePalette = Object.freeze({
 // box to -16..52 - grows by 14 units a side for every extra horse. A silhouette
 // change that outgrows this box fails the unit test that measures the real
 // drawing calls, and the shop's fit-to-box follows the constants here.
-export function chariotRigBox(horseCount = 1) {
+//
+// `kit` is the player's chassis art (calculateChariotKit): a bought box widens
+// the hull and the axle blades reach past the wheels, so both can outgrow the
+// stock silhouette. The horses, the pole, the banner and the wheels keep their
+// coordinates - only the box the camera has to fit grows.
+export function chariotRigBox(horseCount = 1, kit = null) {
   const span = (Math.max(1, horseCount) - 1) / 2 * 14;
-  const minX = -16;
+  // A bought box grows the hull about its pivot, so the tail can leave the stock
+  // silhouette; a bought axle cap puts blades past a rim that already sits 22 units
+  // off the axle. The rest of the hull - nose, roof, deck - stays well inside
+  // maxX/maxY at the tallest growth, which is why it gets no term of its own.
+  const bodyScale = kit?.bodyScale ?? 1;
+  const minX = Math.min(-16, HULL_PIVOT_X + (-15 - HULL_PIVOT_X) * bodyScale - 1);
   const maxX = 52;
-  const minY = -Math.max(25, span + 9);
+  const bladeReach = kit && kit.bladeLength > 0 ? WHEEL_Y + WHEEL_RADIUS + kit.bladeLength + 1 : 0;
+  const minY = -Math.max(25, span + 9, bladeReach);
   // The gait swings the hooves 2 units past the leg tips.
-  const maxY = Math.max(22, span + 11);
+  const maxY = Math.max(22, span + 11, bladeReach);
   return { minX, minY, maxX, maxY, width: maxX - minX, height: maxY - minY };
 }
 
@@ -200,53 +228,147 @@ export function createSpriteArt({ context }) {
     },
   };
 
+  // A crossbow on the front deck, pointing along the rig's forward axis (+x):
+  // stock, limbs, the cocked string, and the bolt it is holding.
+  function drawCrossbow(x, y) {
+    context.fillStyle = "#2f2418";
+    context.beginPath();
+    context.moveTo(x, y - 1.3);
+    context.lineTo(x + 8, y - 1);
+    context.lineTo(x + 9.6, y);
+    context.lineTo(x + 8, y + 1);
+    context.lineTo(x, y + 1.3);
+    context.closePath();
+    context.fill();
+    context.strokeStyle = "#e0b96f";
+    context.lineWidth = 1.6;
+    context.beginPath();
+    context.moveTo(x + 5.2, y - 3.2);
+    context.lineTo(x + 6.6, y);
+    context.lineTo(x + 5.2, y + 3.2);
+    context.stroke();
+    context.strokeStyle = "#f2e6c6";
+    context.lineWidth = 0.8;
+    context.beginPath();
+    context.moveTo(x + 4.6, y - 3.1);
+    context.lineTo(x + 3.2, y);
+    context.lineTo(x + 4.6, y + 3.1);
+    context.stroke();
+    context.strokeStyle = "#d9c8a0";
+    context.lineWidth = 0.9;
+    context.beginPath();
+    context.moveTo(x + 3.4, y);
+    context.lineTo(x + 10.2, y);
+    context.stroke();
+    context.fillStyle = "#f6ead0";
+    context.beginPath();
+    context.moveTo(x + 11.2, y);
+    context.lineTo(x + 9.9, y - 1.1);
+    context.lineTo(x + 9.9, y + 1.1);
+    context.closePath();
+    context.fill();
+  }
+
+  // An axle blade: a bright arrowhead off the rim and the arm that carries it.
+  // Drawn flat-side first, so a wheel with three of them reads as a scythe rather
+  // than as a starburst.
+  function drawWheelBlade(x, y, angle, length) {
+    const inner = WHEEL_RADIUS - 1;
+    const tip = inner + length;
+    const armX = x + Math.cos(angle) * inner;
+    const armY = y + Math.sin(angle) * inner;
+    const tipX = x + Math.cos(angle) * tip;
+    const tipY = y + Math.sin(angle) * tip;
+    context.strokeStyle = "#8f8577";
+    context.lineWidth = 2;
+    context.beginPath();
+    context.moveTo(armX, armY);
+    context.lineTo(tipX, tipY);
+    context.stroke();
+    const side = 1.7 + length * 0.24;
+    const normalX = -Math.sin(angle) * side;
+    const normalY = Math.cos(angle) * side;
+    context.fillStyle = "#c9ced3";
+    context.beginPath();
+    context.moveTo(tipX, tipY);
+    context.lineTo(x + Math.cos(angle) * (tip - length * 0.5) + normalX,
+      y + Math.sin(angle) * (tip - length * 0.5) + normalY);
+    context.lineTo(x + Math.cos(angle) * (inner + 1), y + Math.sin(angle) * (inner + 1));
+    context.lineTo(x + Math.cos(angle) * (tip - length * 0.5) - normalX,
+      y + Math.sin(angle) * (tip - length * 0.5) - normalY);
+    context.closePath();
+    context.fill();
+    context.strokeStyle = "#6b6459";
+    context.lineWidth = 1;
+    context.stroke();
+  }
+
   // The chariot rig: hull, wheels, pole, the horse team and the crew dots.
   // `horseCount` is the team the campaign owns, `elapsed` drives the gait,
   // `crew` draws the same dots the battlefield shows along the hull,
   // `overlays` is the data row's kit and `banner` the flag colour.
+  // The player's purchased chassis arrives as `crossbows` / `bodyScale` /
+  // `bladeLength` (calculateChariotKit) and defaults to the stock rig, so an
+  // enemy row that buys nothing paints exactly what it painted before.
   function drawChariotRig({
     robeColor, horseCount = 1, elapsed = 0, crew = [], overlays = [], banner = spritePalette.enemyBanner,
+    crossbows = 0, bodyScale = 1, bladeLength = 0,
   }) {
+    // The hull grows about its own axle: wheels, pole, banner and team stay put, so
+    // a bigger carriage reads as a bigger carriage and not as a zoomed-out rig.
+    const hullX = (value) => HULL_PIVOT_X + (value - HULL_PIVOT_X) * bodyScale;
+    const hullY = (value) => value * bodyScale;
+
     context.fillStyle = "rgba(30, 28, 22, 0.42)";
     context.beginPath();
     context.ellipse(18, 3, 34, 18, 0, 0, Math.PI * 2);
     context.fill();
     context.fillStyle = "#674a2f";
     context.beginPath();
-    context.moveTo(-15, -11);
-    context.lineTo(14, -11);
-    context.lineTo(19, -7);
-    context.lineTo(19, 8);
-    context.lineTo(13, 12);
-    context.lineTo(-15, 12);
+    context.moveTo(hullX(-15), hullY(-11));
+    context.lineTo(hullX(14), hullY(-11));
+    context.lineTo(hullX(19), hullY(-7));
+    context.lineTo(hullX(19), hullY(8));
+    context.lineTo(hullX(13), hullY(12));
+    context.lineTo(hullX(-15), hullY(12));
     context.closePath();
     context.fill();
     context.strokeStyle = "#d4ae6d";
     context.lineWidth = 1.5;
     context.stroke();
     context.fillStyle = "rgba(239, 211, 157, 0.3)";
-    context.fillRect(-10, -8, 22, 2);
-    for (const wheelY of [-13, 13]) {
+    context.fillRect(hullX(-10), hullY(-8), 22 * bodyScale, 2 * bodyScale);
+
+    for (const side of [-1, 1]) {
+      const wheelY = side * WHEEL_Y;
       context.fillStyle = "#3d3025";
       context.beginPath();
-      context.arc(-5, wheelY, 9, 0, Math.PI * 2);
+      context.arc(WHEEL_X, wheelY, WHEEL_RADIUS, 0, Math.PI * 2);
       context.fill();
       context.strokeStyle = "#f0c66e";
       context.lineWidth = 2.5;
       context.beginPath();
-      context.arc(-5, wheelY, 6, 0, Math.PI * 2);
+      context.arc(WHEEL_X, wheelY, 6, 0, Math.PI * 2);
       context.stroke();
       for (let spoke = 0; spoke < 8; spoke += 1) {
         const angle = spoke * Math.PI / 4;
         context.beginPath();
-        context.moveTo(-5 + Math.cos(angle) * 2, wheelY + Math.sin(angle) * 2);
-        context.lineTo(-5 + Math.cos(angle) * 6, wheelY + Math.sin(angle) * 6);
+        context.moveTo(WHEEL_X + Math.cos(angle) * 2, wheelY + Math.sin(angle) * 2);
+        context.lineTo(WHEEL_X + Math.cos(angle) * 6, wheelY + Math.sin(angle) * 6);
         context.stroke();
       }
       context.fillStyle = "#d8bb7b";
       context.beginPath();
-      context.arc(-5, wheelY, 2, 0, Math.PI * 2);
+      context.arc(WHEEL_X, wheelY, 2, 0, Math.PI * 2);
       context.fill();
+      // Blades fan out of the rim, all pointing away from the axle: three a side,
+      // the middle one straight out and the outer pair angled fore and aft.
+      if (bladeLength > 0) {
+        const outward = side > 0 ? Math.PI / 2 : -Math.PI / 2;
+        for (const fan of [-0.55, 0, 0.55]) {
+          drawWheelBlade(WHEEL_X, wheelY, outward + fan, bladeLength);
+        }
+      }
     }
     context.strokeStyle = "#ffe1a0";
     context.lineWidth = 4;
@@ -301,24 +423,24 @@ export function createSpriteArt({ context }) {
       context.fill();
     }
     context.fillStyle = robeColor;
-    roundedRect(-15, -12, 26, 24, 4);
+    roundedRect(hullX(-15), hullY(-12), 26 * bodyScale, 24 * bodyScale, 4 * bodyScale);
     context.strokeStyle = "#f0cc78";
     context.lineWidth = 2;
-    context.strokeRect(-15, -12, 26, 24);
+    context.strokeRect(hullX(-15), hullY(-12), 26 * bodyScale, 24 * bodyScale);
     context.fillStyle = "#f3d88f";
-    context.fillRect(-12, -8, 19, 3);
-    context.fillRect(-12, 5, 19, 3);
+    context.fillRect(hullX(-12), hullY(-8), 19 * bodyScale, 3 * bodyScale);
+    context.fillRect(hullX(-12), hullY(5), 19 * bodyScale, 3 * bodyScale);
     context.fillStyle = "#67472d";
     for (const studX of [-11, 7]) {
       for (const studY of [-8, 7]) {
         context.beginPath();
-        context.arc(studX, studY, 1, 0, Math.PI * 2);
+        context.arc(hullX(studX), hullY(studY), 1, 0, Math.PI * 2);
         context.fill();
       }
     }
     context.fillStyle = "#ffe4a1";
     context.beginPath();
-    context.arc(-2, 0, 5, 0, Math.PI * 2);
+    context.arc(HULL_PIVOT_X, 0, 5 * bodyScale, 0, Math.PI * 2);
     context.fill();
     context.strokeStyle = "#fff0bd";
     context.lineWidth = 3;
@@ -339,25 +461,34 @@ export function createSpriteArt({ context }) {
     context.lineTo(-12, -15);
     context.closePath();
     context.fill();
+    // The crossbow rack across the front deck. One per bolt a volley fires, so a
+    // bought weapon rack is visible before the first shot leaves it.
+    for (let index = 0; index < crossbows; index += 1) {
+      drawCrossbow(
+        CROSSBOW_ANCHOR_X,
+        (index - (crossbows - 1) / 2) * CROSSBOW_SPACING,
+      );
+    }
     // Crew kit the row asks for, then one dot per rider the roster actually has.
     for (const overlay of overlays) CHARIOT_OVERLAYS[overlay]?.();
-    for (let index = 0; index < Math.min(crew.length, 4); index += 1) {
+    for (let index = 0; index < Math.min(crew.length, CREW_SLOTS.length); index += 1) {
+      const [crewX, crewY] = CREW_SLOTS[index];
       context.fillStyle = crew[index].role === "archer" ? "#88bd8a" : "#d7b574";
       context.beginPath();
-      context.arc(-10 + index * 7, 0, 2.5, 0, Math.PI * 2);
+      context.arc(crewX, crewY, 2.5, 0, Math.PI * 2);
       context.fill();
       if (crew[index].role === "archer") {
         context.strokeStyle = "#493421";
         context.lineWidth = 1;
         context.beginPath();
-        context.arc(-10 + index * 7, 0, 3.5, -1.1, 1.1);
+        context.arc(crewX, crewY, 3.5, -1.1, 1.1);
         context.stroke();
       } else {
         context.strokeStyle = "#d8c18d";
         context.lineWidth = 1;
         context.beginPath();
-        context.moveTo(-10 + index * 7, -2);
-        context.lineTo(-10 + index * 7 + 4, -7);
+        context.moveTo(crewX, crewY - 2);
+        context.lineTo(crewX + 4, crewY - 7);
         context.stroke();
       }
     }

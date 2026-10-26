@@ -1,4 +1,5 @@
 import { cloudKinds, obstacleKinds, terrainKinds } from "../data/elements.js";
+import { effectRules } from "../data/rules.js";
 
 // The art half of the element catalog. Each row picks a silhouette through
 // `visual.kind`, and everything a silhouette can repaint - palette, piece counts,
@@ -39,109 +40,130 @@ export function createElementRenderer({ context }) {
     }
   }
 
-  function drawCanopy(obstacle, art) {
+  function drawCanopy(obstacle, art, elapsed = 0) {
     const { x, y, radius } = obstacle;
-
+    // The shadow stays on the ground; everything above the root line leans. It is
+    // kept inside `elementCullMargin` (radius + 8) so a tree cannot pop in at the
+    // edge of the screen a pixel before its crown is drawn.
     context.fillStyle = art.shadow;
     context.beginPath();
-    context.ellipse(x + 7, y + radius * 0.58, radius * 1.08, radius * 0.55, -0.08, 0, TAU);
+    context.ellipse(x + radius * 0.12, y + radius * 0.58, radius * 1.04, radius * 0.55, -0.08, 0, TAU);
     context.fill();
 
-    const trunkGradient = context.createLinearGradient(x - radius * 0.2, y - radius * 0.3, x + radius * 0.3, y + radius * 0.5);
+    const rootY = y + radius * 0.48;
+    context.save();
+    context.translate(x, rootY);
+    context.rotate(treeSwayAngle(obstacle, elapsed, art, effectRules.treeHit));
+    context.translate(-x, -rootY);
+
+    const trunkGradient = context.createLinearGradient(x - radius * 0.16, y - radius * 0.2, x + radius * 0.2, y + radius * 0.5);
     trunkGradient.addColorStop(0, art.trunk[0]);
-    trunkGradient.addColorStop(0.42, art.trunk[1]);
+    trunkGradient.addColorStop(0.45, art.trunk[1]);
     trunkGradient.addColorStop(1, art.trunk[2]);
     context.fillStyle = trunkGradient;
+    context.strokeStyle = art.trunkEdge;
+    context.lineWidth = Math.max(1, radius * 0.04);
+    // A slim taper that widens into the roots: a trunk, not the wedge the old
+    // silhouette used, which read as a bush with a stake in it.
     context.beginPath();
-    context.moveTo(x - radius * 0.28, y + radius * 0.48);
-    context.lineTo(x - radius * 0.18, y - radius * 0.36);
-    context.lineTo(x + radius * 0.2, y - radius * 0.42);
-    context.lineTo(x + radius * 0.32, y + radius * 0.48);
+    context.moveTo(x - radius * 0.14, y + radius * 0.5);
+    context.quadraticCurveTo(x - radius * 0.06, y + radius * 0.16, x - radius * 0.05, y - radius * 0.12);
+    context.lineTo(x + radius * 0.05, y - radius * 0.12);
+    context.quadraticCurveTo(x + radius * 0.07, y + radius * 0.16, x + radius * 0.15, y + radius * 0.5);
     context.closePath();
     context.fill();
-    context.strokeStyle = art.trunkEdge;
-    context.lineWidth = 2;
-    context.beginPath();
-    context.moveTo(x, y + radius * 0.2);
-    context.lineTo(x - radius * 0.55, y - radius * 0.3);
-    context.moveTo(x + radius * 0.05, y + radius * 0.05);
-    context.lineTo(x + radius * 0.58, y - radius * 0.48);
     context.stroke();
 
+    // The fork the crown sits on: two limbs out and the leader up the middle.
+    context.strokeStyle = art.twig;
+    context.lineWidth = Math.max(1.2, radius * 0.05);
+    context.beginPath();
+    context.moveTo(x, y + radius * 0.06);
+    context.lineTo(x - radius * 0.34, y - radius * 0.34);
+    context.moveTo(x, y + radius * 0.02);
+    context.lineTo(x + radius * 0.3, y - radius * 0.38);
+    context.moveTo(x + radius * 0.01, y - radius * 0.04);
+    context.lineTo(x + radius * 0.04, y - radius * 0.6);
+    context.stroke();
+
+    // A translucent crown wash gives the sprays something to hang on. Kept faint
+    // on purpose: an opaque blob is exactly the look this replaces.
     const canopyGradient = context.createRadialGradient(
-      x - radius * 0.32, y - radius * 0.4, radius * 0.08,
-      x, y, radius * 1.08,
+      x - radius * 0.26, y - radius * 0.42, radius * 0.06,
+      x, y - radius * 0.08, radius * 1.05,
     );
     canopyGradient.addColorStop(0, art.canopy[0]);
     canopyGradient.addColorStop(0.42, art.canopy[1]);
-    canopyGradient.addColorStop(0.82, art.canopy[2]);
+    canopyGradient.addColorStop(0.8, art.canopy[2]);
     canopyGradient.addColorStop(1, art.canopy[3]);
+    context.globalAlpha = 0.42;
     context.fillStyle = canopyGradient;
-    // Lobes are offset by a hash of the position, so no two canopies have the
-    // same outline without needing per-tree randomness at spawn time.
-    const lobes = art.lobes;
-    const canopyPoints = Array.from({ length: lobes }, (_, index) => {
-      const angle = index * TAU / lobes;
-      const variation = 0.82 + ((index * 7 + Math.floor(x * 0.17) + Math.floor(y * 0.13)) % 7) * 0.045;
-      return {
-        x: x + Math.cos(angle) * radius * variation,
-        y: y + Math.sin(angle) * radius * variation * 0.8,
-      };
-    });
     context.beginPath();
-    const first = canopyPoints[0];
-    context.moveTo((first.x + canopyPoints[lobes - 1].x) / 2, (first.y + canopyPoints[lobes - 1].y) / 2);
-    for (let index = 0; index < lobes; index += 1) {
-      const point = canopyPoints[index];
-      const next = canopyPoints[(index + 1) % lobes];
-      context.quadraticCurveTo(point.x, point.y, (point.x + next.x) / 2, (point.y + next.y) / 2);
-    }
-    context.closePath();
+    context.ellipse(x, y - radius * 0.08, radius * 0.92, radius * 0.76, 0, 0, TAU);
     context.fill();
-    context.strokeStyle = art.canopyEdge;
-    context.lineWidth = 1;
-    context.stroke();
+    context.globalAlpha = 1;
 
-    // Foliage clusters: lumpy radial blobs, alternating palette by index so the
-    // canopy does not read as one flat mass.
-    art.clusters.forEach(([offsetX, offsetY, width, height], index) => {
-      const clusterX = x + (offsetX + Math.sin(index * 2 + x) * 0.035) * radius;
-      const clusterY = y + (offsetY + Math.cos(index * 1.7 + y) * 0.035) * radius;
-      const clusterWidth = width * radius;
-      const clusterHeight = height * radius;
-      const clusterGradient = context.createRadialGradient(
-        clusterX - clusterWidth * 0.24, clusterY - clusterHeight * 0.3, clusterHeight * 0.03,
-        clusterX, clusterY, clusterWidth,
-      );
-      const tone = index % 2;
-      clusterGradient.addColorStop(0, art.clusterRim[tone]);
-      clusterGradient.addColorStop(0.58, art.clusterBody[tone]);
-      clusterGradient.addColorStop(1, art.clusterFade);
-      context.fillStyle = clusterGradient;
+    // Pinnate sprays: a stem out from the crown centre, leaflets along it. The
+    // anchors and their lengths are data, so a different row can grow a different
+    // tree from the same painter.
+    const leafletLength = radius * art.leafletScale;
+    art.clusters.forEach(([offsetX, offsetY, length], index) => {
+      const tipX = x + offsetX * radius;
+      const tipY = y + (offsetY - 0.08) * radius;
+      const reach = length * radius;
+      const angle = Math.atan2(tipY - (y - radius * 0.1), tipX - x);
+      // The stem starts short of the tip and grows outward: the crown's own body
+      // is the middle, so every spray reaches away from it.
+      const baseX = tipX - Math.cos(angle) * reach;
+      const baseY = tipY - Math.sin(angle) * reach;
+      context.strokeStyle = art.twig;
+      context.lineWidth = Math.max(1, radius * 0.03);
       context.beginPath();
-      context.ellipse(clusterX, clusterY, clusterWidth, clusterHeight, index * 0.29, 0, TAU);
-      context.fill();
+      context.moveTo(baseX, baseY);
+      context.quadraticCurveTo(
+        (baseX + tipX) / 2 + Math.sin(index * 1.7 + x) * radius * 0.06,
+        (baseY + tipY) / 2 + Math.cos(index * 2.1 + y) * radius * 0.06,
+        tipX, tipY,
+      );
+      context.stroke();
+
+      for (let leaflet = 0; leaflet < art.leaflets; leaflet += 1) {
+        const along = 0.2 + (leaflet / Math.max(1, art.leaflets - 1)) * 0.78;
+        const stemX = baseX + (tipX - baseX) * along;
+        const stemY = baseY + (tipY - baseY) * along;
+        const side = leaflet % 2 === 0 ? 1 : -1;
+        // Leaflets shrink toward the tip, the way a real pinnate leaf does.
+        const size = leafletLength * (1.05 - along * 0.35);
+        const leafletAngle = angle + side * 0.85;
+        context.fillStyle = art.leaf[(index + leaflet) % art.leaf.length];
+        context.beginPath();
+        context.ellipse(
+          stemX + Math.cos(leafletAngle) * size * 0.55,
+          stemY + Math.sin(leafletAngle) * size * 0.55,
+          size, size * 0.44, leafletAngle, 0, TAU,
+        );
+        context.fill();
+      }
     });
 
-    for (let leaf = 0; leaf < art.leaves; leaf += 1) {
-      const angle = leaf * 2.399 + x * 0.013 + y * 0.009;
-      const distance = radius * (0.12 + ((leaf * 5 + Math.floor(x + y)) % 9) * 0.072);
-      const leafX = x + Math.cos(angle) * distance;
-      const leafY = y + Math.sin(angle) * distance * 0.72;
-      context.fillStyle = art.leaf[leaf % art.leaf.length];
-      context.beginPath();
-      context.ellipse(leafX, leafY, radius * 0.085, radius * 0.045, angle, 0, TAU);
-      context.fill();
-    }
+    context.restore();
+  }
 
-    context.strokeStyle = art.twig;
-    context.lineWidth = Math.max(1.4, radius * 0.075);
-    context.beginPath();
-    context.moveTo(x, y + radius * 0.22);
-    context.quadraticCurveTo(x + radius * 0.1, y - radius * 0.08, x - radius * 0.34, y - radius * 0.42);
-    context.moveTo(x + radius * 0.03, y + radius * 0.08);
-    context.quadraticCurveTo(x + radius * 0.14, y - radius * 0.16, x + radius * 0.42, y - radius * 0.38);
-    context.stroke();
+  // A tree leans a little all the time, and once more when something hits it.
+  // Pure and exported so the unit test can pin the bounds: the painter only ever
+  // hands the result to `rotate`, so this is the whole of the motion.
+  function treeSwayAngle(obstacle, elapsed = 0, art, hitRules) {
+    // Phased by position, so a stand is a grove and not one synchronised mass.
+    const phase = (obstacle.x * 0.013 + obstacle.y * 0.017) % TAU;
+    let angle = Math.sin(elapsed * art.swayRate + phase) * art.sway;
+    const hitAt = obstacle.hitAt;
+    if (hitAt !== undefined && hitAt !== null) {
+      const since = elapsed - hitAt;
+      if (since >= 0 && since < hitRules.duration) {
+        angle += Math.sin(since * hitRules.rate) * hitRules.angle * (1 - since / hitRules.duration);
+      }
+    }
+    return angle;
   }
 
   // --- terrain ---------------------------------------------------------------
@@ -213,15 +235,73 @@ export function createElementRenderer({ context }) {
     context.restore();
   }
 
+  // What a felled tree leaves behind: a sawn face, a ring of bark and two root
+  // flares. Scenery only - `campaign.stumps` is not in the obstacle list, so
+  // nothing collides with it and no sight ray stops on it.
+  function drawStump(stump) {
+    const { x, y } = stump;
+    const radius = Math.max(4, stump.radius ?? 6);
+    // The tilt is hashed from the position at fell time, so a clearing full of
+    // stumps is not a row of identical discs.
+    const tilt = Math.sin(stump.rotation ?? 0) * 0.4;
+
+    context.fillStyle = "rgba(43, 37, 25, 0.24)";
+    context.beginPath();
+    context.ellipse(x + radius * 0.18, y + radius * 0.52, radius * 1.2, radius * 0.58, 0, 0, TAU);
+    context.fill();
+
+    context.fillStyle = "#5b4530";
+    context.beginPath();
+    context.moveTo(x - radius * 0.85, y + radius * 0.1);
+    context.lineTo(x - radius * 1.85, y + radius * 0.7);
+    context.lineTo(x - radius * 0.45, y + radius * 0.8);
+    context.closePath();
+    context.fill();
+    context.beginPath();
+    context.moveTo(x + radius * 0.85, y + radius * 0.12);
+    context.lineTo(x + radius * 1.8, y + radius * 0.72);
+    context.lineTo(x + radius * 0.4, y + radius * 0.82);
+    context.closePath();
+    context.fill();
+
+    context.fillStyle = "#6f5438";
+    context.beginPath();
+    context.ellipse(x, y, radius, radius * 0.68, tilt, 0, TAU);
+    context.fill();
+    context.fillStyle = "#d8c49a";
+    context.beginPath();
+    context.ellipse(x, y - radius * 0.06, radius * 0.84, radius * 0.54, tilt, 0, TAU);
+    context.fill();
+
+    context.strokeStyle = "rgba(122, 96, 62, 0.4)";
+    context.lineWidth = 1;
+    for (const share of [0.62, 0.34]) {
+      context.beginPath();
+      context.ellipse(x, y - radius * 0.06, radius * 0.84 * share, radius * 0.54 * share, tilt, 0, TAU);
+      context.stroke();
+    }
+
+    // Splinters where the trunk broke off, so the cut still reads as a cut.
+    context.strokeStyle = "#eeddb4";
+    context.lineWidth = Math.max(1, radius * 0.1);
+    context.beginPath();
+    context.moveTo(x - radius * 0.28, y - radius * 0.06);
+    context.lineTo(x - radius * 0.12, y - radius * 0.62);
+    context.moveTo(x + radius * 0.32, y);
+    context.lineTo(x + radius * 0.46, y - radius * 0.5);
+    context.stroke();
+  }
+
   const OBSTACLE_ART = { palisade: drawPalisade, canopy: drawCanopy };
   const CLOUD_ART = { shadow: drawCloudPuffs };
 
   // An unknown type draws as the row it most closely resembles - a canopy for
   // obstacles, blades for terrain, the sky puff for clouds - which is exactly what
   // the `if (type === ...) ... else ...` chains these replace used to do.
-  function drawObstacle(obstacle) {
+  // `elapsed` is the battle clock: only the wind-sensitive silhouettes read it.
+  function drawObstacle(obstacle, elapsed = 0) {
     const visual = obstacleKinds[obstacle.type]?.visual ?? obstacleKinds.tree.visual;
-    (OBSTACLE_ART[visual.kind] ?? drawCanopy)(obstacle, visual);
+    (OBSTACLE_ART[visual.kind] ?? drawCanopy)(obstacle, visual, elapsed);
   }
 
   function drawTerrain(patch) {
@@ -245,7 +325,7 @@ export function createElementRenderer({ context }) {
   }
 
   return {
-    drawObstacle, drawTerrain, drawCloud,
+    drawObstacle, drawTerrain, drawCloud, drawStump, treeSwayAngle,
     // Exposed so the catalog test can prove every row's `visual.kind` has a
     // silhouette behind it: a typo would otherwise only show up as a silent
     // fallback to the default art.

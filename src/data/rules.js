@@ -11,6 +11,22 @@ export const chariotRules = Object.freeze({
   arrowDamagePerFirepower: 1.5,
 });
 
+// Sizes for the player's chassis art. Only the numbers live here: which level
+// buys which number is `calculateChariotKit` in data/equipment.js, so the shop
+// preview and the battlefield can never disagree about how big a bought box is.
+export const chariotArtRules = Object.freeze({
+  // The hull grows, the horse team does not: +7.5% a level is 1.075/1.15/1.225,
+  // which reads as a boxier carriage without crowding the pole or the wheels.
+  bodyGrowthPerLevel: 0.075,
+  // Lateral reach of the axle blades past the wheel rim, by axleCap level. Level
+  // 0 has none; the max level is also the one that cuts trees down, so the
+  // longest blades are on the wheels exactly when the hull stops taking the hit.
+  bladeLengths: Object.freeze([0, 3.2, 4.6, 6.2]),
+  // A felled tree stops the chariot being damaged, not the chariot: this is the
+  // share of full speed a hit needs before the blades bite.
+  treeCutSpeedRatio: 0.9,
+});
+
 export const projectileRules = Object.freeze({
   playerVolley: Object.freeze({
     speed: 460, elevation: 0.42, gravity: 420, range: 470, spread: 0.075, originOffset: 29,
@@ -73,6 +89,11 @@ export const effectRules = Object.freeze({
     cullMargin: 220, // an off-screen unit is not worth the churn - and it must not
     // spend a visible unit's share of `maxLive`.
   }),
+  // A tree that cost the hull points shakes once: one decaying wobble, not a
+  // permanent tremble. The duration is short enough to read as an impact and long
+  // enough to survive a 30fps frame or two; the painter adds it to the ambient
+  // sway, so the settle is a lean back to rest rather than a snap.
+  treeHit: Object.freeze({ duration: 0.45, rate: 26, angle: 0.16 }),
   // Fallback fade for particles that do not carry their own `maxLife`.
   particleFadeSeconds: 0.90,
 });

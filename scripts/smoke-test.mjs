@@ -6,6 +6,7 @@ import { resolve } from "node:path";
 import { createHash } from "node:crypto";
 import { writeFileSync } from "node:fs";
 import { campaignRules, effectRules, projectileRules } from "../src/data/rules.js";
+import { equipment } from "../src/data/equipment.js";
 
 const projectRoot = resolve(import.meta.dirname, "..");
 
@@ -679,6 +680,74 @@ check("player state stayed finite", Number.isFinite(game?.player.x) && Number.is
 checkCamera("after the combat run");
 check("no non-finite geometry reached the canvas", nonFiniteDraws.length === 0, nonFiniteDraws.slice(0, 3).join(" | "));
 
+// Axle blades --------------------------------------------------------------
+// The one purchase that changes a rule instead of a pixel: a maxed axle cap cuts
+// a tree down at full speed. Drive the real controller into a lone tree twice -
+// with the cap bought and without it - and assert on what the campaign is left
+// with, because the cut lives in the composition root (game.js) rather than in a
+// module a unit test can call.
+{
+  const maxAxleCap = equipment.find((item) => item.id === "axleCap").levels.length;
+  const savedAxleCap = game.campaign.equipment.axleCap;
+  const ram = (axleCap) => {
+    const tree = { type: "tree", x: 1400, y: 900, radius: 34 };
+    // The battlefield is replaced rather than edited in place: exactly what
+    // fellTree() does, and what the sight index keys on.
+    game.campaign.obstacles = [tree];
+    game.campaign.stumps = [];
+    game.campaign.equipment.axleCap = axleCap;
+    game.state.enemies.length = 0;
+    game.state.bullets.length = 0;
+    game.player.mode = "chariot";
+    game.player.angle = 0;
+    // This run's mobility tops out at 78px/s, below the 85px/s every ram - damage
+    // or cut - needs. The harness owns the number it drives with, so raise it
+    // rather than waiting for a faster campaign.
+    game.player.maxSpeed = 200;
+    game.player.speed = game.player.maxSpeed;
+    game.player.knockbackX = 0;
+    game.player.knockbackY = 0;
+    game.player.impactCooldown = 0;
+    // Nothing on this empty field can hurt the chariot except the tree, so the
+    // damage the assertions read is the ram's own.
+    game.player.invulnerable = 0;
+    game.player.health = game.player.maxHealth;
+    game.player.x = tree.x - tree.radius - game.player.radius - 12;
+    game.player.y = tree.y;
+    dispatchWindow("keydown", { key: "d" });
+    runFrames(90);
+    dispatchWindow("keyup", { key: "d" });
+    return {
+      standing: game.campaign.obstacles.includes(tree),
+      stumps: game.campaign.stumps.length,
+      stumpAtTree: game.campaign.stumps.some((stump) => stump.x === tree.x && stump.y === tree.y),
+      damage: game.player.maxHealth - game.player.health,
+      // The shake the renderer reads: a plain ram marks the tree, a cut removes it.
+      shook: Number.isFinite(tree.hitAt),
+    };
+  };
+
+  const cut = ram(maxAxleCap);
+  check("a maxed axle cap cuts the tree down", !cut.standing, "the tree is still standing");
+  check("the felled tree left exactly one stump, where it stood", cut.stumps === 1 && cut.stumpAtTree,
+    `stumps=${cut.stumps} atTree=${cut.stumpAtTree}`);
+  check("cutting the tree down cost the hull nothing", cut.damage === 0, `damage=${cut.damage}`);
+  check("the stump is not an obstacle", !game.campaign.obstacles.some((obstacle) => obstacle === game.campaign.stumps[0]),
+    `obstacles=${game.campaign.obstacles.length}`);
+
+  const bumped = ram(0);
+  check("without the blades the same run still costs hull points", bumped.standing && bumped.damage > 0,
+    `standing=${bumped.standing} damage=${bumped.damage}`);
+  check("an unfelled tree leaves no stump", bumped.stumps === 0, `stumps=${bumped.stumps}`);
+  check("a plain ram shakes the tree instead of felling it", bumped.shook, "the tree carries no hit time");
+  check("a cut tree is gone, so there is nothing left to shake", !cut.shook, "a felled tree still carries a hit time");
+  // Everything the frame loop needs afterwards is put back by the next battle; the
+  // purchase the harness borrowed is not, so hand it back here.
+  game.campaign.equipment.axleCap = savedAxleCap;
+  game.player.invulnerable = 0;
+  check("no runtime errors while felling", loggedErrors.length === 0, loggedErrors[0]);
+}
+
 // Foot phase ---------------------------------------------------------------
 // Everything above runs in the chariot, so the trace never reached the dismount,
 // the companion build, or their per-frame loop - which is exactly the code a
@@ -818,7 +887,6 @@ ledger[1].children[0].dispatch("pointerleave", { pointerType: "touch" });
 // A buy button that cannot be pressed has to say why: a dimmed "购置" reads as a
 // broken button, "军资不足" reads as the next goal. Gold is forced here so both
 // label states are checked whatever drops this run happened to collect.
-const { equipment } = await import("../src/data/equipment.js");
 const upgrade = equipment.find((item) => game.campaign.equipment[item.id] < item.levels.length);
 if (upgrade) {
   const price = upgrade.levels[game.campaign.equipment[upgrade.id]].price;

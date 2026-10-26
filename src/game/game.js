@@ -1,6 +1,6 @@
 import { bossTypes, enemyStats, formationPatterns } from "../data/formations.js";
-import { calculateChariotCollisionDamage } from "../data/equipment.js";
-import { campaignRules } from "../data/rules.js";
+import { calculateChariotCollisionDamage, hasMaxedAxleCap } from "../data/equipment.js";
+import { campaignRules, chariotArtRules } from "../data/rules.js";
 import { createAudio } from "../assets/audio.js";
 import { launchQuery } from "../platform/launch.js";
 import { createEquipmentShop } from "./equipment.js";
@@ -8,6 +8,7 @@ import { createEnemies } from "./units/enemies.js";
 import { createPlayerController } from "./player.js";
 import { createGameState } from "./state.js";
 import { createCollisionSystem } from "./collision.js";
+import { fellTree, isFellable } from "./elements.js";
 import { createCombatSystem } from "./combat.js";
 import { createProjectileSystem } from "./projectiles.js";
 import { pruneParticles, updateParticles } from "./particles.js";
@@ -122,6 +123,10 @@ function boot() {
     getClouds: () => campaign.clouds,
     getHorseCount: () => campaign.horseCount,
     getRoster: () => campaign.roster,
+    // Resolved per frame, never captured: equipment is bought between battles and
+    // the battle that shows a new box or a new blade must read the new numbers.
+    getEquipment: () => campaign.equipment,
+    getStumps: () => campaign.stumps ?? [],
   });
   // The frame's draw: the field first, then the one number a DOM card has to keep
   // live (the resting countdown on the menu). The screens are built below; the
@@ -233,13 +238,34 @@ function boot() {
   });
   combatRef.current = combat;
 
+  // What a rammed element does to the campaign. A tree with a maxed axle cap and
+  // the chariot at full tilt is cut down instead of costing hull points: the same
+  // blade length the renderer draws, so the art cannot promise a cut the rule
+  // refuses. Anything else - a wall, reeds, a tree at speed - is the old hull hit,
+  // plus a shake on the tree that caused it.
+  function handleObstacleImpact({ obstacle, x, y }) {
+    if (obstacle && isFellable(obstacle) && hasMaxedAxleCap(campaign.equipment)
+      && player.speed >= player.maxSpeed * chariotArtRules.treeCutSpeedRatio) {
+      fellTree(campaign, obstacle);
+      // Both halves of the tree in one frame: the crown bursting upward and the
+      // pale wood of the cut underneath it.
+      burst(obstacle.x, obstacle.y, "#93a468");
+      burst(obstacle.x, obstacle.y + 6, "#6f5436");
+      playTone(110, 0.24, "triangle", 0.05);
+      return;
+    }
+    if (obstacle && isFellable(obstacle)) obstacle.hitAt = state.elapsed;
+    damagePlayer(8, x, y);
+  }
+
   const playerController = createPlayerController({
     player,
     world,
     keys,
     touchInput,
     moveEntitySafely: collision.moveEntitySafely,
-    damagePlayer: combat.damagePlayer,
+    handleObstacleImpact,
+    obstacleAt: collision.obstacleAt,
     state,
   });
   const readControls = playerController.readControls;
