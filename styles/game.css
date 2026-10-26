@@ -296,6 +296,113 @@ h1 span {
   letter-spacing: 0.03em;
 }
 
+/* The prologue is a story card, not a menu: one column, generous leading, and
+   five lines that arrive in order. The nameplate is data — Chinese characters,
+   the same in every locale — so it gets the largest type on the page while the
+   sentences around it follow the active language. */
+.prologue-screen {
+  display: grid;
+  min-height: min(760px, calc(100vh - 128px));
+  place-items: center;
+  padding: 58px clamp(20px, 8vw, 110px);
+  border-bottom: 1px solid var(--line);
+  background:
+    radial-gradient(ellipse at 50% 10%, rgba(169, 68, 50, 0.14), transparent 56%),
+    linear-gradient(160deg, rgba(75, 53, 34, 0.2), transparent 70%);
+}
+
+.prologue-scroll {
+  width: min(700px, 100%);
+  padding: clamp(22px, 4vw, 38px);
+  border: 1px solid var(--line);
+  background: rgba(33, 27, 22, 0.62);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.28);
+}
+
+.prologue-eyebrow {
+  justify-content: center;
+  letter-spacing: 0.14em;
+}
+
+.prologue-name {
+  margin: 18px 0 6px;
+  color: #f0e3c8;
+  font-family: "Noto Serif SC", "Songti SC", serif;
+  font-size: clamp(46px, 9vw, 82px);
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  line-height: 1.12;
+  text-align: center;
+  /* Cancels the trailing 0.16em so the two-character name reads centred. */
+  text-indent: 0.16em;
+}
+
+.prologue-subtitle {
+  margin: 0;
+  color: #b6a383;
+  font-family: "Noto Serif SC", "Songti SC", serif;
+  font-size: 11px;
+  letter-spacing: 0.3em;
+  text-align: center;
+  text-indent: 0.3em;
+}
+
+.prologue-rule {
+  width: 46px;
+  height: 1px;
+  margin: 20px auto 26px;
+  background: linear-gradient(90deg, transparent, #a94432, transparent);
+}
+
+.prologue-line {
+  margin: 0 0 14px;
+  color: #cbb997;
+  font-family: "Noto Serif SC", "Songti SC", serif;
+  font-size: 15px;
+  line-height: 1.95;
+  animation: prologue-line-in 520ms ease both;
+  animation-delay: calc(var(--line-index, 0) * 180ms);
+}
+
+.prologue-line:last-of-type {
+  margin-bottom: 0;
+}
+
+/* The one line with the player's name in it, so it carries slightly more light
+   than the reasoning around it. */
+.prologue-line-name {
+  color: #e8d6b0;
+}
+
+[lang="en"] .prologue-line,
+[lang="en"] .prologue-eyebrow,
+[lang="en"] .prologue-subtitle {
+  font-family: "DM Sans", sans-serif;
+  text-align: left;
+}
+
+[lang="en"] .prologue-eyebrow {
+  justify-content: flex-start;
+}
+
+.prologue-actions {
+  display: flex;
+  justify-content: center;
+  margin-top: 30px;
+}
+
+@keyframes prologue-line-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 .shop-screen {
   min-height: min(760px, calc(100vh - 128px));
   padding: clamp(28px, 5vw, 60px) clamp(16px, 8vw, 100px);
@@ -2202,6 +2309,13 @@ body.battle-focus {
   *::after {
     scroll-behavior: auto !important;
     transition-duration: 0.01ms !important;
+  }
+
+  /* The prologue staggers its lines with a delay, so its animation has to be
+     switched off outright: `animation-duration: 0.01ms` would still leave each
+     line parked at opacity 0 until its turn came. */
+  .prologue-line {
+    animation: none !important;
   }
 }
 

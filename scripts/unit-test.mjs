@@ -12,7 +12,9 @@ import {
 import { campaignRules, chariotRules, effectRules, projectileRules } from "../src/data/rules.js";
 import { addBloodStain } from "../src/game/blood.js";
 import { selectAimTarget } from "../src/game/aim.js";
+import { createPlayerIdentity, pickWeighted } from "../src/game/identity.js";
 import { battlefields } from "../src/data/battlefields.js";
+import { clanNames, givenNames } from "../src/data/names.js";
 import { createCollisionSystem } from "../src/game/collision.js";
 import { createCombatSystem } from "../src/game/combat.js";
 import { cloudKinds, elementRules, obstacleKinds, terrainKinds } from "../src/data/elements.js";
@@ -46,6 +48,7 @@ import {
 import { createRadarChart } from "../src/ui/radar.js";
 import { createShopScene } from "../src/ui/shop-scene.js";
 import { createInfoPanel, itemInfo } from "../src/ui/shop-info.js";
+import { prologueLines } from "../src/ui/prologue.js";
 import { setLocale, translate } from "../src/i18n/index.js";
 import { defaultLocale, hasTranslation, registerLocale, supportedLocales, translator } from "../src/i18n/locales.js";
 
@@ -2757,6 +2760,114 @@ test("a shop info panel with no element is a no-op", () => {
     panel.paint();
     panel.paint(itemInfo("horse", "shop.horse", "…"));
   });
+});
+
+console.log("[unit] naming");
+
+test("every name row carries a weight, a Chinese name and a story key", () => {
+  for (const [table, rows] of [["clan", clanNames], ["given", givenNames]]) {
+    assert.ok(rows.length > 20, `the ${table} table holds only ${rows.length} rows`);
+    for (const row of rows) {
+      assert.match(row.name, /^[\u3400-\u9fff]+$/u, `${table} "${row.name}" is not Chinese characters only`);
+      assert.ok(Number.isInteger(row.weight) && row.weight > 0,
+        `${table} "${row.name}" has weight ${row.weight}`);
+      assert.match(row.namingStory.reason, new RegExp(`^namingStory\\.${table}\\.reason\\.`),
+        `${table} "${row.name}" points at ${row.namingStory.reason}`);
+      assert.ok(row.namingStory.named_by, `${table} "${row.name}" has no naming source`);
+    }
+  }
+});
+
+test("every rolled story key exists in every locale", () => {
+  // This is the one that would have caught the table pointing at a key no
+  // resource file ever defined: the player would have been shown the raw key.
+  for (const row of [...clanNames, ...givenNames]) {
+    for (const locale of Object.keys(supportedLocales)) {
+      assert.ok(hasTranslation(locale, row.namingStory.reason),
+        `${locale} is missing ${row.namingStory.reason}`);
+    }
+  }
+});
+
+test("a clan name is unique, so a name reads as one family", () => {
+  const seen = new Set();
+  for (const row of clanNames) {
+    assert.ok(!seen.has(row.name), `clan name "${row.name}" appears twice`);
+    seen.add(row.name);
+  }
+});
+
+test("the name tables are frozen, so a live run cannot rename itself", () => {
+  assert.throws(() => { clanNames[0].name = "改"; }, TypeError);
+  assert.throws(() => { givenNames[0].namingStory.reason = "nope"; }, TypeError);
+});
+
+test("pickWeighted walks the table once and lands in the right bucket", () => {
+  const rows = [{ id: "first", weight: 3 }, { id: "second", weight: 1 }];
+  assert.equal(pickWeighted(rows, () => 0), rows[0]);
+  assert.equal(pickWeighted(rows, () => 0.74), rows[0], "a roll inside the first bucket left it");
+  assert.equal(pickWeighted(rows, () => 0.76), rows[1]);
+  // A generator that returns exactly 1 walks off the end of the table: the last
+  // row is the fallback rather than `undefined`, which would have reached the
+  // prologue as an empty name.
+  assert.equal(pickWeighted(rows, () => 1), rows[1]);
+  assert.equal(pickWeighted(rows, () => 0.9999999999), rows[1]);
+});
+
+test("a heavier weight comes up more often over 2000 draws", () => {
+  const rows = [{ name: "heavy", weight: 10 }, { name: "light", weight: 2 }];
+  const random = createSeededRandom(20261026);
+  let heavy = 0;
+  for (let draw = 0; draw < 2000; draw += 1) if (pickWeighted(rows, random) === rows[0]) heavy += 1;
+  // 10/12 of 2000 is 1667. The band is wide enough not to be flaky and narrow
+  // enough to fail the moment the weights stop being read.
+  assert.ok(heavy > 1550 && heavy < 1780, `heavy came up ${heavy} times in 2000`);
+});
+
+test("a run's name is one draw per table and repeats on the same seed", () => {
+  const first = createPlayerIdentity(createSeededRandom(42));
+  const second = createPlayerIdentity(createSeededRandom(42));
+  assert.deepEqual(first, second, "the same seed named two different players");
+  assert.equal(first.fullName, `${first.clan}${first.given}`);
+  assert.match(first.fullName, /^[\u3400-\u9fff]{2,}$/u);
+
+  let draws = 0;
+  createPlayerIdentity(() => {
+    draws += 1;
+    return 0.5;
+  });
+  assert.equal(draws, 2, `the roll took ${draws} draws instead of one per table`);
+});
+
+test("the prologue is five lines, and only the story around the name is translated", () => {
+  const identity = createPlayerIdentity(createSeededRandom(7));
+  const zh = translator("zh-CN");
+  const en = translator("en");
+  const lines = prologueLines(identity, zh);
+  assert.deepEqual(lines.map((line) => line.slot), ["birth", "name", "clan", "given", "ambition"]);
+  assert.equal(lines[1].text, zh("prologue.name", { name: identity.fullName }));
+  assert.equal(lines[2].text, zh(identity.clanReasonKey));
+  assert.equal(lines[3].text, zh(identity.givenReasonKey));
+
+  // The name is data, not copy: the English story carries the same characters.
+  const english = prologueLines(identity, en);
+  assert.ok(english[1].text.includes(identity.fullName), "the English story lost the name");
+  assert.notEqual(english[1].text, lines[1].text, "the English story was not translated");
+  for (const line of english) {
+    assert.ok(!line.text.startsWith("prologue.") && !line.text.startsWith("namingStory."),
+      `an English line fell back to its key: ${line.text}`);
+  }
+});
+
+test("the prologue card declares every line the story writes", () => {
+  const html = readFileSync(new URL("../index.html", import.meta.url), "utf8");
+  for (const id of ["prologue-name", "prologue-birth", "prologue-name-line", "prologue-clan",
+    "prologue-given", "prologue-ambition", "prologue-start"]) {
+    assert.ok(html.includes(`id="${id}"`), `index.html is missing #${id}`);
+  }
+  // The card is hidden in the markup: it must not flash before the first run
+  // has rolled a name for it.
+  assert.match(html, /id="prologue-screen"[^>]*hidden/, "the prologue section is not hidden at boot");
 });
 
 console.log("[unit] i18n");

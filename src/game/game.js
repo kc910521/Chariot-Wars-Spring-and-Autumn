@@ -20,8 +20,10 @@ import { bindControls } from "../ui/controls.js";
 import { createScreens } from "../ui/screens.js";
 import { createShopScene } from "../ui/shop-scene.js";
 import { createStageManager } from "./stages.js";
+import { createPlayerIdentity } from "./identity.js";
 import { getGameElements } from "../ui/elements.js";
 import { applyTranslations, getLocale, setLocale, translate } from "../i18n/index.js";
+import { createPrologue } from "../ui/prologue.js";
 import { distanceBetween } from "../utils/math.js";
 
 // The combat <-> enemy <-> projectile triangle is mutually recursive by nature.
@@ -50,7 +52,9 @@ function boot() {
   applyTranslations();
   elements.localeSelect.value = getLocale();
   const {
-    canvas, menuScreen, battleScreen, shopScreen, menuStartButton, nextBattleButton,
+    canvas, menuScreen, prologueScreen, battleScreen, shopScreen, menuStartButton, nextBattleButton,
+    prologueNameElement, prologueBirthElement, prologueNameLineElement, prologueClanElement,
+    prologueGivenElement, prologueAmbitionElement, prologueStartButton,
     shopItemsElement, shopStatsElement, shopGoldElement, shopScoreElement, shopKillsElement,
     shopStageElement, shopLocationElement, shopMessageElement, scoreElement,
     shopRigCanvas, shopCampCanvas, shopRigCaptionElement, shopCampCaptionElement,
@@ -89,6 +93,10 @@ function boot() {
     player,
     getCampaignFunds: () => campaign.totalGold,
     getCampaignStage: () => campaign.stage,
+    // The battle objective is named after the player, so the HUD reads the same
+    // identity the prologue showed. Null before a run starts, which falls back
+    // to the plain objective label.
+    getPlayerName: () => campaign.identity?.fullName ?? null,
     elements: {
       scoreElement, waveElement, goldElement, modeElement, hullLabelElement, hullValueElement,
       hullHealthElement, objectiveCountElement, objectiveProgressElement,
@@ -115,8 +123,17 @@ function boot() {
     // screen, not with the battle loop.
     onModeChange: (mode) => shopScene.setActive(mode === "shop"),
     elements: {
-      menuScreen, battleScreen, shopScreen, overlay, startLabel, startButton,
+      menuScreen, prologueScreen, battleScreen, shopScreen, overlay, startLabel, startButton,
       overlayEyebrow, overlayTitle, overlayCopy, overlayButton,
+    },
+  });
+
+  // The story card is painted, never rolled: `startRun()` below picks the name,
+  // and a language switch only repaints this same identity.
+  const prologue = createPrologue({
+    elements: {
+      prologueNameElement, prologueBirthElement, prologueNameLineElement,
+      prologueClanElement, prologueGivenElement, prologueAmbitionElement,
     },
   });
 
@@ -214,8 +231,21 @@ function boot() {
     updateHud, setMode, spawnBoss, announceBoss, resizeCanvas, playTone, hideBanner,
   });
   const {
-    beginMission, resetMission, beginExtraction, enterShop, rollForNextBattle, restartStage,
+    beginMission, resetCampaign, resetMission, beginExtraction, enterShop, rollForNextBattle, restartStage,
   } = stageManager;
+
+  // Menu -> prologue. The name is rolled with the campaign's stream before
+  // createBattle() re-seeds it, so `?seed=7` names the same player on every
+  // reload while the battle below is drawn from a stream this roll never
+  // touched. A shop visit, a retry or a language switch reuses the identity:
+  // only a new run names a new player.
+  function startRun() {
+    resetCampaign();
+    campaign.identity = createPlayerIdentity(campaign.random);
+    prologue.show(campaign.identity);
+    setMode("prologue");
+  }
+
   function update(delta) {
     state.elapsed += delta;
     player.swarmDamageCooldown = Math.max(0, player.swarmDamageCooldown - delta);
@@ -290,6 +320,7 @@ function boot() {
   const controls = bindControls({
     state,
     keys,
+    startRun,
     beginMission,
     rollForNextBattle,
     restartStage,
@@ -298,7 +329,7 @@ function boot() {
     battleScreen,
     touchInput,
     elements: {
-      startButton, menuStartButton, nextBattleButton, overlayButton,
+      startButton, menuStartButton, prologueStartButton, nextBattleButton, overlayButton,
       soundButton, soundIcon, touchJoystickElement, touchJoystickKnob,
     },
   });
@@ -309,6 +340,10 @@ function boot() {
     controls.refreshLocale();
     equipmentShop.render();
     if (state.mode === "shop") stageManager.refreshShop();
+    // The prologue keeps the name it was shown with; only the story around it
+    // is re-translated. updateHud() runs after applyTranslations() so the
+    // objective label never flashes a raw {name} placeholder.
+    prologue.paint();
     updateHud();
     setMode(state.mode);
   });

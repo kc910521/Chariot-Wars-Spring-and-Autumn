@@ -365,6 +365,9 @@ console.error = (...args) => {
 
 await import(pathToFileURL(resolve(projectRoot, "src/main.js")).href);
 const game = globalThis.__h5game;
+// Resolved after boot: i18n/index.js reads window.localStorage at load time, so
+// it must not be imported before the stub above has installed one.
+const { translate } = await import(pathToFileURL(resolve(projectRoot, "src/i18n/index.js")).href);
 check("boot scheduled the first frame", preRenderQueue.length > 0);
 check("boot reported no errors", loggedErrors.length === 0, loggedErrors[0]);
 
@@ -385,17 +388,69 @@ function checkCamera(label) {
 }
 
 runFrames(3);
+// A new run names the player before the first battle, so the menu now opens the
+// story card rather than the battlefield. The name is rolled from the campaign's
+// stream, which createBattle() re-seeds below it: a seeded run is named the same
+// way on every reload, and the battle still draws from an untouched stream.
+query("#menu-start").dispatch("click");
+const identity = game.campaign.identity;
+check("menu start opens the prologue", query("#prologue-screen").hidden === false,
+  `mode=${game.state.mode}`);
+check("the prologue hides the battlefield", query("#battle-screen").hidden === true);
+// The pause card lives on top of the field. It must never be up while the battle
+// is live: the game would keep running underneath it, invisible and unplayable.
+check("the prologue raises no pause card", query("#game-overlay").classList.contains("hidden"));
+check("the prologue rolled a Chinese name", /^[\u4e00-\u9fa5]{2,}$/u.test(identity?.fullName ?? ""),
+  `name=${identity?.fullName}`);
+check("the nameplate shows the rolled name", query("#prologue-name").textContent === identity?.fullName,
+  `nameplate="${query("#prologue-name").textContent}"`);
+check("the story names the player", query("#prologue-name-line").textContent
+  === translate("prologue.name", { name: identity?.fullName }),
+  `line="${query("#prologue-name-line").textContent}"`);
+check("the prologue tells where the player was born",
+  query("#prologue-birth").textContent === translate("prologue.birth"));
+check("the prologue tells the clan's story",
+  query("#prologue-clan").textContent === translate(identity.clanReasonKey),
+  `line="${query("#prologue-clan").textContent}"`);
+check("the prologue tells the given name's story",
+  query("#prologue-given").textContent === translate(identity.givenReasonKey),
+  `line="${query("#prologue-given").textContent}"`);
+check("the prologue states the ambition",
+  query("#prologue-ambition").textContent === translate("prologue.ambition"));
+check("the objective is unnamed until the battle begins",
+  query("#objective-label").textContent === translate("battle.objective"),
+  `label="${query("#objective-label").textContent}"`);
+
 // The click handler runs beginMission() synchronously, so this is the one moment
 // at which a module stamping a second clock is still observable: the loop rewrites
 // state.lastTime on its very next frame. Equality with the harness's frame time is
 // the whole contract — the loop is the only writer of the time base.
-query("#menu-start").dispatch("click");
+query("#prologue-start").dispatch("click");
 check(
   "beginMission leaves the loop's time base alone",
   game.state.lastTime === nextFrameTime,
   `lastTime=${game.state.lastTime} frameClock=${nextFrameTime}`,
 );
-check("menu start begins a battle", query("#battle-screen").hidden === false);
+check("prologue start begins a battle", query("#battle-screen").hidden === false,
+  `mode=${game.state.mode}`);
+check("prologue start hides the story card", query("#prologue-screen").hidden === true);
+check("beginning the battle drops the pause card", query("#game-overlay").classList.contains("hidden"),
+  `hidden=${query("#game-overlay").classList.contains("hidden")} mode=${game.state.mode}`);
+
+// Round-trip the card through both of its states, so "hidden while running" is
+// paired with "shown while paused" rather than proving a permanently hidden box.
+dispatchWindow("keydown", { key: "p" });
+check("pausing raises the pause card",
+  game.state.mode === "paused" && !query("#game-overlay").classList.contains("hidden"),
+  `mode=${game.state.mode}`);
+dispatchWindow("keydown", { key: "p" });
+check("resuming drops it again",
+  game.state.mode === "running" && query("#game-overlay").classList.contains("hidden"),
+  `mode=${game.state.mode}`);
+check("the battle kept the name the prologue showed", game.campaign.identity === identity);
+check("the battle objective carries the player's name",
+  query("#objective-label").textContent === translate("battle.objectiveNamed", { name: identity.fullName }),
+  `label="${query("#objective-label").textContent}"`);
 checkCamera("battle start");
 
 // The two releases have to stay distinct: a drawn bow must not fire by itself,
@@ -613,6 +668,10 @@ check("no non-finite geometry reached the canvas", nonFiniteDraws.length === 0, 
 // volley fan is measured over the archers alone), and die through the real
 // damage path so `dismountPlayer` runs rather than being called directly.
 game.stageManager.rollForNextBattle();
+check("a new stage keeps the run's name", game.campaign.identity === identity);
+check("a new stage's objective is still the player's",
+  query("#objective-label").textContent === translate("battle.objectiveNamed", { name: identity.fullName }),
+  `label="${query("#objective-label").textContent}"`);
 game.campaign.roster.push({ id: 9001, role: "archer" }, { id: 9002, role: "halberdier" });
 game.campaign.nextPersonnelId = 9003;
 game.player.health = 1;
@@ -697,6 +756,7 @@ game.stageManager.enterShop();
 runFrames(45);
 const shopFrame = game.shopScene.lastFrame();
 check("entering the shop shows the dossier", query("#shop-screen").hidden === false, `mode=${game.state.mode}`);
+check("the shop keeps the run's name", game.campaign.identity === identity);
 check("the shop preview drew the chariot", Boolean(shopFrame.rig), "no rig frame");
 check("the shop preview drew the camp fire", Boolean(shopFrame.camp), "no camp frame");
 check("the preview rig is fitted to its canvas", shopFrame.rig?.scale > 0, `scale=${shopFrame.rig?.scale}`);
@@ -715,7 +775,6 @@ check("the shop rig follows the owned team", game.shopScene.lastFrame().rig?.hor
 // The ledger's cards are titles, effect lines and prices; the long descriptions
 // live in the one info panel under the summary, which follows the pointer and
 // keeps a click. `#shop-items` holds [tabs, equipment, horses, crew].
-const { translate } = await import("../src/i18n/index.js");
 const shopInfo = query("#shop-info");
 const ruleLine = `${translate("shop.collision.label")}${translate("shop.collision.description")}`;
 const weaponRackLine = translate("shop.info.label", { name: translate("equipment.weaponRack.name") })
@@ -784,6 +843,23 @@ check("switching tabs drops the pick back to the standing rule", shopInfo.textCo
 ledger[1].children[0].children[2].dispatch("click");
 check("a buy click leaves that item's description in the panel", shopInfo.textContent === weaponRackLine,
   `panel="${shopInfo.textContent}"`);
+
+// The defeat card is the other state of that same box, and the two lethal blows
+// are what the game itself needs: the first wrecks the chariot and puts the crew
+// on foot, the second ends the run. Kill from a live battle rather than from the
+// shop, so the assertion is about a real end-of-run, not a forced mode.
+game.stageManager.restartStage();
+game.player.invulnerable = 0;
+game.combat.damagePlayer(9999, 0, 0);
+game.player.invulnerable = 0;
+game.combat.damagePlayer(9999, 0, 0);
+check("losing the battle raises the defeat card",
+  game.state.mode === "over" && !query("#game-overlay").classList.contains("hidden"),
+  `mode=${game.state.mode}`);
+check("the defeat card offers the retry action and hides the pause control",
+  query("#overlay-button").firstElementChild.textContent === translate("battle.retry")
+    && query("#start-button").hidden === true,
+  `action="${query("#overlay-button").firstElementChild.textContent}" startHidden=${query("#start-button").hidden}`);
 
 check("no errors after UI interactions", loggedErrors.length === 0, loggedErrors[0]);
 checkCamera("after UI interactions");

@@ -1,7 +1,9 @@
 import { projectileRules } from "../data/rules.js";
 import { getLocale, translate } from "../i18n/index.js";
 
-export function createHud({ state, player, getCampaignFunds, getCampaignStage, elements }) {
+export function createHud({
+  state, player, getCampaignFunds, getCampaignStage, getPlayerName = () => null, elements,
+}) {
   let lastFootMode;
   let lastLocale;
   let lastCharge;
@@ -50,7 +52,13 @@ export function createHud({ state, player, getCampaignFunds, getCampaignStage, e
     objectiveProgressElement.style.width = `${Math.min(100, state.kills / state.objectiveTarget * 100)}%`;
     const extracting = state.phase === "extract" && state.extractionPoint;
     const bossAlive = state.bossStage && !state.bossDefeated;
-    objectiveLabelElement.textContent = translate(extracting ? "battle.extractDistance" : bossAlive ? "battle.boss" : "battle.objective");
+    // The objective is the player's own, so it carries their name once the
+    // prologue has rolled one. `battle.objective` stays behind as the plain
+    // label for anything that runs before a run starts.
+    const playerName = extracting || bossAlive ? null : getPlayerName();
+    objectiveLabelElement.textContent = playerName
+      ? translate("battle.objectiveNamed", { name: playerName })
+      : translate(extracting ? "battle.extractDistance" : bossAlive ? "battle.boss" : "battle.objective");
     extractionGuideElement.hidden = !extracting;
     if (bossAlive && state.boss) {
       objectiveCountElement.textContent = `${Math.ceil(state.boss.health)} / ${state.boss.maxHealth}`;

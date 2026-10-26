@@ -43,6 +43,10 @@ export function createGameState({ seedSource = () => null } = {}) {
     horseCount: 1,
     roster: [],
     nextPersonnelId: 1,
+    // Rolled once when a run starts (src/game/identity.js): the player's name
+    // and the two story keys behind it. Reset with the rest of the run, and
+    // never re-rolled by a retry — it belongs to the campaign, not the battle.
+    identity: null,
   };
   const state = {
     mode: "menu",

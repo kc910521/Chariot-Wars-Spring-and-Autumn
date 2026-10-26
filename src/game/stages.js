@@ -18,15 +18,21 @@ export function createStageManager({
     shopStageElement, shopLocationElement, shopMessageElement,
   } = elements;
 
+  // A new run starts from nothing; the prologue rolls the name between this and
+  // the first battle, so the reset is its own step rather than a flag on
+  // beginMission().
+  function resetCampaign() {
+    campaign.totalGold = 0;
+    campaign.stage = 1;
+    campaign.equipment = emptyEquipment();
+    campaign.horseCount = 1;
+    campaign.roster = [];
+    campaign.nextPersonnelId = 1;
+    campaign.identity = null;
+  }
+
   function beginMission(isNewRun = false) {
-    if (isNewRun) {
-      campaign.totalGold = 0;
-      campaign.stage = 1;
-      campaign.equipment = emptyEquipment();
-      campaign.horseCount = 1;
-      campaign.roster = [];
-      campaign.nextPersonnelId = 1;
-    }
+    if (isNewRun) resetCampaign();
     createBattle();
   }
 
@@ -176,5 +182,8 @@ export function createStageManager({
     createBattle();
   }
 
-  return { beginMission, resetMission, beginExtraction, enterShop, refreshShop, rollForNextBattle, restartStage };
+  return {
+    beginMission, resetCampaign, resetMission, beginExtraction, enterShop, refreshShop, rollForNextBattle,
+    restartStage,
+  };
 }

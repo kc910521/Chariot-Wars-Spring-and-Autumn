@@ -44,6 +44,23 @@
         <p class="menu-footnote" data-i18n="controls.chariot">W / ↑ 地图向上 · S / ↓ 地图向下 · A D / ← → 转向并漂移 · 空格发弩</p>
       </section>
 
+      <section class="screen prologue-screen" id="prologue-screen" hidden aria-labelledby="prologue-name">
+        <div class="prologue-scroll">
+          <p class="eyebrow prologue-eyebrow"><span class="status-dot"></span><span data-i18n="prologue.eyebrow">序章</span></p>
+          <h2 class="prologue-name" id="prologue-name"></h2>
+          <p class="prologue-subtitle" data-i18n="prologue.title">身世</p>
+          <div class="prologue-rule" aria-hidden="true"></div>
+          <p class="prologue-line" id="prologue-birth" style="--line-index: 0"></p>
+          <p class="prologue-line prologue-line-name" id="prologue-name-line" style="--line-index: 1"></p>
+          <p class="prologue-line" id="prologue-clan" style="--line-index: 2"></p>
+          <p class="prologue-line" id="prologue-given" style="--line-index: 3"></p>
+          <p class="prologue-line" id="prologue-ambition" style="--line-index: 4"></p>
+          <div class="prologue-actions">
+            <button class="primary-action" id="prologue-start" type="button"><span data-i18n="prologue.begin">出征</span><span aria-hidden="true">→</span></button>
+          </div>
+        </div>
+      </section>
+
       <section class="screen shop-screen" id="shop-screen" hidden>
         <div class="shop-heading">
           <div>

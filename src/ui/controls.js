@@ -1,11 +1,11 @@
 import { translate } from "../i18n/index.js";
 
 export function bindControls({
-  state, keys, beginMission, rollForNextBattle, restartStage, setMode, resizeCanvas,
+  state, keys, startRun, beginMission, rollForNextBattle, restartStage, setMode, resizeCanvas,
   battleScreen, touchInput, elements,
 }) {
   const {
-    startButton, menuStartButton, nextBattleButton, overlayButton,
+    startButton, menuStartButton, prologueStartButton, nextBattleButton, overlayButton,
     soundButton, soundIcon,
     touchJoystickElement, touchJoystickKnob,
   } = elements;
@@ -31,7 +31,11 @@ export function bindControls({
       return;
     }
     if (state.mode === "menu" && (key === "Enter" || key === " ")) {
-      beginMission(true);
+      startRun();
+      return;
+    }
+    if (state.mode === "prologue" && (key === "Enter" || key === " ")) {
+      beginMission();
       return;
     }
     if (state.mode === "over" && (key === "Enter" || key === " ")) restartStage();
@@ -48,7 +52,8 @@ export function bindControls({
     if (state.mode === "running") togglePause();
     else if (state.mode === "paused") setMode("running");
   });
-  menuStartButton.addEventListener("click", () => beginMission(true));
+  menuStartButton.addEventListener("click", () => startRun());
+  prologueStartButton.addEventListener("click", () => beginMission());
   nextBattleButton.addEventListener("click", rollForNextBattle);
   overlayButton.addEventListener("click", () => {
     if (state.mode === "paused") setMode("running");
