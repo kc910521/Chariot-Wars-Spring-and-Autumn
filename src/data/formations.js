@@ -35,6 +35,75 @@ export const formationPatterns = [
   },
 ];
 
+// Chariot morale, shared by both sides of the field. The enemy roster and the
+// hireable line below both import this table, so the hysteresis band, the home
+// radius and the regroup pace are defined once - outside either roster.
+// A chariot is a property of the machine, not of its flag: the hired one and the
+// enemy line's one break off at the same health, regroup over the same band and
+// make the same last stand.
+export const chariotTactics = {
+  // Hysteresis: break off at or below 20% of max health, and only charge again
+  // once healed above 40%. Between the two thresholds the chariot stays broken
+  // off, including while it sits on its own slot.
+  fleeAt: 0.2,
+  reengageAt: 0.4,
+  // Close enough to the home slot to count as regrouped.
+  homeEpsilon: 16,
+  // Regrouping is the one time a chariot outruns its row.
+  regroupSpeed: 1.15,
+};
+
+// Formation banners, shared by both sides of the field. The enemy line and the
+// hired line read the same table: every living member standing on the dashed
+// footprint recovers `heal` health once per `interval`, and `flash` is both the
+// banner pulse and the healed unit's glow. Keeping it outside either roster is
+// what lets `formations.js` run one aura pass for `state.formations` and
+// `state.allyFormations` without knowing whose flag is on the line.
+export const formationAura = {
+  interval: 3,
+  heal: 1,
+  flash: 0.6,
+};
+
+// One hireable friendly line. The shop sells this row (price and cap), the ally
+// system spawns it, and the renderer labels it — so the roster, the shared
+// banner it points at and the chariot's leash all meet here rather than as
+// branches in the battle code. Slots use the enemy pattern frame: local -Y is
+// the front, +X runs along the line, and the line faces away from the player
+// who hired it.
+export const formationConfig = {
+  nameKey: "formation.friendly",
+  price: 1000,
+  maxHires: 2,
+  slots: [
+    ["spear", -92, -56], ["ge", -32, -56], ["heavy", 32, -56], ["spear", 92, -56],
+    ["chariot", 0, 0],
+    ["archer", -44, 56], ["archer", 44, 56],
+  ],
+  // Same green as `spritePalette.allyRobe`; data rows keep their own hex so the
+  // simulation never has to import renderer art.
+  visual: { robe: "#398b63", deathBurst: "#6f8f55" },
+  engage: {
+    // How far from its own slot a foot ally will step to meet an enemy, and how
+    // far past that slot it may be dragged. A hired line guards its ground; it
+    // never charges across the map.
+    meleeRange: 150,
+    leash: 70,
+    homeEpsilon: 10,
+  },
+  chariot: {
+    // Same morale table the enemy chariot reads; the leash below is only the
+    // hired line's promise not to chase across the battlefield.
+    ...chariotTactics,
+    chaseRange: 430,
+    chaseLeash: 300,
+    ramInterval: 0.5,
+  },
+  // The same banner the enemy line reads; the aura is a formation property,
+  // not something that belongs to the hire.
+  aura: formationAura,
+};
+
 // Everything the simulation and the renderer need to know about a unit type
 // lives in one row. The columns that used to be `type === "..."` branches:
 //

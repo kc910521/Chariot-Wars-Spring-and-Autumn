@@ -1,5 +1,6 @@
 import { translate } from "../i18n/index.js";
 import { calculateChariotKit } from "../data/equipment.js";
+import { formationAura } from "../data/formations.js";
 import { effectRules } from "../data/rules.js";
 import { cloudDrift, elementCullMargin } from "../game/elements.js";
 import { createElementRenderer } from "./elements.js";
@@ -49,6 +50,20 @@ export function createRenderer({
     context.beginPath();
     context.ellipse(0, 8, (unit.radius || 14) * 1.25, (unit.radius || 14) * 0.82, 0, 0, Math.PI * 2);
     context.fill();
+
+    // The formation aura's heal, drawn under the body so it never hides the
+    // silhouette: a pulse that fades over the same `formationAura.flash` as the
+    // banner. Both sides heal from the same beat, so both sides show it - green
+    // for a hired line, amber for an enemy one.
+    if (unit.healFlash > 0) {
+      const glow = Math.min(1, unit.healFlash / formationAura.flash);
+      context.fillStyle = isAlly
+        ? `rgba(126, 233, 152, ${0.34 * glow})`
+        : `rgba(232, 166, 105, ${0.3 * glow})`;
+      context.beginPath();
+      context.arc(0, 0, (unit.radius || 14) + 6, 0, Math.PI * 2);
+      context.fill();
+    }
 
     // Which silhouette to draw is the row's `visual.kind`, so a new unit type
     // chooses its art in the data table instead of by editing this chain. The
@@ -202,7 +217,7 @@ export function createRenderer({
         elapsed: state.elapsed,
         crew: isPlayer ? getRoster().filter((member) => member.alive !== false) : [],
         overlays: isPlayer ? [] : unit.visual?.overlays ?? [],
-        banner: isPlayer ? spritePalette.playerBanner : spritePalette.enemyBanner,
+        banner: isPlayer || isAlly ? spritePalette.playerBanner : spritePalette.enemyBanner,
         crossbows: kit?.crossbows ?? 0,
         bodyScale: kit?.bodyScale ?? 1,
         bladeLength: kit?.bladeLength ?? 0,
@@ -233,6 +248,47 @@ export function createRenderer({
       context.fillText(translate(unit.nameKey), 0, -unit.radius - 17);
     }
     context.restore();
+  }
+
+  // One footprint painter for both sides: the dashed rect is the ground a line
+  // owns, and only the palette differs - rust for an enemy line, green for a
+  // hired one. Both lines pulse on their aura beat, from the same shared tick;
+  // the colour is what tells the player whose banner just healed.
+  function drawFormation(formation, friendly) {
+    if (formation.x < camera.x - 120 || formation.x > camera.x + view.width + 120
+      || formation.y < camera.y - 80 || formation.y > camera.y + view.height + 80) return;
+    const halfWidth = formation.halfWidth || 116;
+    const halfHeight = formation.halfHeight || 86;
+    context.save();
+    context.translate(formation.x, formation.y);
+    context.rotate(formation.heading);
+    context.fillStyle = friendly ? "rgba(64, 140, 92, 0.07)" : "rgba(126, 43, 31, 0.055)";
+    context.beginPath();
+    context.rect(-halfWidth, -halfHeight, halfWidth * 2, halfHeight * 2);
+    context.fill();
+    context.strokeStyle = friendly ? "rgba(95, 189, 121, 0.34)" : "rgba(112, 39, 31, 0.2)";
+    context.lineWidth = 1;
+    context.setLineDash([7, 8]);
+    context.stroke();
+    context.setLineDash([]);
+    if (formation.auraFlash > 0) {
+      const pulse = Math.min(1, formation.auraFlash / formationAura.flash);
+      const spread = (1 - pulse) * 12;
+      context.strokeStyle = friendly
+        ? `rgba(126, 233, 152, ${0.4 * pulse})`
+        : `rgba(232, 166, 105, ${0.34 * pulse})`;
+      context.lineWidth = 3;
+      context.strokeRect(-halfWidth - spread, -halfHeight - spread, (halfWidth + spread) * 2, (halfHeight + spread) * 2);
+    }
+    context.restore();
+    context.font = "bold 11px serif";
+    context.textAlign = "center";
+    const formationName = translate(formation.nameKey);
+    const labelWidth = context.measureText(formationName).width + 14;
+    context.fillStyle = friendly ? "rgba(27, 51, 35, 0.78)" : "rgba(39, 42, 30, 0.74)";
+    context.fillRect(formation.x - labelWidth / 2, formation.y - halfHeight - 21, labelWidth, 16);
+    context.fillStyle = friendly ? "#c8f0cf" : "#f5dfb0";
+    context.fillText(formationName, formation.x, formation.y - halfHeight - 9);
   }
 
   // Culling keeps per-frame work proportional to what is on screen instead of
@@ -469,31 +525,8 @@ export function createRenderer({
       context.restore();
     }
 
-    for (const formation of state.formations) {
-      if (formation.x < camera.x - 120 || formation.x > camera.x + view.width + 120
-        || formation.y < camera.y - 80 || formation.y > camera.y + view.height + 80) continue;
-      context.save();
-      context.translate(formation.x, formation.y);
-      context.rotate(formation.heading);
-      context.fillStyle = "rgba(126, 43, 31, 0.055)";
-      context.beginPath();
-      context.rect(-(formation.halfWidth || 116), -(formation.halfHeight || 86), (formation.halfWidth || 116) * 2, (formation.halfHeight || 86) * 2);
-      context.fill();
-      context.strokeStyle = "rgba(112, 39, 31, 0.2)";
-      context.lineWidth = 1;
-      context.setLineDash([7, 8]);
-      context.stroke();
-      context.setLineDash([]);
-      context.restore();
-      context.font = "bold 11px serif";
-      context.textAlign = "center";
-      const formationName = translate(formation.nameKey);
-      const labelWidth = context.measureText(formationName).width + 14;
-      context.fillStyle = "rgba(39, 42, 30, 0.74)";
-      context.fillRect(formation.x - labelWidth / 2, formation.y - (formation.halfHeight || 86) - 21, labelWidth, 16);
-      context.fillStyle = "#f5dfb0";
-      context.fillText(formationName, formation.x, formation.y - (formation.halfHeight || 86) - 9);
-    }
+    for (const formation of state.formations) drawFormation(formation, false);
+    for (const formation of state.allyFormations ?? []) drawFormation(formation, true);
 
     // The wake goes down before anything that flies or stands on it: the hull
     // drives through its own dust, and an arrow in the air stays above it.
@@ -538,6 +571,11 @@ export function createRenderer({
     }
     for (const companion of state.footCompanions) {
       if (inView(companion.x, companion.y, companion.radius + 60)) drawCombatant(companion, false, true);
+    }
+    // The hired line uses the same green ally treatment as a dismounted crew
+    // member: one visual language for "this body is on your side".
+    for (const ally of state.allies ?? []) {
+      if (inView(ally.x, ally.y, ally.radius + 60)) drawCombatant(ally, false, true);
     }
     if (player.invulnerable === 0 || Math.floor(player.invulnerable * 12) % 2 === 0) {
       drawCombatant(player, true);

@@ -1,4 +1,5 @@
 import { calculateCrewSlots, equipment, horses, personnel } from "../data/equipment.js";
+import { formationConfig } from "../data/formations.js";
 import { translate } from "../i18n/index.js";
 import { renderShop } from "../ui/shop.js";
 
@@ -57,6 +58,21 @@ export function createEquipmentShop({
       campaign.totalGold -= price;
       campaign.roster.push({ id: campaign.nextPersonnelId, role: member.id });
       campaign.nextPersonnelId += 1;
+    } else if (purchaseType === "formation") {
+      // A hired line is bought for the run, not for the battle: the count lives
+      // on the campaign and each stage spawns that many lines at full strength.
+      if ((campaign.friendlyFormations ?? 0) >= formationConfig.maxHires) {
+        messageElement.textContent = translate("shop.error.formationCap");
+        return;
+      }
+      price = formationConfig.price;
+      itemNameKey = formationConfig.nameKey;
+      if (campaign.totalGold < price) {
+        messageElement.textContent = translate("shop.error.gold");
+        return;
+      }
+      campaign.totalGold -= price;
+      campaign.friendlyFormations = (campaign.friendlyFormations ?? 0) + 1;
     } else {
       throw new Error(`Unknown purchase type: ${purchaseType}`);
     }
@@ -78,6 +94,7 @@ export function createEquipmentShop({
       equipmentLevels: campaign.equipment,
       horseCount: campaign.horseCount,
       roster: campaign.roster,
+      friendlyFormations: campaign.friendlyFormations ?? 0,
       selectedCategory,
       selectedItem,
       onSelectCategory: (category) => { selectedCategory = category; },

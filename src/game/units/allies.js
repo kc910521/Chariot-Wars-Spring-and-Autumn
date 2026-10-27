@@ -1,0 +1,500 @@
+import { enemyStats, formationConfig } from "../../data/formations.js";
+import { clamp } from "../../utils/math.js";
+import { addBloodStain } from "../blood.js";
+import { formationExtent, formationGroundExtent, isInsideFormation, layoutSlots, tickFormationAura } from "./formations.js";
+import {
+  CHARIOT_INTENT, CHARIOT_STATE, chariotIntent, isAtHome, updateChariotState,
+} from "./chariot.js";
+
+// The hired line. It is not a second player: every unit here is a clone of an
+// enemy row, re-painted green, leashed to the slot it spawned on, and driven by
+// one small brain per class. The interesting one is the chariot, whose morale
+// (CHASE -> FLEE -> FIGHT_TO_DEATH) is the shared machine in `chariot.js` - the
+// enemy line drives the same one, only with different legs.
+//
+// Two rules shape everything below:
+// - The line guards its own ground. Foot allies may step `meleeRange` toward an
+//   enemy and are then clamped to `leash` around their slot; nothing charges
+//   across the map the way an alerted enemy line does. That keeps a 1000-coin
+//   purchase from playing the battle for the player.
+// - Nothing here rolls dice. Placement walks a fixed list of bearings and the
+//   brains break ties by list order, so a seeded battle stays reproducible with
+//   or without a hired line.
+
+const SEPARATION_PASSES = 2;
+const SEPARATION_MIN_OVERLAP = 2;
+// A foot ally this close to its slot is home: walking further would jitter on the
+// spot every frame. The number lives in the row with the rest of the guard kit.
+const HOME_EPSILON = formationConfig.engage.homeEpsilon;
+// Bearings to try for a line, in order: left of the chariot, right, behind,
+// then the two rear quarters. The line's facing is the bearing itself, so a line
+// placed on the left of the player looks left - away from him - and its front
+// rank is the one facing the field.
+const SPAWN_OFFSETS = [-Math.PI / 2, Math.PI / 2, Math.PI, -Math.PI * 0.75, Math.PI * 0.75, 0];
+const SPAWN_DISTANCES = [210, 250, 290];
+
+// The state machine, thresholds and intents live in `chariot.js`; this file only
+// supplies the ally-specific situation and the legs that answer the intent. The
+// banner beat is in `formations.js`, because the enemy line ticks the same one.
+
+// An enemy chariot that has left the line it belongs to: the target the friendly
+// chariot chases. Reusing the visible border means "left the formation" is
+// exactly what the player can see, not an invisible distance rule.
+export function isLooseChariot(enemy, formations = []) {
+  if (!enemy || enemy.destroyed || !enemy.vehicle) return false;
+  if (enemy.formationId === undefined) return true;
+  const line = formations.find((formation) => formation.id === enemy.formationId);
+  if (!line) return true;
+  return !isInsideFormation(line, enemy.x, enemy.y);
+}
+
+
+export function createAllies({
+  state, player, world, campaign,
+  moveEntitySafely, hasLineOfSight, circleIntersectsObstacle,
+  rectHitsAnyObstacle, rectTerrain,
+  damageEnemy, fireAllyArrow, addMeleeEffect, burst,
+}) {
+  const { engage, chariot: chariotConfig } = formationConfig;
+
+  function isChariot(unit) {
+    return Boolean(unit.vehicle);
+  }
+
+  function nearestEnemy(ally, range, { requireSight = false } = {}) {
+    let best = null;
+    let bestDistance = range;
+    for (const enemy of state.enemies) {
+      if (enemy.destroyed) continue;
+      const distance = Math.hypot(enemy.x - ally.x, enemy.y - ally.y);
+      if (distance > bestDistance) continue;
+      if (requireSight && !hasLineOfSight(ally.x, ally.y, enemy.x, enemy.y)) continue;
+      best = enemy;
+      bestDistance = distance;
+    }
+    return best;
+  }
+
+  function stepToward(ally, x, y, delta, speedScale = 1) {
+    const dx = x - ally.x;
+    const dy = y - ally.y;
+    const distance = Math.hypot(dx, dy);
+    if (distance < 0.5) return distance;
+    moveEntitySafely(ally, (dx / distance) * ally.speed * speedScale * delta, (dy / distance) * ally.speed * speedScale * delta, ally.radius);
+    return distance;
+  }
+
+  // A foot ally's goal never leaves the envelope: the point is clamped to
+  // `engage.leash` around the slot, so a unit lured by a chariot walks out a
+  // little and then holds, exactly as the line's border promised.
+  function clampToHome(ally, x, y, span) {
+    const dx = x - ally.homeX;
+    const dy = y - ally.homeY;
+    const distance = Math.hypot(dx, dy);
+    if (distance === 0 || distance <= span) return { x, y };
+    return { x: ally.homeX + (dx / distance) * span, y: ally.homeY + (dy / distance) * span };
+  }
+
+  function holdGround(ally, delta, speedScale = 0.65) {
+    const homeDistance = Math.hypot(ally.homeX - ally.x, ally.homeY - ally.y);
+    if (homeDistance > HOME_EPSILON) {
+      ally.angle = Math.atan2(ally.homeY - ally.y, ally.homeX - ally.x);
+      stepToward(ally, ally.homeX, ally.homeY, delta, speedScale);
+      return;
+    }
+    const threat = nearestEnemy(ally, ally.sightRange ?? 450);
+    ally.angle = threat
+      ? Math.atan2(threat.y - ally.y, threat.x - ally.x)
+      : ally.homeAngle;
+  }
+
+  function swing(ally, target) {
+    ally.attackCooldown = ally.attackInterval ?? 1.2;
+    const angle = Math.atan2(target.y - ally.y, target.x - ally.x);
+    ally.angle = angle;
+    addMeleeEffect(target.x, target.y, angle, ally.weapon ?? "sword");
+    damageEnemy(target, ally.damage, "weapon");
+  }
+
+  function ram(ally, target) {
+    ally.ramCooldown = chariotConfig.ramInterval;
+    const angle = Math.atan2(target.y - ally.y, target.x - ally.x);
+    ally.angle = angle;
+    addMeleeEffect(target.x, target.y, angle, "ram");
+    damageEnemy(target, ally.damage, "ram");
+    if (!target.destroyed && !target.boss) {
+      target.knockedDown = Math.max(target.knockedDown ?? 0, 1.8);
+      target.contactCooldown = Math.max(target.contactCooldown ?? 0, 0.5);
+    }
+    burst(target.x, target.y, "#ffe08a");
+    state.shake = Math.max(state.shake, 2);
+  }
+
+  function updateMelee(ally, delta) {
+    // Only enemies near the line's own ground are worth stepping for; the reach
+    // the ally stops at is the honest one (weapon range or the two bodies plus a
+    // hair), so it can actually land the blow once it arrives.
+    const target = nearestEnemy(ally, engage.meleeRange + ally.range);
+    if (!target) {
+      holdGround(ally, delta);
+      return;
+    }
+    const reach = Math.max(ally.range, ally.radius + target.radius + 2);
+    const distance = Math.hypot(target.x - ally.x, target.y - ally.y);
+    if (distance <= reach) {
+      if (ally.attackCooldown <= 0) swing(ally, target);
+      else ally.angle = Math.atan2(target.y - ally.y, target.x - ally.x);
+      return;
+    }
+    const goal = clampToHome(ally, target.x, target.y, engage.leash);
+    if (Math.hypot(goal.x - ally.x, goal.y - ally.y) < 2) {
+      // The leash is already spent: stand and face the enemy rather than jitter
+      // against the clamp.
+      ally.angle = Math.atan2(target.y - ally.y, target.x - ally.x);
+      return;
+    }
+    ally.angle = Math.atan2(goal.y - ally.y, goal.x - ally.x);
+    stepToward(ally, goal.x, goal.y, delta);
+  }
+
+  function updateRanged(ally, delta) {
+    if (Math.hypot(ally.homeX - ally.x, ally.homeY - ally.y) > HOME_EPSILON) {
+      holdGround(ally, delta, 0.8);
+      return;
+    }
+    const range = ally.projectileRange ?? ally.range;
+    const target = nearestEnemy(ally, range, { requireSight: true });
+    if (!target) {
+      holdGround(ally, delta);
+      return;
+    }
+    ally.angle = Math.atan2(target.y - ally.y, target.x - ally.x);
+    if (ally.shotCooldown > 0) return;
+    ally.shotCooldown = ally.fireInterval ?? 2;
+    fireAllyArrow({
+      x: ally.x,
+      y: ally.y,
+      targetX: target.x,
+      targetY: target.y,
+      damage: ally.damage,
+      range,
+      originOffset: 16,
+    });
+  }
+
+  function findLooseChariot(ally) {
+    let best = null;
+    let bestDistance = chariotConfig.chaseRange;
+    for (const enemy of state.enemies) {
+      if (!isLooseChariot(enemy, state.formations)) continue;
+      // The chase is bounded by the line's ground on both ends: the target has
+      // to be reachable within the leash and visible from where the ally stands.
+      if (Math.hypot(enemy.x - ally.homeX, enemy.y - ally.homeY) > chariotConfig.chaseLeash) continue;
+      const distance = Math.hypot(enemy.x - ally.x, enemy.y - ally.y);
+      if (distance > bestDistance) continue;
+      if (!hasLineOfSight(ally.x, ally.y, enemy.x, enemy.y)) continue;
+      best = enemy;
+      bestDistance = distance;
+    }
+    return best;
+  }
+
+  function runHome(ally, delta, threat = null) {
+    if (isAtHome(ally.x, ally.y, ally.homeX, ally.homeY)) {
+      ally.angle = threat
+        ? Math.atan2(threat.y - ally.y, threat.x - ally.x)
+        : ally.homeAngle;
+      return;
+    }
+    // Running home is the one time a chariot moves faster than its row.
+    ally.angle = Math.atan2(ally.homeY - ally.y, ally.homeX - ally.x);
+    stepToward(ally, ally.homeX, ally.homeY, delta, chariotConfig.regroupSpeed);
+  }
+
+  function chaseTarget(ally, target, delta) {
+    const distance = Math.hypot(target.x - ally.x, target.y - ally.y);
+    const reach = ally.radius + target.radius + 6;
+    ally.angle = Math.atan2(target.y - ally.y, target.x - ally.x);
+    if (distance > reach) {
+      if (Math.hypot(ally.x - ally.homeX, ally.y - ally.homeY) > chariotConfig.chaseLeash) {
+        runHome(ally, delta);
+        return;
+      }
+      stepToward(ally, target.x, target.y, delta);
+      return;
+    }
+    if (ally.ramCooldown <= 0) ram(ally, target);
+  }
+
+  function updateChariot(ally, delta) {
+    const contact = nearestEnemy(ally, ally.radius + 36);
+    const inMelee = contact !== null
+      && Math.hypot(contact.x - ally.x, contact.y - ally.y) <= ally.radius + contact.radius + 6;
+    const loose = findLooseChariot(ally);
+    // Same morale machine as the enemy line. The hired chariot's `hasTarget` is
+    // the loose enemy rider it is allowed to chase, not the whole battlefield.
+    const intent = chariotIntent(updateChariotState(ally, {
+      health: ally.health,
+      maxHealth: ally.maxHealth,
+      inMelee,
+      hasTarget: loose !== null,
+    }, chariotConfig));
+
+    if (intent === CHARIOT_INTENT.REGROUP) {
+      // Disengaged: run for the slot and stay there until mended above the
+      // re-engage band. Standing on the slot is not a reason to charge out at 21%.
+      runHome(ally, delta, contact);
+      return;
+    }
+    if (intent === CHARIOT_INTENT.ENGAGE) {
+      // FIGHT_TO_DEATH is the same ram, aimed at whatever is closest: the
+      // chariot it was chasing may be gone by the time the trap closes.
+      const target = ally.chariotState === CHARIOT_STATE.CHASE
+        ? loose
+        : contact ?? nearestEnemy(ally, chariotConfig.chaseRange);
+      if (target) chaseTarget(ally, target, delta);
+      else holdGround(ally, delta, 0.7);
+      return;
+    }
+    // HOLD: return to the slot, face the field, and still ram anything that
+    // walks into the hull - a parked chariot is not a free hit.
+    if (!isAtHome(ally.x, ally.y, ally.homeX, ally.homeY)) {
+      ally.angle = Math.atan2(ally.homeY - ally.y, ally.homeX - ally.x);
+      stepToward(ally, ally.homeX, ally.homeY, delta, 0.7);
+      return;
+    }
+    ally.angle = contact
+      ? Math.atan2(contact.y - ally.y, contact.x - ally.x)
+      : ally.homeAngle;
+    // Only a body actually against the hull is rammed from a standstill; the
+    // 36px search above is for facing, not for reach.
+    if (inMelee && contact && ally.ramCooldown <= 0) ram(ally, contact);
+  }
+
+  // `damageAlly` mirrors `damageCompanion`, minus the campaign consequences: a
+  // hired unit is not on the roster, so its death costs the run nothing but the
+  // body. Vehicles shrug the shove off instead of being knocked about.
+  function damageAlly(ally, amount, sourceX, sourceY) {
+    if (!ally || ally.destroyed || !ally.friendly) return;
+    ally.health = Math.max(0, ally.health - amount);
+    ally.hitFlash = 0.2;
+    addBloodStain(state, () => campaign.random(), ally.x, ally.y, ally.radius, ally.health === 0);
+    const angle = Math.atan2(ally.y - sourceY, ally.x - sourceX);
+    if (!ally.vehicle) {
+      ally.knockbackX = (ally.knockbackX || 0) + Math.cos(angle) * 42;
+      ally.knockbackY = (ally.knockbackY || 0) + Math.sin(angle) * 42;
+    }
+    state.shake = Math.max(state.shake, ally.vehicle ? 2 : 1);
+    burst(ally.x, ally.y, "#d9a34f");
+    if (ally.health === 0) {
+      ally.destroyed = true;
+      burst(ally.x, ally.y, formationConfig.visual.deathBurst);
+    }
+  }
+
+  // Ally bodies never share a pixel with an enemy (or with each other). Only one
+  // side of a foot pair is moved per overlap - the enemy for foot pairs, the ally
+  // for a vehicle or a champion - so the pass is order-stable and cannot shove a
+  // boss out of its line.
+  function separateAllies() {
+    for (let pass = 0; pass < SEPARATION_PASSES; pass += 1) {
+      let moved = false;
+      for (const ally of state.allies) {
+        if (ally.destroyed) continue;
+        // Foot allies are pushed out of the player's hull; the chariot is not.
+        if (!ally.vehicle) {
+          const dx = ally.x - player.x;
+          const dy = ally.y - player.y;
+          const span = Math.sqrt(dx * dx + dy * dy);
+          const minimum = player.radius + ally.radius - SEPARATION_MIN_OVERLAP;
+          if (span < minimum) {
+            const push = minimum - span;
+            const nx = span > 0 ? dx / span : 1;
+            const ny = span > 0 ? dy / span : 0;
+            moveEntitySafely(ally, nx * push, ny * push, ally.radius);
+            moved = true;
+          }
+        }
+        for (const enemy of state.enemies) {
+          if (enemy.destroyed) continue;
+          const dx = enemy.x - ally.x;
+          const dy = enemy.y - ally.y;
+          const span = Math.sqrt(dx * dx + dy * dy);
+          const minimum = ally.radius + enemy.radius - SEPARATION_MIN_OVERLAP;
+          if (span >= minimum) continue;
+          const push = minimum - span;
+          const nx = span > 0 ? dx / span : 1;
+          const ny = span > 0 ? dy / span : 0;
+          if (enemy.boss || enemy.vehicle) {
+            moveEntitySafely(ally, -nx * push, -ny * push, ally.radius);
+          } else {
+            moveEntitySafely(enemy, nx * push, ny * push, enemy.radius);
+          }
+          moved = true;
+        }
+      }
+      for (let first = 0; first < state.allies.length; first += 1) {
+        const front = state.allies[first];
+        if (front.destroyed) continue;
+        for (let second = first + 1; second < state.allies.length; second += 1) {
+          const back = state.allies[second];
+          if (back.destroyed) continue;
+          const dx = back.x - front.x;
+          const dy = back.y - front.y;
+          const span = Math.sqrt(dx * dx + dy * dy);
+          const minimum = front.radius + back.radius - SEPARATION_MIN_OVERLAP;
+          if (span >= minimum) continue;
+          const push = minimum - span;
+          const nx = span > 0 ? dx / span : 1;
+          const ny = span > 0 ? dy / span : 0;
+          moveEntitySafely(back, nx * push, ny * push, back.radius);
+          moved = true;
+        }
+      }
+      if (!moved) return;
+    }
+  }
+
+  function update(delta) {
+    // Aura first: it may top a chariot up over a threshold, and the state machine
+    // below should see the health it actually has this frame.
+    tickFormationAura(state.allyFormations, state.allies, delta);
+    for (const ally of state.allies) {
+      if (ally.destroyed) continue;
+      ally.hitFlash = Math.max(0, ally.hitFlash - delta);
+      ally.attackCooldown = Math.max(0, ally.attackCooldown - delta);
+      ally.shotCooldown = Math.max(0, ally.shotCooldown - delta);
+      ally.ramCooldown = Math.max(0, ally.ramCooldown - delta);
+      ally.knockedDown = Math.max(0, (ally.knockedDown ?? 0) - delta);
+      if (ally.knockedDown > 0) continue;
+      // Knockback from a hit decays over a few frames instead of being applied
+      // once: a spear that survives a blow is visibly shoved, not teleported.
+      if (!ally.vehicle && (ally.knockbackX || ally.knockbackY)) {
+        moveEntitySafely(ally, (ally.knockbackX || 0) * delta, (ally.knockbackY || 0) * delta, ally.radius);
+        const drag = Math.max(0, 1 - 9 * delta);
+        ally.knockbackX = (ally.knockbackX || 0) * drag;
+        ally.knockbackY = (ally.knockbackY || 0) * drag;
+      }
+      if (isChariot(ally)) updateChariot(ally, delta);
+      else if (ally.ranged) updateRanged(ally, delta);
+      else updateMelee(ally, delta);
+    }
+    separateAllies();
+    state.allies = state.allies.filter((ally) => !ally.destroyed);
+    state.allyFormations = state.allyFormations.filter((formation) =>
+      state.allies.some((ally) => ally.formationId === formation.id));
+  }
+
+  function createAllyUnit(type, slot, formation, heading, order) {
+    const stats = enemyStats[type];
+    if (!stats) throw new Error(`Unknown friendly formation unit "${type}".`);
+    return {
+      ...stats,
+      type,
+      friendly: true,
+      maxHealth: stats.health,
+      x: slot.x,
+      y: slot.y,
+      angle: heading,
+      homeX: slot.x,
+      homeY: slot.y,
+      homeAngle: heading,
+      formationId: formation.id,
+      // The row's own robe is the enemy palette; the hired line is green.
+      visual: { ...stats.visual, robe: formationConfig.visual.robe, overlays: [...(stats.visual.overlays ?? [])] },
+      deathBurst: formationConfig.visual.deathBurst,
+      chariotState: stats.vehicle ? CHARIOT_STATE.HOLD : null,
+      // Staggered clocks, fixed rather than rolled: the line opens with a ripple
+      // instead of every bow releasing on the same frame, and the seed is intact.
+      attackCooldown: 0.9 + order * 0.15,
+      shotCooldown: 1.1 + order * 0.2,
+      ramCooldown: 0,
+      hitFlash: 0,
+      healFlash: 0,
+      knockedDown: 0,
+      contactCooldown: 0,
+      knockbackX: 0,
+      knockbackY: 0,
+    };
+  }
+
+  // Placement walks the fixed bearing list and keeps the best ground it saw:
+  // dry beats merely uniform beats "slots are free but a wall crosses the
+  // footprint", the same ladder the enemy spawner uses. Unlike the enemy spawner
+  // it never gives up - a line that cost 1000 coins has to appear - so the best
+  // rung is committed even when every rung failed, and the first clamped
+  // candidate is the floor beneath that.
+  function findSpawn(index, extent, clearance) {
+    const preferred = index % 2 === 0 ? -Math.PI / 2 : Math.PI / 2;
+    const offsets = [preferred, ...SPAWN_OFFSETS.filter((offset) => offset !== preferred)];
+    let best = null;
+    let fallback = null;
+    for (const distance of SPAWN_DISTANCES) {
+      for (const offset of offsets) {
+        const heading = player.angle + offset;
+        const centerX = clamp(player.x + Math.cos(heading) * distance, extent.halfWidth + 24, world.width - extent.halfWidth - 24);
+        const centerY = clamp(player.y + Math.sin(heading) * distance, extent.halfHeight + 24, world.height - extent.halfHeight - 24);
+        const slotCoordinates = layoutSlots(formationConfig, centerX, centerY, heading);
+        const candidate = { centerX, centerY, heading, slotCoordinates, tier: 0 };
+        fallback ??= candidate;
+        if (slotCoordinates.some((slot) => Math.hypot(slot.x - player.x, slot.y - player.y) < player.radius + 40)) continue;
+        // Two hired lines (or a hired line and an enemy line) on the same ground
+        // interpenetrate for the rest of the battle.
+        if (state.allyFormations.some((other) => Math.abs(other.x - centerX) < other.halfWidth + extent.halfWidth
+          && Math.abs(other.y - centerY) < other.halfHeight + extent.halfHeight)) continue;
+        if (state.formations.some((other) => Math.abs(other.x - centerX) < other.halfWidth + extent.halfWidth
+          && Math.abs(other.y - centerY) < other.halfHeight + extent.halfHeight)) continue;
+        if (!rectHitsAnyObstacle(centerX, centerY, clearance.halfWidth, clearance.halfHeight, heading, campaign.obstacles)) {
+          const footing = rectTerrain(centerX, centerY, clearance.halfWidth, clearance.halfHeight, heading, campaign.terrain);
+          candidate.tier = footing.dry ? 3 : footing.uniform ? 2 : 1;
+          if (!best || candidate.tier > best.tier) best = candidate;
+          if (candidate.tier === 3) return candidate;
+          continue;
+        }
+        if (slotCoordinates.some((slot) => circleIntersectsObstacle(slot.x, slot.y, 20))) continue;
+        candidate.tier = 1;
+        if (!best || candidate.tier > best.tier) best = candidate;
+      }
+    }
+    return best ?? fallback;
+  }
+
+  function commitFormation({ centerX, centerY, heading, slotCoordinates }, index) {
+    const { halfWidth, halfHeight } = formationExtent(formationConfig);
+    const formation = {
+      // Negative ids cannot collide with an enemy formation's `elapsed + random`.
+      id: -(index + 1),
+      nameKey: formationConfig.nameKey,
+      x: centerX,
+      y: centerY,
+      heading,
+      halfWidth,
+      halfHeight,
+      color: "#5fbd79",
+      friendly: true,
+      auraTimer: 0,
+      auraFlash: 0,
+    };
+    state.allyFormations.push(formation);
+    formationConfig.slots.forEach(([type], order) => {
+      state.allies.push(createAllyUnit(type, slotCoordinates[order], formation, heading, order));
+    });
+  }
+
+  // Hires are a campaign-level count and each battle rebuilds the lines at full
+  // strength from it: losing the line in one battle does not refund or erase it.
+  function spawnFriendlyFormations() {
+    state.allyFormations = [];
+    state.allies = [];
+    const hires = clamp(Math.round(campaign.friendlyFormations ?? 0), 0, formationConfig.maxHires);
+    if (hires === 0) return state.allyFormations;
+    const extent = formationExtent(formationConfig);
+    const clearance = formationGroundExtent(formationConfig);
+    for (let index = 0; index < hires; index += 1) {
+      commitFormation(findSpawn(index, extent, clearance), index);
+    }
+    return state.allyFormations;
+  }
+
+  return { spawnFriendlyFormations, update, damageAlly };
+}

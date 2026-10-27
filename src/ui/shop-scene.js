@@ -18,6 +18,15 @@ const tufts = [
   [0.62, 0.4, 0.95], [0.86, 0.06, 0.7], [-0.68, -0.24, 0.75], [0.54, -0.3, 0.85],
 ];
 
+// Hired lines pitch their tents beside the fire, one on each flank. Fixed
+// fractions of the canvas (x) and of the seat radius (y), in draw order (left
+// first), because a camp that rearranges itself every frame reads as a glitch
+// rather than as a hire.
+const tentSpots = [
+  { x: -0.3, y: -0.34, scale: 1 },
+  { x: 0.3, y: -0.2, scale: 0.88 },
+];
+
 export function createShopScene({ rigCanvas, campCanvas }) {
   const rigContext = rigCanvas?.getContext?.("2d") ?? null;
   const campContext = campCanvas?.getContext?.("2d") ?? null;
@@ -27,7 +36,7 @@ export function createShopScene({ rigCanvas, campCanvas }) {
   // `snapshot` is what the campaign owns, `preview` a hovered purchase. The
   // preview is dropped on every render, so a pointer that leaves mid-hover cannot
   // leave the dossier showing a chariot the player never bought.
-  let snapshot = { horseCount: 1, crew: [], levels: {} };
+  let snapshot = { horseCount: 1, crew: [], levels: {}, campTents: 0 };
   let preview = null;
   let active = false;
   let elapsed = startTime;
@@ -53,6 +62,9 @@ export function createShopScene({ rigCanvas, campCanvas }) {
       // The chassis the campaign has bought (or would buy, for a hover): the
       // preview draws the same rack, box and blades the next battle will.
       kit: calculateChariotKit(source.levels ?? snapshot.levels ?? {}),
+      // How many hired lines are camped here. Only the camp fire reads it; the
+      // rig page does not care, and one extra tent on a hover is the preview.
+      campTents: Math.max(0, Math.round(source.campTents ?? snapshot.campTents ?? 0)),
       isPreview: preview !== null,
     };
   }
@@ -230,6 +242,48 @@ export function createShopScene({ rigCanvas, campCanvas }) {
     }
   }
 
+  // A ridge tent seen from the front: a dark canvas triangle, the firelit half,
+  // and the black wedge of the door. Drawn behind the ring so a tent never
+  // covers a seated crew member.
+  function drawTent(context, x, groundY, size) {
+    context.fillStyle = "rgba(8, 6, 5, 0.42)";
+    context.beginPath();
+    context.ellipse(x, groundY + size * 0.05, size * 0.62, size * 0.16, 0, 0, Math.PI * 2);
+    context.fill();
+
+    context.fillStyle = "#4b4132";
+    context.beginPath();
+    context.moveTo(x, groundY - size);
+    context.lineTo(x + size * 0.62, groundY);
+    context.lineTo(x - size * 0.62, groundY);
+    context.closePath();
+    context.fill();
+
+    // The face turned towards the firelight.
+    context.fillStyle = "#6c5a3c";
+    context.beginPath();
+    context.moveTo(x, groundY - size);
+    context.lineTo(x + size * 0.62, groundY);
+    context.lineTo(x + size * 0.06, groundY);
+    context.closePath();
+    context.fill();
+
+    context.strokeStyle = "rgba(226, 196, 138, 0.5)";
+    context.lineWidth = Math.max(1, size * 0.03);
+    context.beginPath();
+    context.moveTo(x, groundY - size);
+    context.lineTo(x, groundY);
+    context.stroke();
+
+    context.fillStyle = "rgba(18, 13, 10, 0.9)";
+    context.beginPath();
+    context.moveTo(x, groundY - size * 0.42);
+    context.lineTo(x + size * 0.17, groundY);
+    context.lineTo(x - size * 0.17, groundY);
+    context.closePath();
+    context.fill();
+  }
+
   function drawCamp(time) {
     if (!campArt) return;
     const view = measure(campCanvas, campContext);
@@ -238,7 +292,7 @@ export function createShopScene({ rigCanvas, campCanvas }) {
     const centerX = view.width * 0.5;
     const centerY = view.height * 0.52;
     const radius = Math.min(view.width * 0.3, view.height * 0.44);
-    const { crew } = target();
+    const { crew, campTents } = target();
 
     context.clearRect(0, 0, view.width, view.height);
     const night = context.createLinearGradient(0, 0, 0, view.height);
@@ -269,6 +323,17 @@ export function createShopScene({ rigCanvas, campCanvas }) {
     context.globalAlpha = 1;
 
     const seats = campSeats(crew.length + 1, { centerX, centerY, radius });
+    // Tents first: they belong to the dark behind the ring, and a firelit canvas
+    // painted over a seated figure would read as the figure sitting inside it.
+    for (let index = 0; index < Math.min(campTents, tentSpots.length); index += 1) {
+      const spot = tentSpots[index];
+      drawTent(
+        context,
+        centerX + spot.x * view.width,
+        centerY + spot.y * radius,
+        radius * 0.42 * spot.scale,
+      );
+    }
     const behind = seats.filter((seat) => !seat.near);
     const front = seats.filter((seat) => seat.near);
     for (const seat of behind) drawSeat(context, seat, seat.index === 0 ? null : crew[seat.index - 1]);
@@ -278,6 +343,9 @@ export function createShopScene({ rigCanvas, campCanvas }) {
     lastFrames.camp = {
       crew: crew.length,
       seats: seats.length,
+      // The smoke test reads this: a hire is legible at the fire even though the
+      // shop never shows a battlefield.
+      formations: campTents,
       radius,
       width: view.width,
       height: view.height,
@@ -331,6 +399,7 @@ export function createShopScene({ rigCanvas, campCanvas }) {
       horseCount: Math.max(1, Math.round(next?.horseCount ?? 1)),
       crew: next?.crew ?? [],
       levels: next?.levels ?? {},
+      campTents: Math.max(0, Math.round(next?.campTents ?? 0)),
     };
     preview = null;
     if (active) draw(elapsed);
@@ -343,6 +412,7 @@ export function createShopScene({ rigCanvas, campCanvas }) {
       // A hovered card carries the levels it would leave behind, so the dossier
       // shows the box and the blades before the gold is spent.
       levels: next.levels ?? snapshot.levels ?? {},
+      campTents: Math.max(0, Math.round(next.campTents ?? snapshot.campTents ?? 0)),
     } : null;
     if (active) draw(elapsed);
   }

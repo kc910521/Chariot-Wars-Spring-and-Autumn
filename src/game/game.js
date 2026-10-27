@@ -5,10 +5,11 @@ import { createAudio } from "../assets/audio.js";
 import { launchQuery } from "../platform/launch.js";
 import { createEquipmentShop } from "./equipment.js";
 import { createEnemies } from "./units/enemies.js";
+import { createAllies } from "./units/allies.js";
 import { createPlayerController } from "./player.js";
 import { createGameState } from "./state.js";
 import { createCollisionSystem } from "./collision.js";
-import { fellTree, isFellable } from "./elements.js";
+import { fellTree, isFellable, rectHitsAnyObstacle, rectTerrain } from "./elements.js";
 import { createCombatSystem } from "./combat.js";
 import { createProjectileSystem } from "./projectiles.js";
 import { pruneParticles, updateParticles } from "./particles.js";
@@ -205,8 +206,10 @@ function boot() {
   // The refs below make that cycle explicit and order-independent.
   const combatRef = { current: null };
   const projectileRef = { current: null };
+  const alliesRef = { current: null };
   const damagePlayer = defer(() => combatRef.current, "damagePlayer");
   const damageCompanion = defer(() => combatRef.current, "damageCompanion");
+  const damageAlly = defer(() => alliesRef.current, "damageAlly");
 
   const enemySystem = createEnemies({
     bossTypes, enemyStats, formationPatterns, state, player, world, campaign,
@@ -218,15 +221,30 @@ function boot() {
     getChariotCollisionDamage: () => calculateChariotCollisionDamage(campaign.equipment),
     playTone, updateHud, hasLineOfSight: collision.hasLineOfSight,
     fireEnemy: defer(() => projectileRef.current, "fireEnemyShot"),
-    damagePlayer, damageCompanion,
+    damagePlayer, damageCompanion, damageAlly,
   });
   const {
     spawnFormation, spawnBoss, spawnBossSquad, burst, dust, addMeleeEffect, damageEnemy, updateUnits,
   } = enemySystem;
 
+  // The hired line fights with the same verbs the enemies do: `damageEnemy` for
+  // its blows, the projectile system's `fireAllyArrow` for its bows, and the
+  // enemy spawner's burst/melee effects for feedback. It owns no references to
+  // the player's combat module - a hire can never call `damagePlayer`.
+  const allies = createAllies({
+    state, player, world, campaign,
+    moveEntitySafely: collision.moveEntitySafely,
+    hasLineOfSight: collision.hasLineOfSight,
+    circleIntersectsObstacle: collision.circleIntersectsObstacle,
+    rectHitsAnyObstacle, rectTerrain,
+    damageEnemy, fireAllyArrow: defer(() => projectileRef.current, "fireAllyArrow"),
+    addMeleeEffect, burst,
+  });
+  alliesRef.current = allies;
+
   const projectiles = createProjectileSystem({
     state, player, world, campaign, collision, burst, dust, playTone, damageEnemy,
-    damagePlayer, damageCompanion,
+    damagePlayer, damageCompanion, damageAlly,
   });
   projectileRef.current = projectiles;
 
@@ -292,6 +310,7 @@ function boot() {
     },
     circleIntersectsObstacle: collision.circleIntersectsObstacle,
     updateHud, setMode, spawnBoss, spawnBossSquad, announceBoss, resizeCanvas, playTone, hideBanner,
+    spawnFriendlyAllies: allies.spawnFriendlyFormations,
     lockVictory: (summary) => victoryLock.lock(summary),
   });
   const {
@@ -359,6 +378,10 @@ function boot() {
     updateUnits(delta);
     if (state.mode === "over") return;
 
+    // The hired line moves after the enemies have decided where they stand, so a
+    // swing is aimed at this frame's position and not last frame's.
+    allies.update(delta);
+
     state.shake = Math.max(0, state.shake - 25 * delta);
     state.damageFlash = Math.max(0, state.damageFlash - delta);
     for (const drop of state.drops) {
@@ -375,7 +398,7 @@ function boot() {
     state.formations = state.formations.filter((formation) => state.enemies.some((enemy) => enemy.formationId === formation.id));
     // After the units have moved and before the particles are integrated, so a
     // puff raised this frame is already on its way.
-    trails.update(delta, player, state.enemies);
+    trails.update(delta, player, state.enemies, state.allies);
     updateParticles(state.particles, delta);
     state.particles = pruneParticles(state.particles);
     for (const effect of state.meleeEffects) effect.life -= delta;

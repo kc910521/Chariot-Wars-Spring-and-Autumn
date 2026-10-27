@@ -26,17 +26,24 @@ import { createBattlefield } from "../src/game/map.js";
 import { createElementRenderer } from "../src/render/elements.js";
 import { chariotRigBox, createSpriteArt, spritePalette } from "../src/render/sprites.js";
 import { CHARIOT_CONTROL_CONFIG, createPlayerController } from "../src/game/player.js";
-import { bossTypes, enemyStats, formationPatterns } from "../src/data/formations.js";
+import { bossTypes, chariotTactics, enemyStats, formationAura, formationConfig, formationPatterns } from "../src/data/formations.js";
 import {
   createBallisticProjectile, createProjectileSystem, solveBallisticElevation,
   solveTimeToGround, updateProjectiles,
 } from "../src/game/projectiles.js";
 import { createEnemies } from "../src/game/units/enemies.js";
+import { createBehaviours } from "../src/game/units/behaviours.js";
+import {
+  createAllies, isLooseChariot,
+} from "../src/game/units/allies.js";
+import {
+  CHARIOT_INTENT, CHARIOT_STATE, chariotIntent, nextChariotState,
+} from "../src/game/units/chariot.js";
 import { countParticles, pruneParticles, spawnParticle, updateParticles } from "../src/game/particles.js";
 import { createTrailSystem } from "../src/game/trails.js";
 import {
   chasePoint, defendedPoint, formationExtent, formationGroundExtent, isInsideFormation, searchPoint,
-  updateFormationAlerts,
+  tickFormationAura, updateFormationAlerts,
 } from "../src/game/units/formations.js";
 import { clamp, shortestAngleDifference } from "../src/utils/math.js";
 import { createRandomSeed, createSeededRandom, parseSeed } from "../src/utils/random.js";
@@ -3490,6 +3497,447 @@ test("?reset=1 reaches the launch query, and a bare launch is empty", () => {
   } finally {
     globalThis.window = previousWindow;
   }
+});
+
+console.log("\n[unit] the hired formation");
+
+// A minimal battle for the ally system: flat, empty ground, a player in the
+// middle and one enemy list the test owns. The factory only reaches for the
+// services it is given, so these stubs stand in for the real collision/map.
+function hireRig({ hires = 0 } = {}) {
+  const state = {
+    elapsed: 0,
+    enemies: [],
+    formations: [],
+    allyFormations: [],
+    allies: [],
+    shake: 0,
+    bullets: [],
+    particles: [],
+    meleeEffects: [],
+    bloodStains: [],
+  };
+  const player = { x: 1000, y: 800, radius: 17, angle: -Math.PI / 2, mode: "chariot" };
+  const world = { width: 2000, height: 1600 };
+  let draws = 0;
+  const campaign = {
+    friendlyFormations: hires,
+    obstacles: [],
+    terrain: [],
+    // Counts every draw so the spawn test can prove a hire rolls nothing; the
+    // value is fixed so a death stain is still deterministic.
+    random: () => { draws += 1; return 0.5; },
+  };
+  const allies = createAllies({
+    state,
+    player,
+    world,
+    campaign,
+    moveEntitySafely: (unit, dx, dy) => { unit.x += dx; unit.y += dy; },
+    hasLineOfSight: () => true,
+    circleIntersectsObstacle: () => false,
+    rectHitsAnyObstacle: () => false,
+    rectTerrain: () => ({ dry: true, uniform: true, speed: 1, overlapped: 0 }),
+    damageEnemy: (enemy, amount) => {
+      enemy.health -= amount;
+      if (enemy.health <= 0) enemy.destroyed = true;
+    },
+    fireAllyArrow: () => { state.bullets.push({ owner: "ally" }); },
+    addMeleeEffect: (x, y, angle, weapon) => { state.meleeEffects.push({ x, y, angle, weapon }); },
+    burst: () => {},
+  });
+  return { state, player, world, campaign, allies, draws: () => draws };
+}
+
+test("the hire is one row: price, cap, roster and aura all read from it", () => {
+  assert.equal(formationConfig.price, 1000);
+  assert.equal(formationConfig.maxHires, 2);
+  assert.equal(formationConfig.slots.length, 7, "the line is not seven bodies");
+  const types = formationConfig.slots.map(([type]) => type);
+  assert.equal(types.filter((type) => type === "chariot").length, 1);
+  assert.equal(types.filter((type) => type === "archer").length, 2);
+  assert.equal(types.filter((type) => type === "spear").length, 2);
+  assert.equal(formationConfig.aura.heal, 1);
+  assert.equal(formationConfig.aura.interval, 3);
+  assert.ok(formationConfig.chariot.reengageAt > formationConfig.chariot.fleeAt,
+    "the two thresholds must leave a hysteresis band");
+});
+
+test("a hire with no purchase spawns nothing", () => {
+  const rig = hireRig();
+  assert.deepEqual(rig.allies.spawnFriendlyFormations(), []);
+  assert.deepEqual(rig.state.allies, []);
+});
+
+test("each hire spawns the whole line, and the count is capped", () => {
+  const rig = hireRig({ hires: 2 });
+  const lines = rig.allies.spawnFriendlyFormations();
+  assert.equal(lines.length, 2, "two hires did not spawn two lines");
+  assert.equal(rig.state.allies.length, 14, "a line is not seven bodies");
+  for (const line of lines) {
+    const members = rig.state.allies.filter((ally) => ally.formationId === line.id);
+    assert.equal(members.length, 7);
+    assert.equal(members.filter((ally) => ally.vehicle).length, 1, "a line without its chariot");
+    assert.equal(members.filter((ally) => ally.ranged).length, 2, "a line without both archers");
+    assert.equal(members.every((ally) => ally.friendly && ally.health === ally.maxHealth), true);
+    assert.equal(members.every((ally) => ally.visual.robe === formationConfig.visual.robe), true,
+      "a hired body kept the enemy palette");
+    assert.ok(line.id < 0, "a friendly line reused the enemy id space");
+  }
+  // The cap is enforced at spawn too, not only by the shop button.
+  const capped = hireRig({ hires: 9 });
+  assert.equal(capped.allies.spawnFriendlyFormations().length, formationConfig.maxHires);
+});
+
+test("spawning a line draws no random numbers and repeats exactly", () => {
+  const first = hireRig({ hires: 2 });
+  const second = hireRig({ hires: 2 });
+  first.allies.spawnFriendlyFormations();
+  second.allies.spawnFriendlyFormations();
+  const place = (rig) => rig.state.allies.map((ally) => [ally.type, ally.x, ally.y, ally.angle]);
+  assert.deepEqual(place(first), place(second), "two identical spawns landed differently");
+  // Placement walks a fixed bearing list, so a hire cannot move the enemy
+  // placement on a seeded battlefield.
+  assert.equal(first.draws() + second.draws(), 0, "spawning a line drew from the battle seed");
+  assert.ok(first.state.allyFormations.every((line) => line.auraTimer === 0 && line.auraFlash === 0));
+});
+
+
+
+test("a chariot flees at 20% and only re-engages above 40%", () => {
+  const at = (health, current, extra = {}) => nextChariotState({
+    current, health, maxHealth: 14, ...extra,
+  });
+  // Both sides read the same table; the ally row keeps it by reference.
+  assert.equal(formationConfig.chariot.fleeAt, chariotTactics.fleeAt);
+  assert.equal(formationConfig.chariot.reengageAt, chariotTactics.reengageAt);
+  assert.equal(at(14, CHARIOT_STATE.HOLD), CHARIOT_STATE.HOLD, "a fresh chariot left its post");
+  assert.equal(at(14, CHARIOT_STATE.HOLD, { hasTarget: true }), CHARIOT_STATE.CHASE);
+  assert.equal(at(2, CHARIOT_STATE.CHASE), CHARIOT_STATE.FLEE, "a broken chariot did not run");
+  assert.equal(at(2, CHARIOT_STATE.HOLD), CHARIOT_STATE.FLEE);
+  // Hysteresis: 30% is inside the band, so a fleeing chariot keeps running even
+  // though it is above the entry threshold.
+  assert.equal(at(4, CHARIOT_STATE.FLEE), CHARIOT_STATE.FLEE, "the band collapsed into one threshold");
+  assert.equal(at(6, CHARIOT_STATE.FLEE), CHARIOT_STATE.HOLD, "the chariot did not re-engage above 40%");
+  // Camp does not end the band: 21% at home is still disengaged, and only the
+  // re-engage threshold sends it back out.
+  assert.equal(at(3, CHARIOT_STATE.FLEE, { hasTarget: true }), CHARIOT_STATE.FLEE,
+    "a chariot that reached camp charged out again before 40%");
+  assert.equal(at(6, CHARIOT_STATE.FLEE, { hasTarget: true }), CHARIOT_STATE.CHASE);
+  assert.equal(chariotIntent(CHARIOT_STATE.FLEE), CHARIOT_INTENT.REGROUP);
+  assert.equal(chariotIntent(CHARIOT_STATE.CHASE), CHARIOT_INTENT.ENGAGE);
+  assert.equal(chariotIntent(CHARIOT_STATE.FIGHT_TO_DEATH), CHARIOT_INTENT.ENGAGE);
+  assert.equal(chariotIntent(CHARIOT_STATE.HOLD), CHARIOT_INTENT.HOLD);
+  assert.equal(chariotIntent(undefined), CHARIOT_INTENT.HOLD, "an unticked unit must stand still");
+});
+
+test("a cornered chariot fights to the death and never runs again", () => {
+  assert.equal(nextChariotState({ current: CHARIOT_STATE.FLEE, health: 1, maxHealth: 14, inMelee: true }),
+    CHARIOT_STATE.FIGHT_TO_DEATH);
+  assert.equal(nextChariotState({ current: CHARIOT_STATE.HOLD, health: 1, maxHealth: 14, inMelee: true }),
+    CHARIOT_STATE.FIGHT_TO_DEATH);
+  // Latched: healing, reaching camp or meeting a fresh target cannot undo it.
+  assert.equal(nextChariotState({ current: CHARIOT_STATE.FIGHT_TO_DEATH, health: 14, maxHealth: 14 }),
+    CHARIOT_STATE.FIGHT_TO_DEATH);
+  assert.equal(nextChariotState({
+    current: CHARIOT_STATE.FIGHT_TO_DEATH, health: 14, maxHealth: 14, hasTarget: true,
+  }), CHARIOT_STATE.FIGHT_TO_DEATH);
+});
+
+test("the enemy chariot drives the same morale machine as the hire", () => {
+  const player = { x: 800, y: 500, radius: 17, mode: "chariot", angle: 0 };
+  const behaviours = createBehaviours({
+    player,
+    moveEntitySafely: (unit, dx, dy) => { unit.x += dx; unit.y += dy; },
+    fireEnemy: () => {},
+    damageCombatTarget: () => {},
+    addMeleeEffect: () => {},
+    burst: () => {},
+    damageEnemy: () => {},
+    getChariotTravelSpeed: () => 0,
+  });
+  const chariot = {
+    type: "chariot", behaviour: "cavalry", x: 500, y: 500,
+    homeX: 300, homeY: 500, radius: 21, speed: 75, health: 14, maxHealth: 14,
+    angle: 0, contactCooldown: 0,
+  };
+  // The same order `updateUnits` uses: morale every frame, then the sight brain.
+  function frame() {
+    const distance = Math.hypot(player.x - chariot.x, player.y - chariot.y);
+    const angle = Math.atan2(player.y - chariot.y, player.x - chariot.x);
+    behaviours.cavalry.think(chariot, player, distance, true);
+    behaviours.cavalry.onSight(chariot, player, distance, angle, 1 / 60);
+  }
+
+  frame();
+  assert.equal(chariot.chariotState, CHARIOT_STATE.CHASE, "an enemy chariot did not charge");
+  assert.ok(chariot.x > 500, "a whole enemy chariot did not close on the player");
+
+  // Broken on the field: it breaks contact and runs for its own slot.
+  chariot.health = 2;
+  chariot.chariotState = CHARIOT_STATE.CHASE;
+  chariot.x = 500;
+  frame();
+  assert.equal(chariot.chariotState, CHARIOT_STATE.FLEE, "a broken enemy chariot did not break off");
+  assert.ok(chariot.x < 500, "a broken enemy chariot did not run home");
+
+  // At home at 21%, with the player in plain sight: still disengaged.
+  chariot.x = chariot.homeX;
+  chariot.health = 3;
+  chariot.chariotState = CHARIOT_STATE.FLEE;
+  frame();
+  assert.equal(chariot.chariotState, CHARIOT_STATE.FLEE, "camp ended the hysteresis band");
+  assert.equal(chariot.x, chariot.homeX, "a wounded chariot charged out before 40%");
+
+  // Mended past 40% it charges again; caught while broken it latches the last stand.
+  chariot.health = 6;
+  frame();
+  assert.equal(chariot.chariotState, CHARIOT_STATE.CHASE, "a mended enemy chariot did not re-engage");
+
+  chariot.health = 1;
+  chariot.chariotState = CHARIOT_STATE.FLEE;
+  player.x = chariot.x + 20;
+  player.y = chariot.y;
+  frame();
+  assert.equal(chariot.chariotState, CHARIOT_STATE.FIGHT_TO_DEATH, "a cornered enemy chariot ran");
+  chariot.health = chariot.maxHealth;
+  frame();
+  assert.equal(chariot.chariotState, CHARIOT_STATE.FIGHT_TO_DEATH, "healing undid the last stand");
+});
+
+
+test("the aura heals one point every three seconds, only inside the footprint", () => {
+  const extent = formationExtent(formationConfig);
+  const formation = {
+    id: 7, x: 0, y: 0, heading: 0, halfWidth: extent.halfWidth, halfHeight: extent.halfHeight,
+    auraTimer: 0, auraFlash: 0,
+  };
+  const inside = { formationId: 7, x: 0, y: 0, health: 5, maxHealth: 14 };
+  const outside = { formationId: 7, x: 600, y: 600, health: 5, maxHealth: 14 };
+  const full = { formationId: 7, x: 10, y: 10, health: 14, maxHealth: 14 };
+  const dead = { formationId: 7, x: 0, y: 0, health: 0, maxHealth: 14, destroyed: true };
+  const stranger = { formationId: 99, x: 0, y: 0, health: 5, maxHealth: 14 };
+  const units = [inside, outside, full, dead, stranger];
+
+  assert.deepEqual(tickFormationAura([formation], units, 2.9), [], "the aura fired before its interval");
+  assert.equal(inside.health, 5);
+
+  const healed = tickFormationAura([formation], units, 0.2);
+  assert.deepEqual(healed, [inside], "the beat healed the wrong bodies");
+  assert.equal(inside.health, 6);
+  assert.equal(outside.health, 5, "a body outside the border was healed");
+  assert.equal(stranger.health, 5, "another line's unit was healed");
+  assert.equal(full.health, 14, "the heal overshot the maximum");
+  assert.equal(formation.auraFlash, formationConfig.aura.flash);
+
+  // The remainder is carried, not rounded up: after the 0.1s overshoot the next
+  // beat is 2.9s away, not a fresh 3s.
+  tickFormationAura([formation], units, 1.4);
+  assert.equal(inside.health, 6);
+  tickFormationAura([formation], units, 1.5);
+  assert.equal(inside.health, 7, "the timer lost the overshoot from the previous beat");
+  assert.ok(formation.auraFlash <= formationConfig.aura.flash);
+});
+
+test("the aura heals a unit that came home, not one still running", () => {
+  const extent = formationExtent(formationConfig);
+  const formation = {
+    id: -1, x: 0, y: 0, heading: 0, halfWidth: extent.halfWidth, halfHeight: extent.halfHeight,
+    auraTimer: 0, auraFlash: 0,
+  };
+  const running = { formationId: -1, x: 0, y: 400, health: 2, maxHealth: 14 };
+  const home = { formationId: -1, x: 10, y: 10, health: 2, maxHealth: 14 };
+  const healed = tickFormationAura([formation], [running, home], 3);
+  assert.deepEqual(healed, [home]);
+  assert.equal(running.health, 2, "a chariot still outside the line was patched up");
+});
+
+test("both sides run the same banner beat, and an enemy line heals its own", () => {
+  // The ally row points at the shared table instead of keeping a copy.
+  assert.equal(formationConfig.aura, formationAura, "the hire kept a private aura table");
+  const rig = formationRig();
+  const formation = spawnFormationAt(rig, 0);
+  assert.equal(formation.auraTimer, 0);
+  assert.equal(formation.auraFlash, 0);
+
+  const patient = rig.state.enemies.find((enemy) => enemy.type === "ge");
+  const outside = rig.state.enemies.find((enemy) => enemy.type === "spear");
+  patient.health = 1;
+  outside.health = 1;
+  // Far outside the dashed border; it walks home, but not far enough in one beat
+  // to step onto the footprint.
+  outside.x = formation.x + 600;
+  outside.y = formation.y + 600;
+  // Nothing in sight: the line stands on its slots and only the banner runs.
+  rig.player.x = formation.x + 1200;
+  rig.player.y = formation.y + 1200;
+
+  for (let frame = 0; frame < 179; frame += 1) rig.enemies.updateUnits(1 / 60);
+  assert.equal(patient.health, 1, "the enemy banner fired before its interval");
+  for (let frame = 0; frame < 6; frame += 1) rig.enemies.updateUnits(1 / 60);
+  assert.equal(patient.health, 2, "a wounded enemy on its own footprint was not healed");
+  assert.ok(patient.healFlash > 0, "the healed enemy body did not glow");
+  assert.ok(formation.auraFlash > 0, "the enemy banner did not pulse");
+  assert.equal(outside.health, 1, "an enemy outside the border was patched up");
+});
+
+test("an enemy chariot heals at its own banner and charges out above 40%", () => {
+  const rig = formationRig();
+  const formation = spawnFormationAt(rig, 0);
+  const chariot = rig.state.enemies.find((enemy) => enemy.type === "chariot");
+  chariot.health = 2;
+  chariot.chariotState = CHARIOT_STATE.FLEE;
+  chariot.x = chariot.homeX;
+  chariot.y = chariot.homeY;
+  // In plain sight, but far enough that being seen is not being caught.
+  const spot = toWorld(formation, 0, -300);
+  rig.player.x = spot.x;
+  rig.player.y = spot.y;
+
+  // Three beats only mend it to 5/14 (35%), still inside the hysteresis band:
+  // it must hold its slot and not charge out.
+  for (let frame = 0; frame < 700; frame += 1) rig.enemies.updateUnits(1 / 60);
+  assert.equal(chariot.health, 5);
+  assert.equal(chariot.chariotState, CHARIOT_STATE.FLEE, "the enemy chariot left camp inside the band");
+  assert.equal(chariot.x, chariot.homeX, "a chariot at 35% charged out");
+
+  // The fourth beat takes it to 6/14 (42.9%): now it re-engages.
+  for (let frame = 0; frame < 80; frame += 1) rig.enemies.updateUnits(1 / 60);
+  assert.equal(chariot.health, 6);
+  assert.equal(chariot.chariotState, CHARIOT_STATE.CHASE, "a mended enemy chariot did not re-engage");
+  assert.notEqual(chariot.x, chariot.homeX, "the re-engaged chariot stayed on its slot");
+});
+
+
+test("a loose chariot is one that left the border the player can see", () => {
+  const line = { id: 4, x: 0, y: 0, heading: 0, halfWidth: 116, halfHeight: 86 };
+  const inside = { vehicle: true, formationId: 4, x: 20, y: 20 };
+  const outside = { vehicle: true, formationId: 4, x: 400, y: 20 };
+  const orphan = { vehicle: true, x: 20, y: 20 };
+  assert.equal(isLooseChariot(inside, [line]), false);
+  assert.equal(isLooseChariot(outside, [line]), true);
+  assert.equal(isLooseChariot(orphan, [line]), true, "a rider without a line is loose");
+  assert.equal(isLooseChariot({ vehicle: false, formationId: 4, x: 400, y: 20 }, [line]), false);
+  assert.equal(isLooseChariot({ vehicle: true, formationId: 4, x: 400, y: 20, destroyed: true }, [line]), false);
+});
+
+test("an enemy line wakes for a hired ally as well as for the player", () => {
+  const line = { id: 1, x: 0, y: 0, heading: 0, halfWidth: 116, halfHeight: 86, alerted: false };
+  const player = { x: 900, y: 900 };
+  const ally = { x: 10, y: 10 };
+  updateFormationAlerts([line], [], player);
+  assert.equal(line.alerted, false);
+  updateFormationAlerts([line], [], [player, ally]);
+  assert.equal(line.alerted, true, "the line ignored a hired body on its ground");
+  // With no living body on the line's ground it stands down; a destroyed body
+  // cannot hold a formation awake.
+  updateFormationAlerts([line], [], [player, { ...ally, destroyed: true }]);
+  assert.equal(line.alerted, false);
+});
+
+test("a spear answers an enemy at its weapon's reach", () => {
+  const rig = hireRig({ hires: 1 });
+  rig.allies.spawnFriendlyFormations();
+  const spear = rig.state.allies.find((ally) => ally.type === "spear");
+  const enemy = {
+    type: "archer", x: spear.x + spear.range - 4, y: spear.y, radius: 12, health: 10, destroyed: false,
+  };
+  rig.state.enemies.push(enemy);
+  spear.attackCooldown = 0;
+  rig.allies.update(1 / 60);
+  assert.equal(enemy.health, 10 - spear.damage, "the spear did not swing at an enemy in reach");
+  assert.equal(rig.state.meleeEffects.length, 1, "the swing drew no effect");
+  assert.ok(spear.attackCooldown > 0, "the spear swung twice in one frame");
+});
+
+test("a line with nobody near it walks back to its slots and stays put", () => {
+  const rig = hireRig({ hires: 1 });
+  rig.allies.spawnFriendlyFormations();
+  const spear = rig.state.allies.find((ally) => ally.type === "spear");
+  const home = { x: spear.homeX, y: spear.homeY };
+  spear.x += 60;
+  for (let frame = 0; frame < 240; frame += 1) rig.allies.update(1 / 60);
+  assert.ok(Math.hypot(spear.x - home.x, spear.y - home.y) < 11, "the ally did not return to its slot");
+  assert.ok(Math.abs(spear.angle - spear.homeAngle) < 1e-6, "the idle line stopped facing its front");
+});
+
+test("the chariot really runs from a loose rider and re-joins when mended", () => {
+  const rig = hireRig({ hires: 1 });
+  rig.allies.spawnFriendlyFormations();
+  const chariot = rig.state.allies.find((ally) => ally.vehicle);
+  const line = rig.state.allyFormations[0];
+  // A loose enemy chariot on the line's own ground is the target the FSM exists
+  // for; it is not inside any enemy formation, so `isLooseChariot` sees it.
+  const rider = {
+    type: "chariot", vehicle: true, x: line.x + 90, y: line.y, radius: 21, health: 14, destroyed: false,
+    formationId: 9999,
+  };
+  rig.state.enemies.push(rider);
+
+  // Out on the field, badly hurt: the next thought is FLEE, and the step goes
+  // back towards the slot instead of at the enemy.
+  chariot.health = 2;
+  chariot.x = line.x + 200;
+  chariot.y = line.y;
+  chariot.chariotState = "HOLD";
+  const away = Math.hypot(chariot.x - chariot.homeX, chariot.y - chariot.homeY);
+  rig.allies.update(0.1);
+  assert.equal(chariot.chariotState, "FLEE", "a broken chariot did not switch to FLEE");
+  const closer = Math.hypot(chariot.x - chariot.homeX, chariot.y - chariot.homeY);
+  assert.ok(closer < away, "a fleeing chariot did not run home");
+
+  // Back on its slot at 21% it stays disengaged: reaching camp does not end the
+  // band, only healing past 40% does.
+  chariot.health = 3;
+  chariot.x = chariot.homeX;
+  chariot.y = chariot.homeY;
+  chariot.chariotState = "FLEE";
+  rig.allies.update(0.1);
+  assert.equal(chariot.chariotState, "FLEE", "healing at camp ended the hysteresis band");
+  assert.ok(Math.hypot(chariot.x - chariot.homeX, chariot.y - chariot.homeY) < 1,
+    "a camped wounded chariot charged out before 40%");
+
+  // Mended above 40% and back in the line, a loose rider is worth chasing again.
+  chariot.health = chariot.maxHealth;
+  chariot.x = chariot.homeX;
+  chariot.y = chariot.homeY;
+  chariot.chariotState = "HOLD";
+  rig.allies.update(0.1);
+  assert.equal(chariot.chariotState, "CHASE", "a mended chariot did not re-engage a loose rider");
+});
+
+test("damage to a hire stains the ground, and the last point kills it", () => {
+  const rig = hireRig({ hires: 1 });
+  rig.allies.spawnFriendlyFormations();
+  const archer = rig.state.allies.find((ally) => ally.type === "archer");
+  rig.allies.damageAlly(archer, 1, archer.x - 20, archer.y);
+  assert.equal(archer.destroyed, true, "an archer with 1 HP survived a hit");
+  assert.equal(rig.state.bloodStains.length, 1, "a hire died without a stain");
+  assert.ok(rig.state.shake > 0, "a hire died without a shake");
+  rig.allies.update(1 / 60);
+  assert.equal(rig.state.allies.includes(archer), false, "the corpse stayed in the line");
+  assert.ok(rig.state.allyFormations[0], "one fallen archer removed the whole line");
+});
+
+test("the camp pitches one tent per hire, and a hover stays a preview", () => {
+  const rigRecorder = recordingContext();
+  const campRecorder = recordingContext();
+  withAnimationFrames(() => {
+    const scene = createShopScene({
+      rigCanvas: fakeCanvas(320, 220, rigRecorder.context),
+      campCanvas: fakeCanvas(320, 128, campRecorder.context),
+    });
+    scene.update({ horseCount: 1, crew: [], campTents: 1 });
+    scene.setActive(true);
+    assert.equal(scene.lastFrame().camp.formations, 1, "one hire pitched no tent");
+    scene.preview({ horseCount: 1, campTents: 2 });
+    assert.equal(scene.lastFrame().camp.formations, 2, "the hover did not preview a second tent");
+    scene.update({ horseCount: 1, crew: [], campTents: 2 });
+    assert.equal(scene.lastFrame().camp.formations, 2, "the bought line lost its tent on re-render");
+    scene.preview({ horseCount: 1, campTents: 2 });
+    assert.equal(scene.lastFrame().camp.formations, 2, "a capped hover imagined a third tent");
+    scene.setActive(false);
+  });
 });
 
 console.log(`\n[unit] PASS (${passed} checks)`);

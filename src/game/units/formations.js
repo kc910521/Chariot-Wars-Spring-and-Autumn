@@ -1,3 +1,4 @@
+import { formationAura } from "../../data/formations.js";
 import { clamp } from "../../utils/math.js";
 
 // Formation *geometry* - the envelope a spawned line occupies. The data table
@@ -93,11 +94,15 @@ export function searchPoint(player, unit, x, y) {
   return clampToAnchor(unit, x, y, leashRadius(player, unit) + chaseSpan(unit) * SEARCH_SPANS);
 }
 
-// A line wakes up when the player steps into its footprint and stands down again
-// once he is clear. The two borders are deliberately different: one shared border
-// would make a chariot parked on it flicker the whole formation in and out of
-// pursuit every frame, which reads as a twitch (and was the chatter the guard
-// post was originally introduced to stop).
+// A line wakes up when an intruder steps into its footprint and stands down
+// again once it is clear. The two borders are deliberately different: one shared
+// border would make a chariot parked on it flicker the whole formation in and
+// out of pursuit every frame, which reads as a twitch (and was the chatter the
+// guard post was originally introduced to stop).
+//
+// `intruders` is a unit or an array of them: the player alone in the old call
+// shape, the player plus the hired friendly line once allies exist. A line that
+// wakes for a hired ally is doing exactly what its `alerted` flag promised.
 const ALERT_MARGIN = 24;
 // How far past the alert border the line stays awake. It is the distance the
 // fastest foot unit (spear, 61px/s) covers in its 1.2s chase span, so a unit
@@ -115,6 +120,15 @@ function formationLocal(formation, x, y) {
   };
 }
 
+// Turns a pattern's slot table into world coordinates once, at spawn, so both
+// the enemy spawner and the hired friendly lines place a line the same way.
+export function layoutSlots(pattern, centerX, centerY, heading) {
+  return pattern.slots.map(([, slotX, slotY]) => ({
+    x: centerX + slotX * Math.cos(heading) - slotY * Math.sin(heading),
+    y: centerY + slotX * Math.sin(heading) + slotY * Math.cos(heading),
+  }));
+}
+
 // The rectangle the renderer dashes, in that same frame - so the aggro border is
 // the border the player can see. Same defaults as the renderer's, for a
 // formation built by hand (an older save has no extents on it).
@@ -122,6 +136,38 @@ export function isInsideFormation(formation, x, y, margin = 0) {
   const local = formationLocal(formation, x, y);
   return Math.abs(local.x) <= (formation.halfWidth || 116) + margin
     && Math.abs(local.y) <= (formation.halfHeight || 86) + margin;
+}
+
+// One aura beat per formation, for both sides: every living member standing on
+// the dashed footprint (not merely in the formation) recovers `heal`, capped at
+// its own maximum. A chariot that ran home is healed here like anyone else; one
+// still running is outside the footprint and is not. `healFlash` decays on every
+// unit passed in, so a caller that ticks this once per frame does not need a
+// second per-unit timer - and an enemy line and a hired line get the same
+// visuals from the same beat.
+export function tickFormationAura(formations = [], units = [], delta = 0, config = formationAura) {
+  for (const unit of units) {
+    if (unit && unit.healFlash > 0) unit.healFlash = Math.max(0, unit.healFlash - delta);
+  }
+  const healed = [];
+  for (const formation of formations) {
+    formation.auraFlash = Math.max(0, (formation.auraFlash ?? 0) - delta);
+    formation.auraTimer = (formation.auraTimer ?? 0) + delta;
+    if (formation.auraTimer < config.interval) continue;
+    // Keep the remainder instead of resetting to 0: a frame that overshoots the
+    // interval must not stretch the next beat.
+    formation.auraTimer %= config.interval;
+    formation.auraFlash = config.flash;
+    for (const unit of units) {
+      if (!unit || unit.destroyed || unit.formationId !== formation.id) continue;
+      if (unit.health <= 0 || unit.health >= unit.maxHealth) continue;
+      if (!isInsideFormation(formation, unit.x, unit.y)) continue;
+      unit.health = Math.min(unit.maxHealth, unit.health + config.heal);
+      unit.healFlash = config.flash;
+      healed.push(unit);
+    }
+  }
+  return healed;
 }
 
 // How far past its leash an alerted unit will follow: one `chaseSeconds` of its
@@ -190,11 +236,15 @@ export function defendedPoint(player, unit, x, y) {
 // rides along as `unit.line` for the same reason - a brain that has to know
 // *which ground* it defends (`defendedPoint`) should not have to look it up
 // either, and a line's geometry never moves once it has spawned.
-export function updateFormationAlerts(formations, units, player) {
+export function updateFormationAlerts(formations, units, intruders) {
+  // One caller passes the player, another the player plus every hired ally; a
+  // one-element array would have meant allocating it every frame for nothing.
+  const threats = Array.isArray(intruders) ? intruders : [intruders];
+  const living = threats.filter((unit) => unit && !unit.destroyed);
   const lines = new Map();
   for (const formation of formations) {
     const margin = formation.alerted ? ALERT_RELEASE : ALERT_MARGIN;
-    formation.alerted = isInsideFormation(formation, player.x, player.y, margin);
+    formation.alerted = living.some((unit) => isInsideFormation(formation, unit.x, unit.y, margin));
     lines.set(formation.id, formation);
   }
   for (const unit of units) {

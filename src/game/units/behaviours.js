@@ -1,4 +1,6 @@
+import { chariotTactics } from "../../data/formations.js";
 import { clamp } from "../../utils/math.js";
+import { CHARIOT_INTENT, chariotIntent, isAtHome, updateChariotState } from "./chariot.js";
 import { defendedPoint, leashRadius } from "./formations.js";
 
 // The per-type answer to "my target is in sight - what do I do this frame?".
@@ -10,7 +12,9 @@ import { defendedPoint, leashRadius } from "./formations.js";
 // to sit above the melee one. Here each type names its brain in the data table,
 // and the brain reads its own tuning off the same row.
 //
-// A brain is a factory-built closure, not a class: it holds no state of its own
+// A brain may expose two hooks: `think`, run every frame whether or not the
+// target is visible (morale needs that), and `onSight`, run only while it is.
+// Both are factory-built closures, not methods: they hold no state of their own
 // (everything lives on the enemy object, so a save/replay sees one object per
 // unit), there is no `this` to lose when a hook is passed around, and 小游戏
 // builds with `enhance: false`, so no syntax beyond what the codebase already
@@ -59,11 +63,14 @@ export function createBehaviours({
   // guards cannot converge on one shared post and the post cannot orbit with an
   // archer that is backing away.
   function guardPost(enemy, target, distance, angle, delta) {
-    const homeDistance = Math.hypot(player.x - enemy.homeX, player.y - enemy.homeY);
-    const bearing = Math.atan2(player.y - enemy.homeY, player.x - enemy.homeX);
+    // The post leans towards whoever the unit is actually facing, not towards the
+    // player: since a hired line can be the closer target, using `player` here
+    // would lean a guard away from the body inside its reach.
+    const homeDistance = Math.hypot(target.x - enemy.homeX, target.y - enemy.homeY);
+    const bearing = Math.atan2(target.y - enemy.homeY, target.x - enemy.homeX);
     // The post and the swing both sit at the honest reach.
     const reach = honestReach(enemy, target);
-    const lean = clamp(homeDistance - reach, 0, leashRadius(player, enemy));
+    const lean = clamp(homeDistance - reach, 0, leashRadius(target, enemy));
     if (lean > 0) {
       const guardX = enemy.homeX + Math.cos(bearing) * lean;
       const guardY = enemy.homeY + Math.sin(bearing) * lean;
@@ -107,19 +114,71 @@ export function createBehaviours({
     else if (enemy.attackCooldown === 0) strike(enemy, target, angle);
   }
 
-  // chariot: ram whatever it has seen. `contactCooldown` is the ram's cooldown;
-  // the hull contact resolver in enemies.js owns the other one.
-  function cavalryOnSight(enemy, target, distance, angle, delta) {
-    if (distance > enemy.radius + target.radius + 2) {
-      advance(enemy, angle, delta);
-      return;
-    }
-    if (enemy.contactCooldown !== 0) return;
+  // chariot: the shared morale machine in `chariot.js` decides whether this
+  // frame is a charge, a run home or a last stand; this brain only supplies the
+  // enemy's legs. `contactCooldown` is the ram's cooldown; the hull contact
+  // resolver in enemies.js owns the other one.
+  //
+  // `chariot-archer` deliberately keeps the ranged brain: its answer to pressure
+  // is distance, not a last stand, so it never enters this state machine.
+  function cavalrySituation(enemy, target, distance, seesTarget) {
+    return {
+      health: enemy.health,
+      maxHealth: enemy.maxHealth,
+      // A body only counts as "caught" if it can actually be seen; a chariot is
+      // not cornered by something it cannot fight.
+      inMelee: seesTarget && distance <= enemy.radius + target.radius + 6,
+      hasTarget: seesTarget,
+    };
+  }
+
+  // Morale is ticked every frame, not only while the target is in sight, so a
+  // chariot that ran behind a tree still knows it is disengaged when it returns.
+  function cavalryThink(enemy, target, distance, seesTarget) {
+    updateChariotState(enemy, cavalrySituation(enemy, target, distance, seesTarget));
+  }
+
+  // The one order that overrides the loop's "face the target" heading: run for
+  // the home slot at the shared regroup pace.
+  function regroup(enemy, delta) {
+    const bearing = Math.atan2(enemy.homeY - enemy.y, enemy.homeX - enemy.x);
+    enemy.angle = bearing;
+    const pace = enemy.speed * chariotTactics.regroupSpeed;
+    moveEntitySafely(enemy, Math.cos(bearing) * pace * delta, Math.sin(bearing) * pace * delta, enemy.radius);
+  }
+
+  function ramTarget(enemy, target, angle) {
     enemy.contactCooldown = RAM_INTERVAL;
     addMeleeEffect(target.x, target.y, angle, "ram");
     burst(target.x, target.y, "#ffe08a");
     if (target === player && getChariotTravelSpeed(player) > RAM_COUNTER_SPEED) damageEnemy(enemy, 1);
     damageCombatTarget(target, enemy.damage, enemy.x, enemy.y);
+  }
+
+  function cavalryOnSight(enemy, target, distance, angle, delta) {
+    const intent = chariotIntent(enemy.chariotState);
+    if (intent === CHARIOT_INTENT.REGROUP) {
+      // Not home yet: break contact and run. Once home, stand and watch - a
+      // wounded chariot does not charge back out at 21%, and only a body that
+      // actually reaches the hull (which ticks it into FIGHT_TO_DEATH) is rammed.
+      if (!isAtHome(enemy.x, enemy.y, enemy.homeX, enemy.homeY)) regroup(enemy, delta);
+      return;
+    }
+    if (intent === CHARIOT_INTENT.HOLD) {
+      // Defensive: a sighted target normally ticks HOLD into CHASE, but if the
+      // machine has not been ticked yet a parked hull is still not a free hit.
+      if (distance <= enemy.radius + target.radius + 2 && enemy.contactCooldown === 0) {
+        ramTarget(enemy, target, angle);
+      }
+      return;
+    }
+    // ENGAGE, including the latched last stand.
+    if (distance > enemy.radius + target.radius + 2) {
+      advance(enemy, angle, delta);
+      return;
+    }
+    if (enemy.contactCooldown !== 0) return;
+    ramTarget(enemy, target, angle);
   }
 
   // archer, slinger, chariot-archer: two bands. Inside `retreat` it backs off,
@@ -151,7 +210,7 @@ export function createBehaviours({
   return {
     infantry: { onSight: infantryOnSight },
     ranged: { onSight: rangedOnSight },
-    cavalry: { onSight: cavalryOnSight },
+    cavalry: { think: cavalryThink, onSight: cavalryOnSight },
     boss: { onSight: bossOnSight },
   };
 }

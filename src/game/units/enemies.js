@@ -4,7 +4,7 @@ import { clamp, shortestAngleDifference } from "../../utils/math.js";
 import { rectHitsAnyObstacle, rectTerrain } from "../elements.js";
 import { spawnParticle } from "../particles.js";
 import { createBehaviours } from "./behaviours.js";
-import { formationExtent, formationGroundExtent, searchPoint, updateFormationAlerts } from "./formations.js";
+import { formationExtent, formationGroundExtent, layoutSlots, searchPoint, tickFormationAura, updateFormationAlerts } from "./formations.js";
 
 const SEPARATION_MIN_OVERLAP = 2;
 // How many sweeps `separateEnemies` may take to settle a crowd: one sweep only
@@ -57,7 +57,7 @@ function getChariotTravelSpeed(player) {
 export function createEnemies({
   bossTypes, enemyStats, formationPatterns, state, player, world, campaign, random,
   circleIntersectsObstacle, moveEntitySafely, getChariotCollisionDamage, playTone, updateHud,
-  hasLineOfSight, fireEnemy, damagePlayer, damageCompanion,
+  hasLineOfSight, fireEnemy, damagePlayer, damageCompanion, damageAlly = () => {},
 }) {
   // `random` is late-bound by the caller so every gameplay roll (and the
   // particle spray) draws from the PRNG of the battle in progress, keeping a
@@ -134,13 +134,6 @@ export function createEnemies({
     }
   }
 
-  function layoutSlots(pattern, centerX, centerY, heading) {
-    return pattern.slots.map(([, slotX, slotY]) => ({
-      x: centerX + slotX * Math.cos(heading) - slotY * Math.sin(heading),
-      y: centerY + slotX * Math.sin(heading) + slotY * Math.cos(heading),
-    }));
-  }
-
   // A formation spawns on the best ground its attempt budget finds, not on the
   // first patch that looks clear: dry beats uniform beats merely clear, and the old
   // slot-centre rule - which accepts a palisade standing *between* two ranks - is
@@ -165,6 +158,10 @@ export function createEnemies({
       // Two formations spawned on the same ground interpenetrate for their whole
       // lifetime, which reads as infantry flickering over each other.
       if (state.formations.some((other) => Math.abs(other.x - centerX) < other.halfWidth + halfWidth
+        && Math.abs(other.y - centerY) < other.halfHeight + halfHeight)) continue;
+      // The hired line is ground already taken: an enemy line spawned on top of it
+      // would interpenetrate for the rest of the battle.
+      if ((state.allyFormations ?? []).some((other) => Math.abs(other.x - centerX) < other.halfWidth + halfWidth
         && Math.abs(other.y - centerY) < other.halfHeight + halfHeight)) continue;
 
       const candidate = {
@@ -211,6 +208,10 @@ export function createEnemies({
       color: "#a74732",
       // Latched by `updateFormationAlerts` before the first unit thinks.
       alerted: false,
+      // The banner beat is the same one the hired line runs; see
+      // `tickFormationAura` in formations.js.
+      auraTimer: 0,
+      auraFlash: 0,
       // Which rung of the spawn ladder placed this line; the tests pin the count of
       // `legacy` spawns at zero.
       groundTier,
@@ -244,6 +245,7 @@ export function createEnemies({
         idleTarget: heading,
         idleTimer: random() * (IDLE_THINK_MIN + IDLE_THINK_SPAN),
         hitFlash: 0,
+        healFlash: 0,
         contactCooldown: 0,
         attackCooldown: 0.8 + random() * 0.8,
         knockedDown: 0,
@@ -431,16 +433,31 @@ export function createEnemies({
     if (enemy.boss) updateHud();
   }
 
+  // Whoever is closest gets the blow: in foot combat that has always meant the
+  // player or a surviving companion, and the hired line is just one more body on
+  // that side. The player starts as the candidate, so a tie still favours him;
+  // the loop avoids the per-frame array sort this used to do.
   function getCombatTarget(enemy) {
-    if (player.mode !== "foot") return player;
-    return [player, ...state.footCompanions]
-      .filter((target) => !target.destroyed && target.health > 0)
-      .sort((first, second) =>
-        Math.hypot(first.x - enemy.x, first.y - enemy.y) - Math.hypot(second.x - enemy.x, second.y - enemy.y))[0] ?? player;
+    let best = player;
+    let bestDistance = Math.hypot(player.x - enemy.x, player.y - enemy.y);
+    const consider = (unit) => {
+      if (!unit || unit.destroyed || !(unit.health > 0)) return;
+      const distance = Math.hypot(unit.x - enemy.x, unit.y - enemy.y);
+      if (distance < bestDistance) {
+        best = unit;
+        bestDistance = distance;
+      }
+    };
+    if (player.mode === "foot") {
+      for (const companion of state.footCompanions) consider(companion);
+    }
+    for (const ally of state.allies ?? []) consider(ally);
+    return best;
   }
 
   function damageCombatTarget(target, amount, sourceX, sourceY) {
     if (target === player) damagePlayer(amount, sourceX, sourceY);
+    else if (target.friendly) damageAlly(target, amount, sourceX, sourceY);
     else damageCompanion(target, amount, sourceX, sourceY);
   }
 
@@ -568,9 +585,13 @@ export function createEnemies({
   }
 
   function updateUnits(delta) {
-    // One pass decides, per formation, whether the player is standing inside its
-    // footprint; the brains below only read the mirrored flag.
-    updateFormationAlerts(state.formations, state.enemies, player);
+    // The banner first: a wounded chariot may be topped up over the re-engage
+    // threshold this frame, and the morale machine below should see the health
+    // it actually has. The hired line ticks the same function on its own pass.
+    tickFormationAura(state.formations, state.enemies, delta);
+    // One pass decides, per formation, whether the player or a hired ally is
+    // standing inside its footprint; the brains below only read the mirrored flag.
+    updateFormationAlerts(state.formations, state.enemies, [player, ...(state.allies ?? [])]);
     for (const enemy of state.enemies) {
       if (enemy.destroyed) continue;
       enemy.knockedDown = Math.max(0, enemy.knockedDown - delta);
@@ -590,6 +611,10 @@ export function createEnemies({
       enemy.shotCooldown = Math.max(0, enemy.shotCooldown - delta);
       enemy.hitFlash = Math.max(0, enemy.hitFlash - delta);
       enemy.contactCooldown = Math.max(0, enemy.contactCooldown - delta);
+      const brain = behaviours[enemy.behaviour];
+      // Morale has to run even with nothing in sight, so every brain gets a
+      // `think` tick before the sight branch; only the chariot supplies one.
+      brain.think?.(enemy, target, distance, seesTarget);
 
       if (seesTarget) {
         enemy.lastSeenX = target.x;
@@ -598,7 +623,7 @@ export function createEnemies({
         enemy.sweepTimer = 0;
         const angle = Math.atan2(target.y - enemy.y, target.x - enemy.x);
         enemy.angle = angle;
-        behaviours[enemy.behaviour].onSight(enemy, target, distance, angle, delta);
+        brain.onSight(enemy, target, distance, angle, delta);
         // A blow that took the player's last health ends the frame here, exactly
         // where each inline branch used to return.
         if (state.mode === "over") return;

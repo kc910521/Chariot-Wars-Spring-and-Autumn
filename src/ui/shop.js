@@ -1,4 +1,5 @@
 import { calculateChariotStats, calculateCrewSlots, equipment, horses, personnel } from "../data/equipment.js";
+import { formationConfig } from "../data/formations.js";
 import { translate } from "../i18n/index.js";
 import { createRadarChart } from "./radar.js";
 import { createInfoPanel, itemInfo } from "./shop-info.js";
@@ -79,6 +80,7 @@ export function renderShop({
   equipmentLevels,
   horseCount,
   roster,
+  friendlyFormations = 0,
   selectedCategory,
   selectedItem,
   onSelectCategory,
@@ -110,7 +112,7 @@ export function renderShop({
   // The dossier follows the campaign; every hover then re-targets it. `update`
   // clears a stale preview, so a card that lost the pointer mid-click cannot
   // leave the rig showing a team the player never bought.
-  scene?.update({ horseCount, crew: roster, levels: equipmentLevels });
+  scene?.update({ horseCount, crew: roster, levels: equipmentLevels, campTents: friendlyFormations });
   if (rigCaptionElement) {
     rigCaptionElement.textContent = translate("shop.rig.caption", {
       horses: horseCount,
@@ -119,7 +121,9 @@ export function renderShop({
     });
   }
   if (campCaptionElement) {
-    campCaptionElement.textContent = translate("shop.camp.caption", { crew: liveRoster.length });
+    campCaptionElement.textContent = friendlyFormations > 0
+      ? translate("shop.camp.captionTents", { crew: liveRoster.length, tents: friendlyFormations })
+      : translate("shop.camp.caption", { crew: liveRoster.length });
   }
 
   const radar = createRadarChart(statsContainer, {
@@ -135,6 +139,7 @@ export function renderShop({
       horseCount: horsesOwned,
       crew: preview.crew ?? roster,
       levels,
+      campTents: preview.campTents ?? friendlyFormations,
     } : null);
   }
 
@@ -326,6 +331,42 @@ export function renderShop({
     });
     personnelPanel.append(card);
   }
+
+  // The hired line: a fixed-price formation bought for the run, capped at two.
+  // It is not a roster member - it never takes a crew slot and its dead are not
+  // listed - so it sits at the bottom of the crew page with its own count.
+  const formation = createCard(
+    "⛺",
+    translate("shop.formationCount", {
+      name: translate(formationConfig.nameKey),
+      count: friendlyFormations,
+      max: formationConfig.maxHires,
+    }),
+    translate("shop.formationEffect", {
+      price: formationConfig.price,
+      units: formationConfig.slots.length,
+      heal: formationConfig.aura.heal,
+      interval: formationConfig.aura.interval,
+    }),
+  );
+  infoById.set(
+    "formation",
+    itemInfo("formation", formationConfig.nameKey, translate("shop.formationDescription")),
+  );
+  const formationFull = friendlyFormations >= formationConfig.maxHires;
+  addPurchase(formation.card, "formation", {
+    label: buyLabel(formationConfig.price, { maxedKey: formationFull ? "shop.formationCap" : null, buyKey: "shop.hireFormation" }),
+    disabled: formationFull || totalGold < formationConfig.price,
+    action: () => onBuy("formation"),
+    // Hovering grows the camp by one tent; the battlefield is not shown in the
+    // shop, so the fire is where a hire has to be legible before it is paid for.
+    preview: {
+      levels: equipmentLevels,
+      horses: horseCount,
+      campTents: Math.min(formationConfig.maxHires, friendlyFormations + (formationFull ? 0 : 1)),
+    },
+  });
+  personnelPanel.append(formation.card);
 
   // Last, because every card has registered its own description by now: paints
   // the picked item or the collision rule the shop opens on.

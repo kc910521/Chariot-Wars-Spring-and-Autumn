@@ -931,6 +931,87 @@ ledger[1].children[0].children[2].dispatch("click");
 check("a buy click leaves that item's description in the panel", shopInfo.textContent === weaponRackLine,
   `panel="${shopInfo.textContent}"`);
 
+// The hired line is the crew page's last card: a 1000-coin line, capped at two,
+// previewed as a tent at the camp fire. It is not a roster member, so it must
+// not touch the crew-slot summary above it.
+const crewCard = () => {
+  const panel = query("#shop-items").children[3];
+  return panel.children[panel.children.length - 1];
+};
+const crewTitle = () => crewCard().children[1].children[0].textContent;
+const hireButton = () => crewCard().children[2];
+const savedForHire = game.campaign.totalGold;
+game.campaign.totalGold = 5000;
+game.equipmentShop.render();
+check("the crew page sells the hired formation, count and cap included",
+  crewTitle().includes(translate("formation.friendly")) && crewTitle().includes("0/2"),
+  `title="${crewTitle()}"`);
+check("the hire opens on its buy price", hireButton().textContent === translate("shop.hireFormation", { price: 1000 })
+  && hireButton().disabled === false, `label="${hireButton().textContent}"`);
+
+crewCard().dispatch("pointerenter");
+check("hovering the hire previews a tent at the fire", game.shopScene.lastFrame().camp?.formations === 1,
+  `formations=${game.shopScene.lastFrame().camp?.formations}`);
+crewCard().dispatch("pointerleave");
+check("leaving the hire card takes the tent back", game.shopScene.lastFrame().camp?.formations === 0,
+  `formations=${game.shopScene.lastFrame().camp?.formations}`);
+
+hireButton().dispatch("click");
+check("buying the hire charges the price and keeps the line",
+  game.campaign.friendlyFormations === 1 && game.campaign.totalGold === 4000,
+  `hires=${game.campaign.friendlyFormations} gold=${game.campaign.totalGold}`);
+check("the bought line is camped at the fire", game.shopScene.lastFrame().camp?.formations === 1,
+  `formations=${game.shopScene.lastFrame().camp?.formations}`);
+check("the card now counts the line", crewTitle().includes("1/2"), `title="${crewTitle()}"`);
+
+crewCard().dispatch("pointerenter");
+check("a second hire previews a second tent", game.shopScene.lastFrame().camp?.formations === 2,
+  `formations=${game.shopScene.lastFrame().camp?.formations}`);
+crewCard().dispatch("pointerleave");
+hireButton().dispatch("click");
+check("a second line can be hired", game.campaign.friendlyFormations === 2,
+  `hires=${game.campaign.friendlyFormations}`);
+check("the cap disables the button and says why",
+  hireButton().disabled === true && hireButton().textContent === translate("shop.formationCap"),
+  `label="${hireButton().textContent}" disabled=${hireButton().disabled}`);
+
+// Leave the run as the rest of the script found it: the formation is a purchase
+// test, and a hired line on the later battlefields would change those battles.
+game.campaign.friendlyFormations = 0;
+game.campaign.totalGold = savedForHire;
+game.equipmentShop.render();
+check("the ledger reopens without a hire", crewTitle().includes("0/2"), `title="${crewTitle()}"`);
+
+// The purchase has to reach the field: one line, seven bodies, its chariot, and
+// all of it close to the player's start rather than at a random map bearing.
+game.campaign.friendlyFormations = 1;
+game.stageManager.restartStage();
+const hiredLine = game.state.allyFormations ?? [];
+const hiredBodies = game.state.allies ?? [];
+check("a hired line takes the field in the next battle",
+  hiredLine.length === 1 && hiredBodies.length === 7,
+  `lines=${hiredLine.length} bodies=${hiredBodies.length}`);
+check("the hired line brings its chariot and both archers",
+  hiredBodies.filter((ally) => ally.vehicle).length === 1
+    && hiredBodies.filter((ally) => ally.ranged).length === 2,
+  `vehicles=${hiredBodies.filter((ally) => ally.vehicle).length} ranged=${hiredBodies.filter((ally) => ally.ranged).length}`);
+check("the hired line spawns beside the chariot, not across the map",
+  hiredBodies.every((ally) => Math.hypot(ally.x - game.player.x, ally.y - game.player.y) < 420),
+  "a hire spawned out of supporting distance");
+check("the line's border is the one the renderer dashes",
+  hiredLine.every((line) => line.halfWidth > 0 && line.halfHeight > 0 && line.color === "#5fbd79"));
+let hireGeometryGap = null;
+runFrames(30, () => {
+  for (const ally of game.state.allies ?? []) {
+    if (![ally.x, ally.y, ally.angle].every(Number.isFinite)) hireGeometryGap = ally.type;
+  }
+});
+check("the hired line holds its ground with finite geometry", !hireGeometryGap,
+  `non-finite ${hireGeometryGap}`);
+check("the hired line is still seven bodies after a second of battle",
+  (game.state.allies ?? []).length === 7, `bodies=${(game.state.allies ?? []).length}`);
+game.campaign.friendlyFormations = 0;
+
 // The defeat card is the other state of that same box, and the two lethal blows
 // are what the game itself needs: the first wrecks the chariot and puts the crew
 // on foot, the second ends the run. Kill from a live battle rather than from the

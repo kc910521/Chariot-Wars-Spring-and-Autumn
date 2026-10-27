@@ -43,6 +43,10 @@ export function createGameState({ seedSource = () => null } = {}) {
     horseCount: 1,
     roster: [],
     nextPersonnelId: 1,
+    // Hired friendly lines (see formationConfig in data/formations.js): bought
+    // in the shop, kept for the run, and spawned fresh at the start of every
+    // battle. Zero until the player spends the 1000 coins.
+    friendlyFormations: 0,
     // Rolled once when a run starts (src/game/identity.js): the player's name
     // and the two story keys behind it. Reset with the rest of the run, and
     // never re-rolled by a retry — it belongs to the campaign, not the battle.
@@ -68,6 +72,11 @@ export function createGameState({ seedSource = () => null } = {}) {
     elapsed: 0,
     formations: [],
     formationsSpawned: 0,
+    // The hired friendly lines: `allyFormations` is what the renderer dashes and
+    // labels, `allies` the bodies that move and fight. Both are rebuilt by
+    // allies.spawnFriendlyFormations() at the start of each battle.
+    allyFormations: [],
+    allies: [],
     shake: 0,
     kills: 0,
     objectiveTarget: 8,

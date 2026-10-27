@@ -61,7 +61,7 @@ export function solveBallisticElevation(distance, speed, gravity = 420, launchHe
 
 export function updateProjectiles({
   state, world, player, delta, circleIntersectsObstacle,
-  damageEnemy, damagePlayer, damageCompanion, burst, dust = () => {},
+  damageEnemy, damagePlayer, damageCompanion, damageAlly = () => {}, burst, dust = () => {},
 }) {
   // Every way a shot can stop looks the same from the outside: an effect at the
   // impact point. Stones raise a dust cloud, arrows keep their small tinted puff.
@@ -122,9 +122,14 @@ export function updateProjectiles({
       }
 
       if (projectile.owner === "enemy") {
+        // Everyone standing on the player's side can stop an enemy shot: the
+        // player, the foot companions and the hired line. A companion or ally is
+        // only a candidate while it is alive; the player is always there (a hit
+        // that ends the run is routed through damagePlayer).
+        const allies = (state.allies ?? []).filter((ally) => !ally.destroyed);
         const targets = player.mode === "foot"
-          ? [player, ...state.footCompanions.filter((companion) => !companion.destroyed)]
-          : [player];
+          ? [player, ...state.footCompanions.filter((companion) => !companion.destroyed), ...allies]
+          : [player, ...allies];
         const target = targets.find((unit) => projectile.z <= 64
           && Math.hypot(projectile.x - unit.x, projectile.y - unit.y) < unit.radius + projectile.radius);
         if (target) {
@@ -132,6 +137,7 @@ export function updateProjectiles({
           // A stone that hits a body still kicks up dust; an arrow does not.
           if (projectile.kind === "stone") dust(projectile.x, projectile.y);
           if (target === player) damagePlayer(projectile.damage, projectile.x, projectile.y, true);
+          else if (target.friendly) damageAlly(target, projectile.damage, projectile.x, projectile.y);
           else damageCompanion(target, projectile.damage, projectile.x, projectile.y);
         }
       } else {
@@ -153,7 +159,7 @@ export function updateProjectiles({
 // only say *what* should be fired; trajectory and balance live here.
 export function createProjectileSystem({
   state, player, world, campaign, collision, burst, dust, playTone,
-  damageEnemy, damagePlayer, damageCompanion,
+  damageEnemy, damagePlayer, damageCompanion, damageAlly = () => {},
 }) {
   // `aimX`/`aimY` mark a tapped shot: the fan turns onto that bearing and the
   // arc is solved for the distance instead of using the fixed elevation, so the
@@ -249,6 +255,7 @@ export function createProjectileSystem({
       damageEnemy,
       damagePlayer,
       damageCompanion,
+      damageAlly,
       burst,
       dust,
     });

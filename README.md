@@ -44,6 +44,8 @@ python3 -m http.server 8000     # 备选：使用系统自带 Python
 
 每个战局只有一次挑战机会，不再有三辆战车的复活次数。战车耐久耗尽后将下车继续作战：WASD / 方向键直接移动步卒，空格挥剑。驾驶员固定随车，不占车员名额且不攻击；招募的弓手会自动射箭，戟士会自动近战，二者均可在步战中阵亡。阵亡车员不会自动补充，可按相同价格重新招募。车箱等级决定车员名额：初始 1 个，升级后为 3、5、9 个。战马初始 1 匹，最多 4 匹，提供机动加成。步卒阵亡则本役失败；可重试当前战局，保留已购装备和已收军资。
 
+凯旋商店的「招募车员」页还可以雇一队募兵：1000 两一队，最多两队，占的是营地而不是车员名额。每队七人——四名矛手、一辆战车、两名弓手——按你起步的朝向列在车侧的空地上，步卒只守阵脚（最多前出 150px、离位不超过 70px），弓手站在后排放箭。阵旗是双方阵型共用的机制：每 3 秒为站在虚线圈内的本阵成员回复 1 点耐久；阵亡的士卒在下一战重新补齐，雇来的队伍不会消耗军府车员，也不会因一次战败而消失。募兵的战车沿用敌车数据（14 点耐久）：耐久降到 20% 或以下时向阵位撤退，回到阵中借阵旗回血，超过 40% 才再次出击；若撤退途中被近战缠住，则进入 FIGHT_TO_DEATH，此后永不再逃。这套士气循环不在募兵里私有：`units/chariot.js` 是双方共用的状态机（`nextChariotState()` 只读血量与视野，输出 HOLD/ENGAGE/REGROUP 三种意图，阈值集中在 `chariotTactics`），敌军的冲撞战车与募兵车只在「腿」上不同——募兵被缰绳拴在阵位，敌车退回自己的队列空位；两边都借本阵阵旗回血，超过 40% 才再次出击，撤退途中被近战缠住同样进入 FIGHT_TO_DEATH。溃逃、回差（hysteresis）与困兽死战完全同源，改一处两边同时生效；阵旗的计时、治疗与脉冲也只有一份：`units/formations.js` 的 `tickFormationAura()` 同时驱动 `state.formations` 与 `state.allyFormations`（敌军的 `chariot-archer` 仍走弓手脑子：它面对压力的答案是拉开距离，而不是死战）。商店的营地预览会为每队竖起一顶帐篷；开局布阵不消耗随机数，因此 `?seed=` 复现的敌军布阵不受募兵影响。
+
 移动设备建议横屏游玩。战斗画面会铺满屏幕，并提供半透明摇杆与攻击键；战车阶段摇杆方向直接决定地图上的移动目标方向，战车平滑转向并沿车头前进，急转时会减速，松开摇杆后凭惯性减速至停止。静止或慢速（低于 32 px/s）时，朝车头后方约 135° 以上轻推摇杆且幅度不超过 0.45，战车会沿车尾方向倒退，同时带轻微的后轮转向：车头以约 42°/s 的慢速转向摇杆的反方向，车尾跟着摇杆摆，斜向倒退因此沿弧线并入摇杆方向（最多约 45°、约 1.1 秒）而不是瞬间横移；角度或幅度超出该范围时仍按原有方式转向。键盘输入固定为满幅，因此只走转向分支。步战阶段摇杆切换为直接移动，攻击键改为按下即挥剑：蓄力只属于车上的弩，下车后不会留下一段悬着的蓄力。摇杆在窗口尺寸变化时保持显示，摇杆内的细环标出的正是反向小输入的半径。所有箭矢和石弹都会飞完全程落地，不会在半空中凭空消失：弓箭落地后会短暂留在地面，石弹无论落在空地、被墙木挡住还是命中目标，都会扬起浅色尘土并留下扩散的冲击环（战场草色偏亮，尘土因此使用更浅的色调，时长也长于普通火花）。玩家和随行车员受伤时也会留下血迹。已招募的弓手和戟士会在下车后跟随玩家并自动攻击；初始驾驶员不攻击，也不作为步战援兵。
 
 战车属性为火力、防护、机动、稳定、容量，初始为 3 点（容量 2 点），范围为 1–10。火力决定弩箭伤害（火力 × 1.5）；防护按属性值 × 5% 概率完全抵消一次针对整辆战车的远程攻击；机动乘数为 0.5 + 机动 × 0.05；稳定决定战车耐久（稳定 × 10，初始 30 点）；容量仅供显示，车员名额由车箱升级决定。五件装备各有三级，后续等级会按配置明确带来属性惩罚；战马只增加机动。凯旋商店显示五项属性与购置预览，装备、马匹和人员价格均由配置表提供。这些换算集中定义在 `src/data/rules.js` 与 `src/data/equipment.js` 的派生函数中。
@@ -60,8 +62,8 @@ h5game/
 ├── README.md
 ├── scripts/
 │   ├── perf-test.mjs             # Frame-budget benchmark for the per-frame loops
-│   ├── smoke-test.mjs            # Boots main.js against a stub DOM: menu → prologue → battle → shop → defeat → the last stage → victory card → resting menu
-│   └── unit-test.mjs             # Rules, collision, ballistics, bow aim, blood, RNG, naming, shop geometry, the last stage and the post-victory rest
+│   ├── smoke-test.mjs            # Boots main.js against a stub DOM: menu → prologue → battle → shop (hire a line) → defeat → the last stage → victory card → resting menu
+│   └── unit-test.mjs             # Rules, collision, ballistics, bow aim, blood, RNG, naming, shop geometry, hired formations, the last stage and the post-victory rest
 ├── styles/
 │   └── game.css
 ├── src/
@@ -76,7 +78,7 @@ h5game/
 │   │   ├── battlefields.js       # Battlefield names, ground labels and per-map element mixes
 │   │   ├── elements.js           # Map element catalog: one row per obstacle, terrain and cloud kind
 │   │   ├── equipment.js          # Equipment, horse and personnel values; derived stat helpers
-│   │   ├── formations.js         # Formation patterns and unit/boss stats
+│   │   ├── formations.js         # Formation patterns, unit/boss stats, shared chariot morale and banner aura
 │   │   ├── names.js              # Frozen clan/given name tables (weights + story keys)
 │   │   └── rules.js              # Balance constants for stats, projectiles, impact effects and campaign pacing
 │   ├── game/
@@ -99,8 +101,10 @@ h5game/
 │   │   ├── equipment.js          # Shop purchases and campaign roster
 │   │   └── units/
 │   │       ├── enemies.js        # Enemy/boss spawning, damage, and collision
+│   │       ├── allies.js         # Hired friendly line: spawn and guard
+│   │       ├── chariot.js        # Shared chariot morale: CHASE -> FLEE -> FIGHT_TO_DEATH
 │   │       ├── behaviours.js     # One brain per unit type: sight response, guard post, chase
-│   │       └── formations.js     # Formation geometry: slot leash, alert footprint, chase envelope
+│   │       └── formations.js     # Shared formation logic: leash, alerts, banner aura
 │   ├── render/
 │   │   ├── camera.js             # Player-follow camera (clamped delta, self-healing)
 │   │   ├── elements.js           # Element art: palisades, canopies, terrain patterns, cloud puffs
@@ -138,8 +142,8 @@ h5game/
 
 ```sh
 find src scripts \( -name '*.js' -o -name '*.mjs' \) -print0 | xargs -0 -n1 node --check   # 语法检查
-node scripts/unit-test.mjs                       # 规则、碰撞、弹道、血迹、相机、随机数、姓名抽取、商店几何、终局抽签与休战
-node scripts/smoke-test.mjs                      # 用 stub DOM 启动 main.js，跑战斗帧直到凯旋卡与休战后的菜单
+node scripts/unit-test.mjs                       # 规则、碰撞、弹道、血迹、相机、随机数、姓名抽取、商店几何、募兵、终局抽签与休战
+node scripts/smoke-test.mjs                      # 用 stub DOM 启动 main.js，跑战斗帧直到凯旋卡与休战后的菜单（含商店募兵与战场布阵）
 node scripts/perf-test.mjs                       # 逐帧性能预算：敌军 AI、随从齐射、下车随从、弹道
 H5_SEED=7 node scripts/smoke-test.mjs            # 换一个随机种子复跑同一套冒烟检查
 ```

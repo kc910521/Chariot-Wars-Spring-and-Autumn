@@ -95,12 +95,17 @@ export function createTrailSystem({ state, camera, view }) {
     if (actor.trailCarry >= 1) actor.trailCarry = 0;
   }
 
-  function update(delta, player, enemies) {
+  function update(delta, player, enemies, allies = []) {
     if (!(delta > 0)) return;
     live = countParticles(state.particles, "trail");
     if (onScreen(player)) track(player, delta);
     for (const enemy of enemies) {
       if (!enemy.destroyed && onScreen(enemy)) track(enemy, delta);
+    }
+    // The hired line raises the same wake as anything else travelling on the
+    // field; foot allies included, which is how the player reads a charge.
+    for (const ally of allies) {
+      if (!ally.destroyed && onScreen(ally)) track(ally, delta);
     }
   }
 

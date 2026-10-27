@@ -18,7 +18,7 @@ export function pickFinalStage(random) {
 export function createStageManager({
   campaign, state, player, world, view, camera, equipmentShop, seedSource = () => null,
   elements, circleIntersectsObstacle, updateHud, setMode, spawnBoss, spawnBossSquad, announceBoss,
-  resizeCanvas, playTone, hideBanner, lockVictory = () => {},
+  spawnFriendlyAllies = () => [], resizeCanvas, playTone, hideBanner, lockVictory = () => {},
 }) {
   const {
     shopGoldElement, shopScoreElement, shopKillsElement,
@@ -36,6 +36,9 @@ export function createStageManager({
     campaign.horseCount = 1;
     campaign.roster = [];
     campaign.nextPersonnelId = 1;
+    // Hired formations belong to the run: a new run starts without them, while
+    // retrying a stage or marching to the next one keeps the count.
+    campaign.friendlyFormations = 0;
     campaign.identity = null;
     // The battle flags belong to the run too: leaving `finalBattle` set would keep
     // the next prologue claiming to be the last stage, and a stale squad roster
@@ -96,6 +99,10 @@ export function createStageManager({
       : campaignRules.objectiveBase
         + Math.min(campaign.stage - 1, campaignRules.objectiveStageCap) * campaignRules.objectiveStep;
     state.spawnTimer = 0.8;
+    // The hired lines are placed after the player has been returned to the
+    // middle of the new map, and they draw no random numbers - spawning them
+    // cannot shift the enemy placement on a seeded battlefield.
+    spawnFriendlyAllies();
     if (finalBattle) spawnBossSquad();
     else if (state.bossStage) spawnBoss();
     updateHud();
@@ -112,6 +119,10 @@ export function createStageManager({
     state.enemies = [];
     state.formations = [];
     state.formationsSpawned = 0;
+    // createBattle() refills these from the campaign's hire count; clearing here
+    // also covers a caller that resets a mission in place.
+    state.allyFormations = [];
+    state.allies = [];
     state.kills = 0;
     state.phase = "combat";
     state.extractionPoint = null;
