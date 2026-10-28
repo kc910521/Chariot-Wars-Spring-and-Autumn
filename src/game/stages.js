@@ -8,6 +8,7 @@ import { translate } from "../i18n/index.js";
 import { createRandomSeed, createSeededRandom } from "../utils/random.js";
 import { createBattlefield } from "./map.js";
 import { CHARIOT_CONTROL_CONFIG } from "./player.js";
+import { ringLayoutFromShares } from "./rings.js";
 import { createTutorialMapCheck } from "./tutorial-map.js";
 
 // How long a run is: the last stage is drawn from the rule range with one roll of
@@ -21,7 +22,14 @@ export function createStageManager({
   campaign, state, player, world, view, camera, equipmentShop, seedSource = () => null,
   elements, circleIntersectsObstacle, updateHud, setMode, spawnBoss, spawnBossSquad, announceBoss,
   spawnFriendlyAllies = () => [], resizeCanvas, playTone, hideBanner, lockVictory = () => {},
+  ringSource = () => null,
 }) {
+  // The 回 ratios for the whole run: the authored table in src/data/rings.js,
+  // unless the host handed in a `?rings=20,45,20,15`-style override. Read once -
+  // the ground does not change shape between the stage's battles - and the layout
+  // itself is per world, so every battle of a run refines the same bands. An
+  // unusable override falls back to the authored table instead of failing to boot.
+  const ringLayout = ringLayoutFromShares(world, ringSource());
   const {
     shopGoldElement, shopScoreElement, shopKillsElement,
     shopStageElement, shopLocationElement, shopMessageElement,
@@ -111,7 +119,7 @@ export function createStageManager({
       })
       : null;
     const battlefield = createBattlefield(
-      campaign.random, player, world, circleIntersectsObstacle, definition.mix, groundCheck,
+      campaign.random, player, world, circleIntersectsObstacle, definition.mix, groundCheck, ringLayout,
     );
     campaign.obstacles = battlefield.obstacles;
     campaign.terrain = battlefield.terrain;

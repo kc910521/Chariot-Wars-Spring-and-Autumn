@@ -80,6 +80,9 @@ function boot() {
   const context = canvas.getContext("2d");
   // Read once here so no engine module has to know about `location` (or `wx`).
   const seedSource = () => launchQuery().seed;
+  // A developer switch, read through the same seam as the seed: `?rings=` reshapes
+  // the battlefield's 回 ratios for this boot (src/data/rings.js parses it).
+  const ringSource = () => launchQuery().rings;
   const { keys, touchInput, view, world, camera, player, campaign, state } = createGameState({ seedSource });
   // The post-victory rest, read from local storage through the platform facade.
   // `?reset=1` clears it for one boot and nothing else: the switch a developer
@@ -331,7 +334,7 @@ function boot() {
   }
 
   const stageManager = createStageManager({
-    campaign, state, player, world, view, camera, equipmentShop, seedSource,
+    campaign, state, player, world, view, camera, equipmentShop, seedSource, ringSource,
     elements: {
       shopGoldElement, shopScoreElement, shopKillsElement,
       shopStageElement, shopLocationElement, shopMessageElement,

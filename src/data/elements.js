@@ -1,3 +1,5 @@
+import { deepFreeze } from "../utils/freeze.js";
+
 // One row per map element kind. Every `type === "..."` branch that used to live
 // in map.js, collision.js and renderer.js is a column here, so adding a kind is
 // a row plus (only if the silhouette is genuinely new) one draw function in
@@ -9,14 +11,7 @@
 // own fields for an unknown type, so a hand-built obstacle in a test still works.
 
 // Rows are read every frame by the scatter and the renderer, and nothing should
-// ever write back into them: freeze once, recursively, so a stray write throws.
-function deepFreeze(value) {
-  for (const key of Object.keys(value)) {
-    if (value[key] && typeof value[key] === "object") deepFreeze(value[key]);
-  }
-  return Object.freeze(value);
-}
-
+// ever write back into them: see deepFreeze.
 export const elementRules = deepFreeze({
   // How many obstacles a field aims for. A tree that would touch another tree is
   // dropped, so the scatter keeps attempting until the target is reached; the cap
@@ -32,6 +27,61 @@ export const elementRules = deepFreeze({
   edgeMargin: 90,
   terrainEdgeMargin: 110,
   obstacleEdgeMargin: 35,
+});
+
+// The battlefield floor: dry soil that still carries a little short grass, under
+// everything else on the map. It lives here rather than in the painter so the
+// tone can be retuned without touching a draw call, and every colour is
+// deliberately low-contrast - the floor must never compete with a silhouette, a
+// terrain patch or a health bar.
+//
+// `base` is the flat wash the viewport starts as. The washes, flecks and grit are
+// hashed onto a world-space lattice (see src/render/ground.js): that is what gives
+// the ground its texture without tiling, without swimming under the camera and
+// without a single grid line.
+export const groundVisual = deepFreeze({
+  // A dry olive with the green knocked back: a field that has been fought over,
+  // not a lawn. Everything else in this table is a slight variation on it.
+  base: "#8c8f68",
+  // Soft blobs of turned soil, shade and bleached dust - the "mixing soil with a
+  // little grass and shadow" part. `core` feathers into `edge`, which is the same
+  // colour at zero alpha, so a blob has no rim to read.
+  wash: {
+    // One blob per lattice cell of this size, jittered inside the cell. The
+    // lattice is anchored to the world, so the ground slides past the camera.
+    // Small enough to read as texture: a handful of very large blobs would haze
+    // the field instead of mottling it - and every blob is a full-screen-sized
+    // alpha fill, so its radius is a frame-cost decision as much as a look.
+    spacing: 300,
+    radius: [110, 220],
+    tones: [
+      { core: "rgba(96, 88, 60, 0.12)", edge: "rgba(96, 88, 60, 0)" }, // turned soil
+      { core: "rgba(58, 62, 43, 0.1)", edge: "rgba(58, 62, 43, 0)" }, // shade
+      { core: "rgba(182, 178, 136, 0.09)", edge: "rgba(182, 178, 136, 0)" }, // bleached dust
+    ],
+  },
+  // What grass survived: a sparse tuft of a few-pixel blades per cell that rolled
+  // one, and grit where nothing grows at all. Kept thin on purpose - a patch
+  // (`terrainKinds.grass`) is where the tall stuff lives.
+  fleck: {
+    spacing: 104,
+    chance: 0.55,
+    // Two to three blades per tuft, drawn as one path: the floor is a background,
+    // so the whole field has to stay inside a few hundred canvas calls a frame.
+    blades: [2, 3],
+    height: [4, 11],
+    lean: 0.6,
+    width: 1,
+    colors: ["rgba(101, 116, 66, 0.34)", "rgba(85, 100, 57, 0.3)"],
+  },
+  grit: {
+    // The high-frequency half of the texture: flat specks, dark soil and bleached
+    // sand. At one to three pixels a rim is invisible and a rect is the cheapest
+    // thing a canvas draws, so the floor can afford a lot of them.
+    chance: 0.34,
+    size: [1, 3],
+    colors: ["rgba(62, 58, 40, 0.16)", "rgba(186, 180, 138, 0.14)"],
+  },
 });
 
 export const obstacleKinds = deepFreeze({
@@ -125,8 +175,12 @@ export const terrainKinds = deepFreeze({
     size: { radius: [85, 145], aspectX: [0.9, 1.4], aspectY: [0.55, 1.0] },
     visual: {
       kind: "ripples",
+      // `fill` is the middle of the patch and `fade` its transparent twin: the
+      // painter feathers one into the other, so a patch is ground that changes
+      // under the wheels instead of a decal lying on top of it.
       fill: "rgba(91, 135, 129, 0.43)",
-      stroke: "rgba(188, 218, 200, 0.38)",
+      fade: "rgba(91, 135, 129, 0)",
+      stroke: "rgba(188, 218, 200, 0.3)",
       lineWidth: 2,
       lines: 5,
     },
@@ -139,7 +193,8 @@ export const terrainKinds = deepFreeze({
     visual: {
       kind: "dunes",
       fill: "rgba(190, 153, 92, 0.38)",
-      stroke: "rgba(235, 205, 146, 0.36)",
+      fade: "rgba(190, 153, 92, 0)",
+      stroke: "rgba(220, 196, 148, 0.26)",
       lineWidth: 2,
       lines: 5,
     },
@@ -150,11 +205,27 @@ export const terrainKinds = deepFreeze({
     placement: { count: 7 },
     size: { radius: [55, 110], aspectX: [0.9, 1.4], aspectY: [0.55, 1.0] },
     visual: {
-      kind: "blades",
-      fill: "rgba(105, 121, 67, 0.32)",
-      stroke: "rgba(189, 198, 128, 0.32)",
+      // The floor already carries a little short grass (see groundVisual), so a
+      // patch is the tall stuff: a bed of blades standing out of the tint, with a
+      // few weed stalks and their seed heads above them.
+      kind: "weeds",
+      // A shade greener and a touch deeper than the floor: dark blades need a bed
+      // to stand in, or they read as scratches on bare soil.
+      fill: "rgba(92, 110, 58, 0.4)",
+      fade: "rgba(92, 110, 58, 0)",
+      // The weed stems: a mid green, a shade lighter than the blades, so the
+      // taller stalks read as separate plants and not as thicker grass.
+      stroke: "rgba(126, 140, 82, 0.45)",
       lineWidth: 2,
-      blades: 18,
+      blades: 22,
+      weeds: 5,
+      // Shares of the patch radius, so a bigger patch is taller rather than
+      // sparser, and every patch has the same density of stems.
+      height: [0.3, 0.55],
+      weedHeight: [0.5, 0.78],
+      lean: 0.35,
+      blade: ["rgba(70, 85, 47, 0.44)", "rgba(88, 102, 60, 0.38)"],
+      seed: "rgba(103, 109, 66, 0.42)",
     },
   },
 });

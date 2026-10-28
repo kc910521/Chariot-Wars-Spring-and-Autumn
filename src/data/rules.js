@@ -54,8 +54,9 @@ export const projectileRules = Object.freeze({
 });
 
 export const effectRules = Object.freeze({
-  // The battlefield floor is painted #929d6d, so dust has to be a light, warm
-  // tone to read at all; the old #9b8b72 sat at ~1.15:1 contrast and vanished.
+  // The battlefield floor is painted `groundVisual.base` (src/data/elements.js),
+  // a dry olive, so dust has to be a light, warm tone to read at all; the old
+  // #9b8b72 sat at ~1.15:1 contrast against that floor and vanished.
   dust: Object.freeze({
     colors: Object.freeze(["#e6dcc4", "#cdbfa1", "#ab9877"]),
     count: 14,
@@ -69,7 +70,8 @@ export const effectRules = Object.freeze({
     ring: Object.freeze({ color: "#d8cbb0", radius: 5, growth: 30, life: 0.34 }),
   }),
   // Ground dust for anything that is actually travelling. Same warm palette as
-  // `dust` (the floor is #929d6d, so anything cooler vanishes), opposite numbers:
+  // `dust` (the floor is a dry olive, see `groundVisual` in data/elements.js, so
+  // anything cooler vanishes), opposite numbers:
   // many soft, low-alpha puffs that bloom as they fade, instead of one hot
   // scatter that is over in half a second. Every entry scales with the unit's
   // current speed between `minSpeed` and `fullSpeed` (the mounted chariot).

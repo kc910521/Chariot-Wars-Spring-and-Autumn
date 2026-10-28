@@ -17,12 +17,14 @@ import { battlefields } from "../src/data/battlefields.js";
 import { clanNames, givenNames } from "../src/data/names.js";
 import { createCollisionSystem } from "../src/game/collision.js";
 import { createCombatSystem } from "../src/game/combat.js";
-import { cloudKinds, elementRules, obstacleKinds, terrainKinds } from "../src/data/elements.js";
+import { cloudKinds, elementRules, groundVisual, obstacleKinds, terrainKinds } from "../src/data/elements.js";
 import {
   clearsSight, cloudDrift, elementBoundingRadius, elementCullMargin, elementGap, elementIntersects,
   elementSpeedAt, fellTree, isFellable, obstacleShape, rectHitsAnyObstacle, rectTerrain,
 } from "../src/game/elements.js";
 import { createBattlefield } from "../src/game/map.js";
+import { bandsFromShares, createRingLayout, resolveRingHalves, ringLayoutFromShares } from "../src/game/rings.js";
+import { parseRingShares, ringRules } from "../src/data/rings.js";
 import { isPathClear } from "../src/game/reachability.js";
 import { createTutorial } from "../src/game/tutorial.js";
 import {
@@ -31,6 +33,7 @@ import {
 import { createTutorialOverlay } from "../src/render/tutorial-overlay.js";
 import { wildAnimalStats } from "../src/data/wilds.js";
 import { createElementRenderer } from "../src/render/elements.js";
+import { createGroundPainter } from "../src/render/ground.js";
 import { chariotRigBox, createSpriteArt, spritePalette } from "../src/render/sprites.js";
 import { CHARIOT_CONTROL_CONFIG, createPlayerController } from "../src/game/player.js";
 import { bossTypes, chariotTactics, enemyStats, formationAura, formationConfig, formationPatterns, formationPresets } from "../src/data/formations.js";
@@ -418,6 +421,196 @@ test("every row's visual.kind has a silhouette, and its palettes are full", () =
   assert.equal(cloudKinds.sky.visual.shade.length, 3, "the cloud shadow reads three stops");
 });
 
+// A recording 2D context: enough of the canvas API for the floor and the terrain
+// patches, with every style write and every call kept in order, so a test can
+// read the picture back instead of trusting the painter's source. (The sprite
+// tests further down use `recordingContext`, which measures extents instead.)
+function callLog() {
+  const log = [];
+  const state = { fillStyle: "", strokeStyle: "", lineWidth: 1 };
+  const gradient = () => ({
+    addColorStop: (offset, color) => log.push(["addColorStop", [offset, color]]),
+  });
+  const context = {
+    log,
+    createLinearGradient: (...args) => {
+      log.push(["createLinearGradient", args]);
+      return gradient();
+    },
+    createRadialGradient: (...args) => {
+      log.push(["createRadialGradient", args]);
+      return gradient();
+    },
+  };
+  for (const name of [
+    "save", "restore", "translate", "scale", "rotate", "beginPath", "fill", "stroke",
+    "fillRect", "strokeRect", "rect", "roundRect",
+    "arc", "ellipse", "moveTo", "lineTo", "quadraticCurveTo", "bezierCurveTo",
+  ]) {
+    context[name] = (...args) => log.push([name, args]);
+  }
+  for (const key of Object.keys(state)) {
+    Object.defineProperty(context, key, {
+      get: () => state[key],
+      set: (value) => {
+        state[key] = value;
+        // A gradient object cannot be compared across two runs, so the log keeps
+        // its name: the stops themselves are recorded by `addColorStop`.
+        log.push([key, [typeof value === "object" ? "<gradient>" : value]]);
+      },
+    });
+  }
+  return context;
+}
+
+// Colours are authored as hex or rgba(), and the floor's whole contract is about
+// how close two of them are, so the tests have to read them.
+function parseColor(color) {
+  const hex = /^#([0-9a-f]{6})$/i.exec(color);
+  if (hex) {
+    const value = Number.parseInt(hex[1], 16);
+    return [(value >> 16) & 255, (value >> 8) & 255, value & 255, 1];
+  }
+  const rgba = /^rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*(?:,\s*([\d.]+)\s*)?\)$/i.exec(color);
+  assert.ok(rgba, `"${color}" is not a colour this test can read`);
+  return [Number(rgba[1]), Number(rgba[2]), Number(rgba[3]), rgba[4] === undefined ? 1 : Number(rgba[4])];
+}
+
+function relativeLuminance([red, green, blue]) {
+  const channel = (value) => {
+    const share = value / 255;
+    return share <= 0.03928 ? share / 12.92 : ((share + 0.055) / 1.055) ** 2.4;
+  };
+  return 0.2126 * channel(red) + 0.7152 * channel(green) + 0.0722 * channel(blue);
+}
+
+function contrastRatio(first, second) {
+  const [light, dark] = [relativeLuminance(first), relativeLuminance(second)].sort((a, b) => b - a);
+  return (light + 0.05) / (dark + 0.05);
+}
+
+test("the floor is a texture, not a grid: no long straight edge anywhere", () => {
+  const width = 960;
+  const height = 592;
+  const context = callLog();
+  createGroundPainter({ context }).drawGround(0, 0, width, height);
+
+  // The base wash comes first, and it comes from the data row: the painter must
+  // not keep a second copy of the floor colour.
+  assert.deepEqual(context.log[0], ["fillStyle", [groundVisual.base]]);
+  assert.deepEqual(context.log[1], ["fillRect", [0, 0, width, height]]);
+
+  // Every number handed to the rasteriser has to be finite, exactly as the smoke
+  // test insists of the game itself.
+  for (const [name, args] of context.log) {
+    for (const value of args) {
+      if (typeof value === "number") assert.ok(Number.isFinite(value), `${name} was handed ${value}`);
+    }
+  }
+
+  // The 40px lattice this replaced drew lines the width of the viewport, and those
+  // were the strongest edges on the field. Everything left must be a grass blade:
+  // a few pixels long.
+  assert.ok(!context.log.some(([name]) => name === "strokeRect" || name === "rect"),
+    "the floor still draws a rectangle outline");
+  let longest = 0;
+  let cursor = null;
+  for (const [name, args] of context.log) {
+    if (name === "moveTo") cursor = [args[0], args[1]];
+    else if (name === "lineTo" || name === "quadraticCurveTo") {
+      const tip = name === "lineTo" ? [args[0], args[1]] : [args[2], args[3]];
+      if (cursor) longest = Math.max(longest, Math.hypot(tip[0] - cursor[0], tip[1] - cursor[1]));
+      cursor = tip;
+    } else if (name === "stroke" || name === "fill") cursor = null;
+  }
+  assert.ok(longest > 0, "the floor has no grass on it at all");
+  assert.ok(longest < 40, `the floor draws a ${longest.toFixed(0)}px straight edge - that is a grid line`);
+  // The floor is a full-screen background, so its canvas calls are a frame cost:
+  // a ratchet on today's ~650 at this size, not a target to grow into.
+  assert.ok(context.log.length < 900, `the floor costs ${context.log.length} canvas calls a frame`);
+
+  // Same camera, same field: painted identically, because every fleck is hashed
+  // from its own cell and nothing in the painter is `Math.random`. A floor that
+  // repainted differently would shimmer.
+  const again = callLog();
+  createGroundPainter({ context: again }).drawGround(0, 0, width, height);
+  assert.deepEqual(again.log, context.log, "the floor repaints differently on a second frame");
+
+  // ...and it belongs to the world, not to the screen: a scrolled camera has to
+  // see a different piece of ground, or the texture would look glued on.
+  const scrolled = callLog();
+  createGroundPainter({ context: scrolled }).drawGround(240, 180, width, height);
+  assert.notDeepEqual(scrolled.log, context.log, "the floor follows the camera instead of the world");
+});
+
+test("the floor palette stays low contrast, so it never competes with a silhouette", () => {
+  const base = parseColor(groundVisual.base);
+  assert.ok(groundVisual.wash.tones.length >= 2, "a single wash is a flat floor again");
+  for (const tone of groundVisual.wash.tones) {
+    const core = parseColor(tone.core);
+    const edge = parseColor(tone.edge);
+    assert.deepEqual(edge.slice(0, 3), core.slice(0, 3), `${tone.core} feathers to a different colour`);
+    assert.equal(edge[3], 0, `${tone.core} leaves a rim at its edge`);
+    // The wash as it lands on the floor, then the ratio: past ~1.2:1 this stops
+    // being shading and becomes a blotch.
+    const mixed = [0, 1, 2].map((index) => base[index] * (1 - core[3]) + core[index] * core[3]);
+    const ratio = contrastRatio(base, mixed);
+    assert.ok(ratio < 1.2, `${tone.core} moves the floor to ${ratio.toFixed(2)}:1`);
+  }
+  // The grass flecks are the one thing allowed to be visible - but only just, and
+  // there must be more bare soil than grass.
+  for (const color of groundVisual.fleck.colors) {
+    const tone = parseColor(color);
+    assert.ok(tone[3] > 0.12 && tone[3] < 0.4, `${color} is either invisible or a stain`);
+  }
+  assert.ok(groundVisual.fleck.chance < 0.7, "the floor is a lawn, not a field");
+  assert.ok(groundVisual.grit.chance > 0, "bare soil has no grain at all");
+});
+
+test("every terrain patch feathers into the floor instead of ending on a hard ellipse", () => {
+  for (const [type, row] of Object.entries(terrainKinds)) {
+    const fill = parseColor(row.visual.fill);
+    const fade = parseColor(row.visual.fade);
+    assert.ok(fill[3] > 0, `${type} has an invisible fill`);
+    assert.equal(fade[3], 0, `${type}'s fade stop is not transparent`);
+    assert.deepEqual(fade.slice(0, 3), fill.slice(0, 3), `${type} fades to a different colour`);
+  }
+});
+
+test("a grass patch is tall blades and weeds, not a tint", () => {
+  const art = terrainKinds.grass.visual;
+  assert.equal(art.kind, "weeds", "the grass patch lost its own silhouette");
+  assert.ok(art.blade.length >= 2, "every blade uses the same tone");
+  assert.ok(art.height[0] < art.height[1], "the blade height range is flat");
+  assert.ok(art.weedHeight[1] > art.height[1], "the weeds are no taller than the grass");
+
+  // Measure the picture rather than the table: the stems have to stand up out of
+  // the bed, or the patch is the tint it used to be.
+  const radiusY = 60;
+  const context = callLog();
+  createElementRenderer({ context }).drawTerrain({ type: "grass", x: 0, y: 0, radiusX: 80, radiusY });
+  let tallest = 0;
+  let cursor = null;
+  for (const [name, args] of context.log) {
+    if (name === "moveTo") cursor = [args[0], args[1]];
+    else if (name === "quadraticCurveTo" && cursor) {
+      tallest = Math.max(tallest, cursor[1] - args[3]);
+      cursor = [args[2], args[3]];
+    } else if (name === "fill" || name === "stroke") cursor = null;
+  }
+  assert.ok(tallest > radiusY * 0.4,
+    `the tallest stem is ${tallest.toFixed(1)}px on a ${radiusY}px patch - that is a tint, not grass`);
+  assert.ok(tallest < radiusY, `${tallest.toFixed(1)}px of stem is taller than the patch is deep`);
+  // The bed is feathered and the weeds carry seed heads: the two things that make
+  // a patch read as vegetation standing in soil.
+  assert.ok(context.log.some(([name]) => name === "createRadialGradient"), "the patch still fills as a hard disc");
+  assert.equal(context.log.filter(([name]) => name === "ellipse").length, art.weeds,
+    "every weed should carry exactly one seed head");
+  // A patch is drawn per frame too: the ratchet keeps a future "more blades!"
+  // edit from quietly turning seven patches into seven thousand calls.
+  assert.ok(context.log.length < 260, `one grass patch costs ${context.log.length} canvas calls`);
+});
+
 test("a tree leans inside its declared wind, and one hit adds one decaying wobble", () => {
   const art = obstacleKinds.tree.visual;
   const hitRules = effectRules.treeHit;
@@ -613,6 +806,220 @@ test("the battlefield unit art has exactly one implementation", () => {
   }
 });
 
+console.log("[unit] battlefield rings");
+
+const ringWorld = { width: 2800, height: 1800 };
+
+test("the four bands tile the map and keep its shape", () => {
+  const layout = createRingLayout(ringWorld);
+  assert.equal(layout.rings.length, 4);
+  // Thickness adds up to the half-span on both axes - once per side, so the two
+  // sides make the full span - and no band overlaps its neighbour.
+  const width = layout.rings.reduce((sum, ring) => sum + ring.thicknessX, 0);
+  const height = layout.rings.reduce((sum, ring) => sum + ring.thicknessY, 0);
+  assert.ok(Math.abs(width - ringWorld.width / 2) < 1e-6, `the bands reach ${width}px from the centre`);
+  assert.ok(Math.abs(height - ringWorld.height / 2) < 1e-6, `the bands reach ${height}px from the centre`);
+  const area = layout.rings.reduce((sum, ring) => sum + ring.bandArea, 0);
+  assert.ok(Math.abs(area - ringWorld.width * ringWorld.height) < 1e-3, `the bands cover ${area}px2`);
+  for (const ring of layout.rings) {
+    // Every band is concentric, and each keeps the map's own aspect ratio: an
+    // oval 回 pattern would move the ring seams away from the drawn field.
+    assert.ok(Math.abs(ring.rect.x + ring.rect.width / 2 - layout.centreX) < 1e-6);
+    assert.ok(Math.abs(ring.rect.y + ring.rect.height / 2 - layout.centreY) < 1e-6);
+    const aspect = ring.rect.width / ring.rect.height;
+    assert.ok(Math.abs(aspect - ringWorld.width / ringWorld.height) < 1e-9, `ring ${ring.id} is ${aspect}:1`);
+  }
+  // `t` is 0 at the centre and 1 at the edge, so the outermost stop is the edge.
+  assert.equal(layout.rings[layout.rings.length - 1].threshold, 1);
+});
+
+test("20/45/20/15 puts the fifth in the middle and a rim on the outside", () => {
+  const [a, b, c, d] = createRingLayout(ringWorld).rings;
+  // The innocuous-looking numbers are the point of the test: A is a half-span, so
+  // 0.20 is a fifth of the width on each side, and the outer three then divide
+  // what is left of the half-span (1050px) in their own 45:20:15 ratio.
+  const near = (value, expected) => Math.abs(value - expected) < 1e-6;
+  assert.ok(near(a.rect.width, 1120) && near(a.rect.height, 720), `A is ${a.rect.width}x${a.rect.height}`);
+  assert.ok(near(b.thicknessX, 472.5) && near(b.thicknessY, 303.75), `B is ${b.thicknessX} thick`);
+  assert.ok(near(c.thicknessX, 210) && near(c.thicknessY, 135), `C is ${c.thicknessX} thick`);
+  assert.ok(near(d.thicknessX, 157.5) && near(d.thicknessY, 101.25), `D is ${d.thicknessX} thick`);
+  // B has the most ground of the four, which is why it carries the enemy ladder.
+  const widest = [...createRingLayout(ringWorld).rings].sort((l, r) => r.bandArea - l.bandArea)[0];
+  assert.equal(widest.id, "B");
+  // Ring A has to hold the spawn clearing (elementRules.obstacleSafeRadius 280),
+  // or the first element of a battle would be dropped on every roll.
+  assert.ok(a.thicknessX >= 560 && a.thicknessY >= 360, "ring A is smaller than the spawn clearing");
+});
+
+test("one word switches how the innermost share is measured", () => {
+  const half = createRingLayout(ringWorld);
+  const band = createRingLayout(ringWorld, { innermostSpan: "band" });
+  const near = (value, expected) => Math.abs(value - expected) < 1e-6;
+  assert.ok(near(half.bandOf("A").rect.width, 1120), `half gives ${half.bandOf("A").rect.width}`);
+  assert.ok(near(band.bandOf("A").rect.width, 560), `band gives ${band.bandOf("A").rect.width}`);
+  // Both readings tile; only the seams move.
+  for (const layout of [half, band]) {
+    const width = layout.rings.reduce((sum, ring) => sum + ring.thicknessX, 0);
+    assert.ok(near(width, ringWorld.width / 2), `${layout.innermostSpan} reaches ${width}px`);
+  }
+  // The halves are compared with a tolerance on purpose: 0.3 * 0.45 / 0.8 is not
+  // the decimal 0.16875 in binary, and the table is authored in decimals.
+  const halves = (layout) => layout.halves.map((value) => Number(value.toFixed(5)));
+  assert.deepEqual(halves(half), [0.2, 0.36875, 0.44375, 0.5]);
+  assert.deepEqual(halves(band), [0.1, 0.325, 0.425, 0.5]);
+});
+
+test("the ratio is data: any table that sums to 1 is accepted", () => {
+  // Nothing in src/game/rings.js knows the ids or how many bands there are, which
+  // is what makes the ratios adjustable at any time rather than a constant to
+  // migrate.
+  const evenBands = [
+    { id: "core", share: 0.25 },
+    { id: "mid", share: 0.25 },
+    { id: "outer", share: 0.25 },
+    { id: "rim", share: 0.25 },
+  ];
+  const even = createRingLayout(ringWorld, { bands: evenBands });
+  assert.deepEqual(even.rings.map((ring) => ring.id), ["core", "mid", "outer", "rim"]);
+  assert.ok(Math.abs(even.rings[3].threshold - 1) < 1e-12, "the outer band does not reach the edge");
+  // A quarter half-span first, then the remaining quarter split evenly.
+  assert.ok(Math.abs(resolveRingHalves(evenBands, "half")[1] - (0.25 + 0.25 / 3)) < 1e-9);
+  // The same point changes ring when only the table changes: t = 0.6 sits in B at
+  // 20/45/20/15 and in `mid` at 25/25/25/25, because a 20% innermost band ends at
+  // t 0.4 and a 25% one ends at t 0.5.
+  const point = { x: ringWorld.width / 2 + 840, y: ringWorld.height / 2 };
+  assert.equal(createRingLayout(ringWorld).ringAt(point.x, point.y), "B");
+  assert.equal(even.ringAt(point.x, point.y), "mid");
+});
+
+test("ringAt is the rect table, checked on a grid", () => {
+  const layout = createRingLayout(ringWorld);
+  const steps = 40;
+  for (let row = 0; row < steps; row += 1) {
+    for (let column = 0; column < steps; column += 1) {
+      const x = ((column + 0.5) / steps) * ringWorld.width;
+      const y = ((row + 0.5) / steps) * ringWorld.height;
+      const ring = layout.bandOf(layout.ringAt(x, y));
+      assert.ok(x >= ring.rect.x - 1e-6 && x <= ring.rect.x + ring.rect.width + 1e-6, `(${x}, ${y}) is outside ${ring.id}`);
+      assert.ok(y >= ring.rect.y - 1e-6 && y <= ring.rect.y + ring.rect.height + 1e-6, `(${x}, ${y}) is outside ${ring.id}`);
+      // ... and outside the band inside it, or the innermost match would be wrong.
+      if (ring.index > 0) {
+        const inInner = Math.abs(x - layout.centreX) <= ring.innerHalfWidth + 1e-6
+          && Math.abs(y - layout.centreY) <= ring.innerHalfHeight + 1e-6;
+        assert.equal(inInner, false, `(${x}, ${y}) is inside the inner rect but was called ${ring.id}`);
+      }
+    }
+  }
+});
+
+test("a sampled point always lands in the band it was asked for", () => {
+  const layout = createRingLayout(ringWorld);
+  for (const ring of layout.rings) {
+    const random = createSeededRandom(31 + ring.index);
+    for (let index = 0; index < 400; index += 1) {
+      const point = layout.samplePoint(ring.id, random);
+      assert.equal(layout.ringAt(point.x, point.y), ring.id, `${ring.id} sampled ${point.x},${point.y}`);
+    }
+  }
+  // The rim is sampled from four strips, not from its bounding rect: a rect would
+  // drop most rim points in the middle of the map where ring A is.
+  assert.ok(layout.bandOf("D").innerHalfWidth > 0 && layout.bandOf("D").innerHalfHeight > 0);
+});
+
+test("a sample costs three draws, so a map's stream does not shift with the ratios", () => {
+  const layout = createRingLayout(ringWorld);
+  let draws = 0;
+  const random = createSeededRandom(7);
+  const counted = () => {
+    draws += 1;
+    return random();
+  };
+  const first = layout.samplePoint("D", counted);
+  assert.equal(draws, 3);
+  assert.deepEqual(layout.samplePoint("D", createSeededRandom(7)), first);
+  // An inset pulls a rim point off the world edge without emptying the band ...
+  const inset = layout.samplePoint("D", createSeededRandom(11), { insetX: 200, insetY: 200 });
+  assert.ok(inset.x >= 200 && inset.x <= ringWorld.width - 200, `inset point at ${inset.x}`);
+  // ... and an inset wider than the band falls back to its middle instead of
+  // collapsing to a zero-width strip a spawner could never use.
+  const tight = layout.samplePoint("D", createSeededRandom(11), { insetX: 500, insetY: 500 });
+  assert.equal(layout.ringAt(tight.x, tight.y), "D");
+});
+
+test("a table that cannot tile the world is refused instead of half-built", () => {
+  assert.throws(() => resolveRingHalves([{ id: "A", share: 0.5 }, { id: "B", share: 0.2 }], "half"), /sum to/);
+  assert.throws(() => resolveRingHalves([], "half"), /no bands/);
+  assert.throws(() => resolveRingHalves([{ id: "A", share: 0.6 }, { id: "B", share: 0.4 }], "half"), /no room/);
+  assert.throws(() => resolveRingHalves([{ id: "A", share: 1 }, { id: "B", share: 0 }], "band"), /share of 0/);
+  assert.throws(() => resolveRingHalves(ringRules.bands, "halves"), /innermostSpan/);
+  assert.throws(() => createRingLayout(ringWorld).bandOf("E"), /no ring "E"/);
+});
+
+test("high/medium/low are ranks, so the level table can be retuned too", () => {
+  const { high, medium, low, none } = ringRules.levels;
+  assert.ok(high > medium && medium > low && low > none, "the ranks are not ordered");
+  assert.equal(none, 0, "`none` is how a ring says a kind never grows there");
+  // Only the ratios matter: 3/2/1 and 30/20/10 are the same table.
+  assert.ok(Math.abs(high / medium - 30 / 20) < 1e-12);
+});
+
+test("pickRing follows its weights and never returns a ring at zero", () => {
+  const layout = createRingLayout(ringWorld);
+  const random = createSeededRandom(2024);
+  const seen = { A: 0, B: 0, C: 0, D: 0 };
+  for (let index = 0; index < 4000; index += 1) seen[layout.pickRing({ B: 5, A: 3, C: 2 }, random)] += 1;
+  assert.equal(seen.D, 0, "the enemy ladder spawned on the rim");
+  assert.ok(Math.abs(seen.B / 4000 - 0.5) < 0.04, `B took ${seen.B}`);
+  assert.ok(Math.abs(seen.A / 4000 - 0.3) < 0.04, `A took ${seen.A}`);
+  assert.ok(Math.abs(seen.C / 4000 - 0.2) < 0.04, `C took ${seen.C}`);
+  assert.equal(layout.pickRing({ A: 0, B: 0 }, random), null);
+  assert.equal(layout.pickRing(undefined, random), null);
+});
+
+test("the shares can be overridden for one boot without an edit", () => {
+  assert.deepEqual(parseRingShares("20,45,20,15"), [0.2, 0.45, 0.2, 0.15]);
+  // Any positive scale: "200,450,200,150" is the same table.
+  assert.deepEqual(parseRingShares("200,450,200,150"), parseRingShares("20,45,20,15"));
+  assert.equal(parseRingShares("20,45,20"), null);
+  assert.equal(parseRingShares("20,45,20,0"), null);
+  assert.equal(parseRingShares("20,45,20,-5"), null);
+  assert.equal(parseRingShares("a,45,20,15"), null);
+  assert.equal(parseRingShares(""), null);
+  assert.equal(parseRingShares(undefined), null);
+  // And the parsed shares feed the same derivation the authored table does.
+  const shares = parseRingShares("25,25,25,25");
+  const bands = shares.map((share, index) => ({ id: "ABCD"[index], share }));
+  assert.deepEqual(createRingLayout(ringWorld, { bands }).rings.map((ring) => ring.id), ["A", "B", "C", "D"]);
+});
+
+test("a shorter override cannot rename the bands", () => {
+  // The level tables say `B: "high"`. An override of three shares would re-label
+  // the bands under them, so it is refused and the authored table stands.
+  assert.deepEqual(bandsFromShares([0.25, 0.25, 0.25, 0.25]).map((band) => band.id), ["A", "B", "C", "D"]);
+  assert.equal(bandsFromShares([0.5, 0.5]), null);
+  assert.equal(bandsFromShares(null), null);
+  // ... and the boot query is wired into the stage manager, not just parseable.
+  const game = readFileSync(new URL("../src/game/game.js", import.meta.url), "utf8");
+  assert.ok(/launchQuery\(\)\.rings/.test(game), "game.js does not read ?rings= from the launch query");
+  const launch = readFileSync(new URL("../src/platform/launch.js", import.meta.url), "utf8");
+  assert.ok(/params\.get\("rings"\)/.test(launch), "launch.js does not surface ?rings=");
+});
+
+test("a boot override that cannot tile the world falls back instead of crashing", () => {
+  // Typed by hand in a URL, so it is not allowed to be fatal: the authored bands
+  // stand in. (The authored table itself still throws - see resolveRingHalves.)
+  const world = { width: 2800, height: 1800 };
+  const authored = createRingLayout(world).rings.map((ring) => ring.rect);
+  const rects = (raw) => ringLayoutFromShares(world, raw).rings.map((ring) => ring.rect);
+  assert.deepEqual(rects("50,20,20,10"), authored, "an untileable override was not refused");
+  assert.deepEqual(rects("nonsense"), authored);
+  assert.deepEqual(rects(undefined), authored);
+  // A usable one is taken, and any scale is accepted: 200,450,200,150 is 20/45/20/15.
+  assert.deepEqual(rects("20,45,20,15"), authored, "the override is not normalised");
+  assert.deepEqual(rects("200,450,200,150"), authored, "a scaled override was not normalised");
+  assert.notDeepEqual(rects("25,25,25,25"), authored, "a valid override was ignored");
+});
+
 console.log("[unit] battlefield scatter");
 
 const battlefieldWorld = { width: 2800, height: 1800 };
@@ -735,7 +1142,68 @@ test("a mix changes the ground, not just the numbers", () => {
   assert.deepEqual(scatterAs("battlefield.hangu.name"), scatterAs("battlefield.hangu.name"));
 });
 
+test("the ring tables place each kind, and the budget still sets the count", () => {
+  const layout = createRingLayout(battlefieldWorld);
+  const bandsOf = (type) => {
+    const seen = { A: 0, B: 0, C: 0, D: 0 };
+    for (let seed = 0; seed < 8; seed += 1) {
+      for (const obstacle of scatter(seed).obstacles) {
+        if (obstacle.type === type) seen[layout.ringAt(obstacle.x, obstacle.y)] += 1;
+      }
+    }
+    return seen;
+  };
+  // Palisades crowd the rim and never stand in the clearing: the wall row says
+  // A "none", D "high". B is the pass band, so walls thin out there.
+  const walls = bandsOf("wall");
+  assert.equal(walls.A, 0, "a palisade stood in the spawn clearing's band");
+  assert.ok(walls.C + walls.D > walls.B * 2, `walls went ${JSON.stringify(walls)}`);
+  // Trees back onto the middle band, which is why ring B is the widest.
+  const trees = bandsOf("tree");
+  assert.ok(trees.B > trees.A && trees.B > trees.C, `trees went ${JSON.stringify(trees)}`);
+  // The tables decide where, never how many: the field still lands its budget.
+  assert.equal(scatter(6).obstacles.length, elementRules.obstacleTarget);
+});
+
+test("a laid-out override reshapes the field without changing its density", () => {
+  const spawn = { x: 0, y: 0, radius: 17 };
+  // The same table with a sliver for B: trees lose their favourite band, so the
+  // field has to put them somewhere else rather than grow fewer of them.
+  const sliver = createRingLayout(battlefieldWorld, {
+    bands: [
+      { id: "A", share: 0.2 },
+      { id: "B", share: 0.05 },
+      { id: "C", share: 0.45 },
+      { id: "D", share: 0.3 },
+    ],
+  });
+  const plainLayout = createRingLayout(battlefieldWorld);
+  const treesIn = (field, layout) => field.obstacles
+    .filter((obstacle) => obstacle.type === "tree" && layout.ringAt(obstacle.x, obstacle.y) === "B").length;
+  const treesBeyond = (field, layout) => field.obstacles
+    .filter((obstacle) => obstacle.type === "tree" && ["C", "D"].includes(layout.ringAt(obstacle.x, obstacle.y))).length;
+  let plainB = 0;
+  let sliverB = 0;
+  let sliverOuter = 0;
+  for (let seed = 0; seed < 8; seed += 1) {
+    const plain = createBattlefield(createSeededRandom(seed), { ...spawn }, battlefieldWorld, () => false);
+    const reshaped = createBattlefield(
+      createSeededRandom(seed), { ...spawn }, battlefieldWorld, () => false, null, null, sliver,
+    );
+    assert.deepEqual(reshaped, createBattlefield(
+      createSeededRandom(seed), { ...spawn }, battlefieldWorld, () => false, null, null, sliver,
+    ), "the override made the field non-deterministic");
+    assert.equal(reshaped.obstacles.length, elementRules.obstacleTarget, "the override thinned the field");
+    plainB += treesIn(plain, plainLayout);
+    sliverB += treesIn(reshaped, sliver);
+    sliverOuter += treesBeyond(reshaped, sliver);
+  }
+  assert.ok(sliverB < plainB / 2, `B kept ${sliverB} trees of the ${plainB} it had`);
+  assert.ok(sliverOuter > sliverB * 2, "the trees did not move outward, they just thinned out");
+});
+
 console.log("[unit] element geometry");
+
 
 test("a hand-built obstacle keeps the shape its own fields describe", () => {
   // scripts and older saves still build instances by hand, and the collision test

@@ -1,5 +1,6 @@
 import { cloudKinds, obstacleKinds, terrainKinds } from "../data/elements.js";
 import { effectRules } from "../data/rules.js";
+import { hashNoise } from "../utils/math.js";
 
 // The art half of the element catalog. Each row picks a silhouette through
 // `visual.kind`, and everything a silhouette can repaint - palette, piece counts,
@@ -183,20 +184,58 @@ export function createElementRenderer({ context }) {
       const half = (art.lines - 1) / 2;
       for (let index = 0; index < art.lines; index += 1) {
         const offset = index - half;
+        // A gentle curve and a length that changes line by line: five ruled lines
+        // read as a diagram, and a dune is ground, not a diagram.
+        const reach = patch.radiusX * (0.42 + (index % 3) * 0.06);
+        const y = offset * 13;
         context.beginPath();
-        context.moveTo(-patch.radiusX * 0.55, offset * 13);
-        context.lineTo(patch.radiusX * 0.55, offset * 13 - 7);
+        context.moveTo(-reach, y);
+        context.quadraticCurveTo(0, y - 7 - (index % 2) * 3, reach, y - 4);
         context.stroke();
       }
     },
-    blades(patch, art) {
+    weeds(patch, art) {
+      // A grass patch is a bed of blades with a few weeds standing out of it. The
+      // blades are placed by angle around the bed, then hashed for root, height,
+      // lean and tone - hashed from the patch's own position, so no two patches
+      // are the same clump and the same patch is the same clump on every frame.
+      const seed = patch.x * 0.017 + patch.y * 0.026;
+      const stemWidth = Math.max(1.2, patch.radiusY * 0.032);
+      context.lineWidth = stemWidth;
       for (let blade = 0; blade < art.blades; blade += 1) {
-        const x = Math.sin(blade * 17.1) * patch.radiusX * 0.7;
-        const y = Math.cos(blade * 9.7) * patch.radiusY * 0.6;
+        const angle = (blade / art.blades) * Math.PI * 2 + hashNoise(blade, 1, seed) * 0.8;
+        const reach = 0.18 + hashNoise(blade, 2, seed) * 0.62;
+        const rootX = Math.cos(angle) * patch.radiusX * reach;
+        const rootY = Math.sin(angle) * patch.radiusY * reach;
+        const height = patch.radiusY * (art.height[0] + hashNoise(blade, 3, seed) * (art.height[1] - art.height[0]));
+        const lean = (hashNoise(blade, 4, seed) - 0.5) * art.lean * height * 2;
+        context.strokeStyle = art.blade[Math.floor(hashNoise(blade, 5, seed) * art.blade.length)];
         context.beginPath();
-        context.moveTo(x, y + 4);
-        context.lineTo(x - 2, y - 4);
+        context.moveTo(rootX, rootY);
+        context.quadraticCurveTo(rootX + lean * 0.3, rootY - height * 0.62, rootX + lean, rootY - height);
         context.stroke();
+      }
+      // The weeds: fewer, taller, straighter, and each one carries a seed head -
+      // the silhouette that says "this is not lawn". The head is a muted olive
+      // rather than a pale blob, so it reads as weight on the stem.
+      context.lineWidth = stemWidth * 1.15;
+      context.strokeStyle = art.stroke;
+      for (let weed = 0; weed < art.weeds; weed += 1) {
+        const angle = hashNoise(weed, 6, seed) * Math.PI * 2;
+        const rootX = Math.cos(angle) * patch.radiusX * 0.66;
+        const rootY = Math.sin(angle) * patch.radiusY * 0.6;
+        const height = patch.radiusY
+          * (art.weedHeight[0] + hashNoise(weed, 7, seed) * (art.weedHeight[1] - art.weedHeight[0]));
+        const lean = (hashNoise(weed, 8, seed) - 0.5) * art.lean * height;
+        context.beginPath();
+        context.moveTo(rootX, rootY);
+        context.quadraticCurveTo(rootX + lean * 0.35, rootY - height * 0.6, rootX + lean, rootY - height);
+        context.stroke();
+        context.fillStyle = art.seed;
+        context.beginPath();
+        context.ellipse(rootX + lean, rootY - height,
+          Math.max(1.2, height * 0.055), Math.max(1.8, height * 0.13), lean * 0.01, 0, TAU);
+        context.fill();
       }
     },
   };
@@ -296,8 +335,8 @@ export function createElementRenderer({ context }) {
   const CLOUD_ART = { shadow: drawCloudPuffs };
 
   // An unknown type draws as the row it most closely resembles - a canopy for
-  // obstacles, blades for terrain, the sky puff for clouds - which is exactly what
-  // the `if (type === ...) ... else ...` chains these replace used to do.
+  // obstacles, a grass bed for terrain, the sky puff for clouds - which is exactly
+  // what the `if (type === ...) ... else ...` chains these replace used to do.
   // `elapsed` is the battle clock: only the wind-sensitive silhouettes read it.
   function drawObstacle(obstacle, elapsed = 0) {
     const visual = obstacleKinds[obstacle.type]?.visual ?? obstacleKinds.tree.visual;
@@ -308,13 +347,39 @@ export function createElementRenderer({ context }) {
     const visual = terrainKinds[patch.type]?.visual ?? terrainKinds.grass.visual;
     context.save();
     context.translate(patch.x, patch.y);
-    context.fillStyle = visual.fill;
-    context.beginPath();
-    context.ellipse(0, 0, patch.radiusX, patch.radiusY, 0, 0, TAU);
-    context.fill();
+    // Feather the patch into the floor: `fill` is the tone at the middle and
+    // `fade` the same tone at zero alpha, so a patch reads as ground that changes
+    // under the wheels instead of a decal laid on top of it. A row without `fade`
+    // keeps the old flat ellipse.
+    if (visual.fade) {
+      // The fade has to follow the ellipse: a radial gradient is circular, so
+      // filling an ellipse with one ends the fade `radiusY / radiusX` of the way
+      // out and leaves a rim along the short axis. Squashing the space does the
+      // path and the paint together - canvas paints a gradient through the
+      // transform in force when it fills - so the patch reaches zero alpha exactly
+      // at its own edge.
+      const inner = Math.max(1, Math.min(patch.radiusX, patch.radiusY) * 0.2);
+      const reach = Math.max(inner + 1, patch.radiusX);
+      context.save();
+      context.scale(1, patch.radiusY / patch.radiusX);
+      const bed = context.createRadialGradient(0, 0, inner, 0, 0, reach);
+      bed.addColorStop(0, visual.fill);
+      bed.addColorStop(0.55, visual.fill);
+      bed.addColorStop(1, visual.fade);
+      context.fillStyle = bed;
+      context.beginPath();
+      context.arc(0, 0, reach, 0, TAU);
+      context.fill();
+      context.restore();
+    } else {
+      context.fillStyle = visual.fill;
+      context.beginPath();
+      context.ellipse(0, 0, patch.radiusX, patch.radiusY, 0, 0, TAU);
+      context.fill();
+    }
     context.strokeStyle = visual.stroke;
     context.lineWidth = visual.lineWidth;
-    (TERRAIN_ART[visual.kind] ?? TERRAIN_ART.blades)(patch, visual);
+    (TERRAIN_ART[visual.kind] ?? TERRAIN_ART.weeds)(patch, visual);
     context.restore();
   }
 

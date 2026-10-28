@@ -4,6 +4,7 @@ import { formationAura } from "../data/formations.js";
 import { effectRules } from "../data/rules.js";
 import { cloudDrift, elementCullMargin } from "../game/elements.js";
 import { createElementRenderer } from "./elements.js";
+import { createGroundPainter } from "./ground.js";
 import { createSpriteArt, spritePalette } from "./sprites.js";
 
 export function createRenderer({
@@ -17,6 +18,10 @@ export function createRenderer({
   // the renderer keeps the camera and the culling, the element layer keeps the
   // silhouettes and their palettes.
   const elements = createElementRenderer({ context });
+  // The floor under all of it: soil, a little grass and shade, and no grid
+  // (src/render/ground.js). It is the only painter that talks about the world at
+  // large, so it takes the camera rect and nothing else.
+  const ground = createGroundPainter({ context });
 
   function roundedRect(x, y, width, height, radius) {
     context.beginPath();
@@ -414,48 +419,14 @@ export function createRenderer({
       context.translate((Math.random() - 0.5) * state.shake, (Math.random() - 0.5) * state.shake);
     }
     context.translate(-camera.x, -camera.y);
-    context.fillStyle = "#929d6d";
-    context.fillRect(camera.x, camera.y, view.width, view.height);
+    // The floor is its own painter (src/render/ground.js): a soil wash with a
+    // little grass and shade, painted under the terrain patches, which are
+    // gameplay. It owns the base colour, so there is no literal here to drift.
+    ground.drawGround(camera.x, camera.y, view.width, view.height);
 
     for (const patch of getTerrain()) {
       if (!inView(patch.x, patch.y, Math.max(patch.radiusX, patch.radiusY) + 8)) continue;
       elements.drawTerrain(patch);
-    }
-
-    context.fillStyle = "rgba(75, 83, 52, 0.055)";
-    for (let index = 0; index < 28; index += 1) {
-      const ridgeX = index * 103 - 17;
-      const ridgeY = (index * 137) % world.height;
-      if (!inView(ridgeX, ridgeY, 80)) continue;
-      context.beginPath();
-      context.ellipse(ridgeX, ridgeY, 54 + (index % 4) * 8, 15 + (index % 3) * 5, -0.14, 0, Math.PI * 2);
-      context.fill();
-    }
-
-    context.strokeStyle = "rgba(55, 68, 46, 0.055)";
-    context.lineWidth = 1;
-    const firstGridX = Math.floor(camera.x / 40) * 40;
-    const firstGridY = Math.floor(camera.y / 40) * 40;
-    for (let x = firstGridX; x <= camera.x + view.width; x += 40) {
-      context.beginPath();
-      context.moveTo(x, camera.y);
-      context.lineTo(x, camera.y + view.height);
-      context.stroke();
-    }
-    for (let y = firstGridY; y <= camera.y + view.height; y += 40) {
-      context.beginPath();
-      context.moveTo(camera.x, y);
-      context.lineTo(camera.x + view.width, y);
-      context.stroke();
-    }
-
-    context.fillStyle = "rgba(55, 61, 39, 0.12)";
-    for (let index = 0; index < 440; index += 1) {
-      const x = (index * 149 + 17) % world.width;
-      const y = (index * 83 + 29) % world.height;
-      if (x >= camera.x && x <= camera.x + view.width && y >= camera.y && y <= camera.y + view.height) {
-        context.fillRect(x, y, index % 4 === 0 ? 2 : 1, index % 4 === 0 ? 2 : 1);
-      }
     }
 
     for (const cloud of getClouds()) {

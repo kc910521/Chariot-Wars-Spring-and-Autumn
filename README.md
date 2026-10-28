@@ -31,6 +31,13 @@ python3 -m http.server 8000     # 备选：使用系统自带 Python
 
 地图生成分两步：`map.js` 的 `rollBattlefield()` 只负责掷出一整张战场，`createBattlefield()` 再把这张战场交给场景自己的**地图检查**（`validate` 回调）—— 检查不通过就整张重掷（最多 12 次）。正式战局传 `null`（即「没有要求」的空白检查），因此 `?seed=` 的战场仍是原来那一张、连随机数消耗都不变；教学战传 `src/game/tutorial-map.js` 的检查，它问三件事：虎的落点周围 26px 无遮挡；从出生点到虎都有可走的通路；以及**从这张图上任何开得过去的位置**，演武阵线都找得到一整块无遮挡的落脚矩形（4×3 的格点采样，取不到的格点（被墙封死的地面）不参与要求）。这些判定都用 `src/game/reachability.js` 的 `buildWalkMap()`：以玩家体积在 60px 网格上做四邻洪泛（`isPathClear()` 只是它的一层薄包装），一次洪泛回答「这里能不能开过去」和「哪些地面算数」。虎是出生点的纯函数（车前 470px），所以检查与真正生成说的是同一块地；**阵线不是**——它在虎倒下时才列阵，落点是「当时战车所在位置」的纯函数：`findLineGround()` 从战车当前位置先试右下方 900px，再沿固定的方位 / 距离阶梯往外退（900 / 820 / 740 / 660 / 580 / 500 / 420），取第一块既无遮挡、又开得过去的地面，全程不掷骰子，因此同一张图、同一个站位永远得到同一条阵线。追着老虎跑到地图另一头的玩家不会被镜头拉回出生点，阵线会在自己身边列阵。
 
+战场本身是「回」字形的四层环带，比例也是数据：`src/data/rings.js` 只写下 A/B/C/D 四条环带各占多少（默认 20/45/20/15），外加 `innermostSpan`——它说明中心带的那 20 是「中心到边的一半」还是「一条厚度」，两种读法差 560px 的中庭。`src/game/rings.js` 在每次开战时把这张表换算成像素几何（`ringAt()` 只需要一个 `t`：以中心为 0、以世界边缘为 1、取两轴中更大的那一个），掷地图、刷新点与将来的调试叠层都读同一份推导 —— 一张表、一处推导，没有第二处能跟它不一致。比例随时可改：改表即改下一战的地图，或者用 `?rings=10,40,30,20` 只为这一次启动换一组比例（任何正数刻度都行，函数会归一化）；比例和不为 1、或中心带留不下外侧三环时，`resolveRingHalves()` 直接抛错，而不是悄悄生成一张有洞的地图。
+
+撒点不再是在整张地图上均匀取点，而是先选环带再在环带内均匀取点：`src/data/ring-elements.js` 给每一类元素一张「哪一环长得密」的表（`high`/`medium`/`low`/`none` = 3/2/1/0，乘以该环自己的面积），`map.js` 的 `ringWeightsFor()` 把等级换算成权重、`placeInBand()` 先抽一环再抽一点，于是芦苇荡的水落在中环与外环、树木集中在中带、栅栏贴边，「回」字的层次不需要生成器里任何一个 if。等级乘的是**环的面积**而不是环的数量，所以 `high` 说的是密度：把中带改窄，树会往外挪，而不是被挤成一堵树墙。预算仍然只管数量：`obstacleTarget`、`terrainKinds[*].placement.count` 与 `obstacleAttemptCap` 决定撒几个、最多试几次，被拒绝的落点不吃名额（重试仍落在同一类元素的下一环里）；贴边的横向栅栏不再被丢弃，而是往内挪进边距——边距之上正是栅栏该待的地方。每环另有覆盖上限（`ringCoverage`，占该环面积的百分比），它只在比例被推到极端时说话：某一环被指定成年年长满树时，它会在变成一堵实心树墙之前停止接收。
+
+地板本身是一层单独的画：`src/render/ground.js` 只画地面，颜色全在 `src/data/elements.js` 的 `groundVisual` 里 —— 一层底色，加上每格一块柔和的「翻过的土 / 阴影 / 晒白的浮土」，再按更细的格子长出稀疏的短草或落一粒土渣。这里故意没有网格：被它换掉的 40px 网格线是全场地最硬的边缘，而低对比的地面最经不起这种边缘。每一格都由自己的世界坐标哈希出来（`src/utils/math.js` 的 `hashNoise`），不用 `Math.random`，于是同一块地每一帧画得一模一样（`H5_TRACE_DRAW` 摘要仍然可比），而格子锚在世界坐标而不是屏幕上，镜头移动时纹理是「滑过去」而不是「跟着走」。地表块随后盖在地板之上并向它羽化：`visual.fill` 是中心的颜色、`visual.fade` 是同一颜色的零透明度版本，绘制时先把坐标系压扁，渐变才会贴着椭圆走到边缘、正好在自己的边界上归零（否则短轴那一圈会留下硬边）。草块（`terrainKinds.grass`）的 `visual.kind` 现在是 `weeds`：一丛按哈希摆位的草叶，外加几根带穗的高草，高度按地块半径的比例给，所以大块是「更高」，不是「更稀」。
+
+
 钱与战功在重试时只会回滚到「本战开局时的军资」：`campaign.entryGold` 在每次 `createBattle()` 里快照，`restartStage()` 把它还原（打到一半倒下时，这一战路上捡的钱不算，之前各战存入的钱不动），教学战重试还会清掉 `campaign.tutorialHandoff`。教学战本身的战功正常计入这一局；`arm()` 以 `state.battleId` 为键，因此暂停、切语言、失焦回来都不会把开场再演一遍。
 
 ## 终局与休战
@@ -86,11 +93,14 @@ h5game/
 │   │   ├── index.js              # Loads the JSON resources, locale selection, translation and DOM updates
 │   │   └── locales.js            # Locale registry plus lookup/fallback rules (no copy)
 │   ├── utils/
+│   │   ├── freeze.js             # Recursive deepFreeze for the data tables
 │   │   ├── math.js               # Shared clamp and distance helpers
 │   │   └── random.js             # Seeded PRNG for reproducible battles
 │   ├── data/
 │   │   ├── battlefields.js       # Battlefield names, ground labels and per-map element mixes
 │   │   ├── elements.js           # Map element catalog: one row per obstacle, terrain and cloud kind
+│   │   ├── ring-elements.js      # Where each kind grows: one level per ring, plus the per-band coverage caps
+│   │   ├── rings.js              # The 回 table: band shares, what a level means, and the `?rings=` parser
 │   │   ├── equipment.js          # Equipment, horse and personnel values; derived stat helpers
 │   │   ├── formations.js         # Formation patterns, unit/boss stats, shared chariot morale and banner aura
 │   │   ├── names.js              # Frozen clan/given name tables (weights + story keys)
@@ -100,7 +110,8 @@ h5game/
 │   │   ├── game.js               # Composition root: wires systems and owns the frame loop
 │   │   ├── loop.js               # requestAnimationFrame loop with failure isolation
 │   │   ├── state.js              # Player, campaign, and battle state creation
-│   │   ├── map.js                # Procedural battlefield scatter, driven by the element catalog
+│   │   ├── map.js                # Procedural battlefield scatter: rings pick the band, the budget keeps the count
+│   │   ├── rings.js              # The 回 geometry derived from data/rings.js: bands, `ringAt`, band sampling, weighted picks
 │   │   ├── reachability.js       # Abstract map check: a flood fill over the rolled field's obstacles
 │   │   ├── tutorial.js           # 猛虎下山: the drill's step machine (cards, pans, targets)
 │   │   ├── tutorial-map.js       # Where the tiger stands, where the line is placed from the chariot's live position, and the map check
@@ -126,11 +137,12 @@ h5game/
 │   ├── render/
 │   │   ├── camera.js             # Player-follow camera (clamped delta, self-healing, optional focus point)
 │   │   ├── elements.js           # Element art: palisades, canopies, terrain patterns, cloud puffs
+│   │   ├── ground.js             # The floor: soil washes, grass flecks and grit, hashed onto the world
 │   │   ├── sprites.js            # Unit art: chariot rig and foot figure, shared by battlefield and shop
 │   │   ├── tutorial-overlay.js   # The drill's canvas card: layout, hit test and paint
 │   │   └── renderer.js           # Canvas rendering for terrain, units, and effects
 │   ├── platform/
-│   │   ├── launch.js             # Host seam: `launchQuery()` reads `?seed=` and `?reset=1` (小游戏 reads wx launch options)
+│   │   ├── launch.js             # Host seam: `launchQuery()` reads `?seed=`, `?reset=1` and `?rings=` (小游戏 reads wx launch options)
 │   │   └── storage.js            # Storage facade over `window.localStorage`: JSON payloads, a cache, never throws at the game
 │   ├── assets/
 │   │   ├── clan/
@@ -183,13 +195,19 @@ H5_SEED=7 node scripts/smoke-test.mjs            # 换一个随机种子复跑�
 
 时间基准只有一个写入者：`src/game/loop.js` 用帧回调自身的时间戳维护 `state.lastTime`，并把每帧增量限制在 `[0, 0.05]` 秒、非有限值按 0 处理。其它模块（包括 `stages.js` 的开战流程）只读不写 `state.lastTime` —— 过去用 `performance.now()` 打时间戳会让首帧增量变成约 -1.8e9 秒，把相机推到 `-Infinity` 再变成 `NaN`（`inView()` 全部为假，小游戏 iPhone X 上直接内存溢出）。`src/render/camera.js` 也独立兜底：增量同样限幅，且一旦发现自己非有限就重新贴回目标位置。冒烟测试在「出征」开战与恢复点击后立即断言这条契约（晚一帧就会被循环覆盖），所以这两处回归都会立刻变红。
 
-在任意地址后加 `?seed=<数字>`（例如 `http://localhost:8000/?seed=7`）即可固定本局种子，战场、编队与掉落都会重演，便于复盘问题。启动参数由 `src/platform/launch.js` 的 `launchQuery()` 读取，`game.js` 只把 `seedSource` 注入 `createGameState()` 与 `createStageManager()`，`src/utils/random.js` 保持纯函数（`parseSeed()` / `createRandomSeed()`），因此引擎层不依赖 `location`、`URLSearchParams` 或 `wx`。`window.__h5game` 暴露 `state`、`player`、`campaign`、`world`、`view`、`camera`，仅供调试脚本读取。
+在任意地址后加 `?seed=<数字>`（例如 `http://localhost:8000/?seed=7`）即可固定本局种子，战场、编队与掉落都会重演，便于复盘问题。`?rings=10,40,30,20` 则只为这一次启动换一组战场环带比例（见上文「回」字一节），两者可以并用：同一个种子加不同的比例，得到的就是同一串随机数落在不同环带上的地图。启动参数由 `src/platform/launch.js` 的 `launchQuery()` 读取，`game.js` 只把 `seedSource` 与 `ringSource` 注入 `createGameState()` / `createStageManager()`，`src/utils/random.js` 保持纯函数（`parseSeed()` / `createRandomSeed()`），因此引擎层不依赖 `location`、`URLSearchParams` 或 `wx`。`window.__h5game` 暴露 `state`、`player`、`campaign`、`world`、`view`、`camera`，仅供调试脚本读取。
 
 Gameplay behavior is coordinated by `game/game.js`; specialized systems receive shared state and callbacks through small factories. `game/collision.js` owns obstacle/terrain queries, `game/combat.js` owns player fire and damage, `game/projectiles.js` owns ballistic flight and impacts, and `game/loop.js` owns the animation-frame loop with failure isolation. The loop is also the only writer of the time base (`state.lastTime`), clamping every delta to `[0, 0.05]` seconds and treating non-finite values as zero; `render/camera.js` re-seats itself if it is ever handed a non-finite position, so no single bad frame can poison the view for the rest of the session. Collision lives in one factory so player, enemy, and projectile code share the same geometry rules.
 
 Particles have one lifecycle module, `game/particles.js`: `spawnParticle()` fills the fields every emitter used to repeat, `updateParticles()` and `pruneParticles()` advance and drop them, and `countParticles()` answers "how many of this kind are alive". The impact burst in `units/enemies.js`, the speed-scaled ground trail in `game/trails.js` and the frame loop in `game.js` all go through it, so a field that a copy used to forget - `maxLife`, say, which the renderer needs to compute alpha - cannot diverge between emitters. The trail itself measures speed from each unit's own displacement (`distance / delta`) instead of its `speed` field, which makes a hull pinned against a wall, a unit turning on the spot and a crowd being shoved stay quiet for free; a displacement pointing away from the nose is rejected, so a reversing chariot (and the drag of a knockback) leaves no wake. It draws no random numbers at all - a lateral offset and a palette step alternate instead - because every draw would come out of the battle's seed stream and move every enemy decision in the run. The cap (`effectRules.trail.maxLive`) and the off-screen cull keep a full formation from flooding the list, and the renderer paints the trail in its own pass under the bodies while the sparks, rings and motes keep their pass above them.
 
 Map elements follow the same shape as units, one layer down: `data/elements.js` holds one row per kind (shape, whether it blocks movement and sight, its size ranges and its palette), `game/elements.js` is the runtime half that answers questions about an instance, and `render/elements.js` owns the silhouettes. Instances stay plain data - `{ type, x, y, radius }` for circles, `{ type, x, y, width, height }` for axis-aligned walls - and are resolved by `type` at query time, so a new kind is a row plus, only if the silhouette is genuinely new, one draw function. Rows are deep-frozen, and an instance whose type matches no row falls back on its own fields, which is what keeps hand-built test fixtures and older saves working.
+
+The ground they stand on is a 回 pattern of four concentric bands, and its ratios are data too: `data/rings.js` holds the four shares (20/45/20/15 by default) and `innermostSpan`, which says whether the innermost share is a half-span or a plain thickness - the two readings differ by 560px of middle. `game/rings.js` derives the pixel geometry once per world and everything else reads that derivation, so there is one table and one derivation and no second place that can disagree with it; `ringAt()` needs a single `t` (0 at the centre, 1 at the world edge, measured on the further axis) to name the band a point belongs to. The shares are safe to edit at any time and can be replaced for a single boot with `?rings=10,40,30,20`; a table that cannot tile the world throws in `resolveRingHalves()` rather than producing a map with a hole in it.
+
+The floor itself is its own painter, `render/ground.js`, and its palette is a data row (`groundVisual` in `data/elements.js`): one flat soil wash, a soft blob of turned earth, shade or bleached dust per lattice cell, and a sparse tuft of short grass or a speck of grit per detail cell. There is deliberately no grid - the 40px lattice it replaced was the strongest edge on the field, which is the one thing a low-contrast ground cannot afford. Every cell is hashed from its own world position (`hashNoise` in `utils/math.js`), never from `Math.random`, so the field paints identically on every frame and a `H5_TRACE_DRAW` digest stays comparable; because the lattice is anchored to the world and not to the screen, the texture slides past the camera instead of following it. Terrain patches then paint over that floor and feather into it: `visual.fill` is the tone at the middle and `visual.fade` the same tone at zero alpha, drawn under a squashed transform so the fade follows the patch's ellipse and reaches zero exactly at its own edge.
+
+Elements are placed band-first: `data/ring-elements.js` gives each kind one level per band (`high`/`medium`/`low`/`none`, worth 3/2/1/0 times that band's own area), `map.js` picks a band from that table and then samples a point inside it, so water gathers in the outer bands, trees in the middle one and palisades on the rim without a branch in the generator. Because the level multiplies the band's area, a level means density rather than count: narrowing a band moves its share of trees outward instead of crushing them into a sliver. The budget still decides how many - `obstacleTarget`, each kind's `placement.count`, and `obstacleAttemptCap` for the tries - and a rejected point never eats a slot. A per-band coverage cap (`ringCoverage`) only speaks up at the extreme: point every kind at one band and it stops accepting before it becomes a solid wall of trunks. Two details are load-bearing. A palisade sampled on the rim is nudged inside the edge margin instead of being thrown away, because the rim is exactly where walls belong. And a band is sampled in exactly three draws whatever its size, so changing the ratios moves where the elements land without changing how many rolls the field costs - which is what keeps `?seed=` comparable across two readings of the same table.
 
 Unit silhouettes are shared the same way but in the other direction: `render/sprites.js` paints a chariot rig or a foot figure in unit-local space, and every caller owns the transform, the ground shadow and the health bar. The battlefield renderer and the shop's preview rig both call the same painter, so a new horse pose or banner appears in both places in one commit, and the unit test measures the rig's real draw calls against `chariotRigBox()` - the box the shop scales into - so a larger silhouette cannot silently start clipping in the preview. The other half of that guard is a source-level test: `renderer.js` may not paint unit art itself. Team colours come from `spritePalette` in the same module, so a preview cannot show the player in a green the battlefield never uses.
 
