@@ -7,6 +7,7 @@ import { createHash } from "node:crypto";
 import { writeFileSync } from "node:fs";
 import { campaignRules, effectRules, projectileRules } from "../src/data/rules.js";
 import { equipment } from "../src/data/equipment.js";
+import { formationPresets } from "../src/data/formations.js";
 
 const projectRoot = resolve(import.meta.dirname, "..");
 
@@ -1017,6 +1018,11 @@ game.campaign.friendlyFormations = 0;
 // on foot, the second ends the run. Kill from a live battle rather than from the
 // shop, so the assertion is about a real end-of-run, not a forced mode.
 game.stageManager.restartStage();
+// The battle's takings are scoped to the battle: everything picked up on this
+// field is rolled back when it is lost, and the retry starts the score from zero.
+const purseAtEntry = game.campaign.entryGold;
+game.campaign.totalGold = purseAtEntry + 250;
+game.state.score = 640;
 game.player.invulnerable = 0;
 game.combat.damagePlayer(9999, 0, 0);
 game.player.invulnerable = 0;
@@ -1024,6 +1030,14 @@ game.combat.damagePlayer(9999, 0, 0);
 check("losing the battle raises the defeat card",
   game.state.mode === "over" && !query("#game-overlay").classList.contains("hidden"),
   `mode=${game.state.mode}`);
+check("a lost battle keeps none of the coin it collected",
+  game.campaign.totalGold === purseAtEntry,
+  `gold=${game.campaign.totalGold} entry=${purseAtEntry}`);
+check("the defeat card states the purse the retry really leaves",
+  query("#overlay-copy").textContent === translate("battle.defeatCopy", {
+    gold: purseAtEntry, stage: game.campaign.stage,
+  }),
+  `copy="${query("#overlay-copy").textContent}"`);
 check("the defeat card offers the retry action and hides the pause control",
   query("#overlay-button").firstElementChild.textContent === translate("battle.retry")
     && query("#start-button").hidden === true,
@@ -1046,6 +1060,7 @@ const { countdownLabel, lockWindowLabel } = await import(
 
 query("#overlay-button").dispatch("click");
 check("the retry opens a battle again", game.state.mode === "running", `mode=${game.state.mode}`);
+check("the retried battle starts its score from zero", game.state.score === 0, `score=${game.state.score}`);
 
 // A numbered boss stage still fields exactly one champion: the squad belongs to
 // the last stage alone. Stage 4 is a boss stage by the interval rule, so this is
@@ -1172,6 +1187,182 @@ check("a cleared or expired rest unlocks the menu",
 dispatchWindow("keydown", { key: "Enter" });
 check("a run starts again once the rest is over", game.state.mode === "prologue",
   `mode=${game.state.mode}`);
+
+// ---- the tiger drill ---------------------------------------------------------
+//
+// The prologue's second door: two encounters on one battlefield, played as a
+// scenario instead of a campaign stage. Everything below is the real runtime path
+// - the button opens the drill, the cards are canvas UI confirmed by a click and
+// by Enter, the tiger and the line spawn through the enemy system's scenario
+// entry points, and the clear hands the run into stage 1 through the shop.
+query("#prologue-tutorial").dispatch("click");
+const drill = () => game.state.tutorial;
+check("the story card's tutorial button opens the drill",
+  game.state.mode === "running" && game.state.battleMode === "tutorial",
+  `mode=${game.state.mode} battleMode=${game.state.battleMode}`);
+check("the drill opens on its first card, with the field frozen",
+  drill()?.step === "brief" && drill().frozen === true && drill().overlay !== null,
+  `step=${drill()?.step} frozen=${drill()?.frozen}`);
+check("the stage tile says DRILL instead of a stage number",
+  query("#wave").textContent === translate("battle.tutorialStage"),
+  `wave="${query("#wave").textContent}"`);
+check("the drill spawns one wild animal and rolls no campaign wave",
+  game.state.wilds.length === 1 && game.state.enemies.length === 1 && game.state.formations.length === 0,
+  `wilds=${game.state.wilds.length} enemies=${game.state.enemies.length} formations=${game.state.formations.length}`);
+check("the objective counts the animal and the line it guards",
+  game.state.objectiveTarget === formationPresets.tutorialLine.slots.length + 1,
+  `objective=${game.state.objectiveTarget}`);
+check("the animal is a wild tiger, not a rank in a line",
+  game.state.wilds[0].species === "tiger" && game.state.wilds[0].loot === "meat"
+    && game.state.wilds[0].formationId === undefined);
+
+// A frozen field really is frozen: nothing moves, nothing shoots, and the guide
+// arrow stays off until the card has been read.
+const frozenTiger = { x: game.state.wilds[0].x, y: game.state.wilds[0].y };
+const frozenPlayer = { x: game.player.x, y: game.player.y };
+runFrames(60);
+check("a carded drill does not move the field",
+  game.state.wilds[0].x === frozenTiger.x && game.state.wilds[0].y === frozenTiger.y
+    && game.player.x === frozenPlayer.x && game.player.y === frozenPlayer.y,
+  `tiger=${game.state.wilds[0].x},${game.state.wilds[0].y} player=${game.player.x},${game.player.y}`);
+check("a carded drill shows no objective arrow", query("#extraction-guide").hidden === true);
+
+const briefCard = game.tutorialOverlay.layout();
+check("the card the canvas painted has a button to press",
+  briefCard !== null && briefCard.confirm.width > 0, `card=${JSON.stringify(briefCard?.confirm)}`);
+// The drill is played by thumb, not by keyboard: no line on the card may name a
+// key the player has no way to press.
+const keyHint = /空格|space|WASD|Enter|↑|↓|←|→/i;
+check("the brief talks about the joystick and the fire button, not the keyboard",
+  briefCard !== null && !keyHint.test([briefCard.title, ...briefCard.bodyLines, translate("tutorial.confirm")].join("")),
+  `card="${[briefCard?.title, ...(briefCard?.bodyLines ?? [])].join(" / ")}"`);
+query("#game").dispatch("pointerdown", {
+  clientX: briefCard.confirm.x + briefCard.confirm.width / 2,
+  clientY: briefCard.confirm.y + briefCard.confirm.height / 2,
+});
+check("clicking the card's button hands the field over",
+  drill()?.step === "hunt" && drill().frozen === false && drill().overlay === null,
+  `step=${drill()?.step} frozen=${drill()?.frozen}`);
+check("the hunt names its target on the HUD and points the guide at it",
+  query("#objective-label").textContent === translate("tutorial.huntLabel")
+    && query("#extraction-guide-label").textContent === translate("tutorial.guide")
+    && query("#extraction-guide").hidden === false,
+  `label="${query("#objective-label").textContent}"`);
+
+// A pause is not a second opening beat: `arm()` is idempotent per battle.
+dispatchWindow("keydown", { key: "p" });
+runFrames(2);
+dispatchWindow("keyup", { key: "p" });
+dispatchWindow("keydown", { key: "p" });
+runFrames(2);
+dispatchWindow("keyup", { key: "p" });
+check("a paused and resumed drill keeps the field it had",
+  game.state.wilds.length === 1 && drill()?.step === "hunt",
+  `wilds=${game.state.wilds.length} step=${drill()?.step}`);
+
+// The animal falls: its meat is the one drop that pays no coin.
+const tiger = game.state.wilds[0];
+game.damageEnemy(tiger, 999);
+runFrames(2);
+check("the tiger's body leaves meat, not coin",
+  game.state.drops.some((drop) => drop.type === "meat")
+    && game.state.drops.every((drop) => drop.type !== "meat" || drop.value === 0),
+  `drops=${game.state.drops.map((drop) => `${drop.type}:${drop.value}`).join(",")}`);
+check("the drill forms its line and pans the camera to it",
+  drill()?.step === "pan" && game.state.formations.length === 1
+    && drill().line.length === formationPresets.tutorialLine.slots.length
+    && game.state.cameraFocus !== null,
+  `step=${drill()?.step} formations=${game.state.formations.length} line=${drill()?.line?.length}`);
+// The line is placed against the chariot's live position, so the pan always has
+// somewhere to go: it stands a screen away from where the player is now.
+const lineSpan = Math.hypot(
+  game.state.formations[0].x - game.player.x,
+  game.state.formations[0].y - game.player.y,
+);
+check("the line forms a screen away from wherever the chariot is standing",
+  lineSpan > 400 && game.state.cameraFocus.x === game.state.formations[0].x
+    && game.state.cameraFocus.y === game.state.formations[0].y,
+  `line is ${lineSpan.toFixed(0)}px from the chariot, focus=${JSON.stringify(game.state.cameraFocus)}`);
+
+check("the formed line is the drill's own preset, on cleared ground",
+  game.state.formations[0].id === "preset-tutorialLine" && game.state.formations[0].groundTier === "dry",
+  `id=${game.state.formations[0].id} tier=${game.state.formations[0].groundTier}`);
+
+const panStart = { x: game.camera.x, y: game.camera.y };
+runFrames(30);
+check("the pan is a camera move, not a teleport",
+  game.camera.x !== panStart.x || game.camera.y !== panStart.y,
+  `camera=${game.camera.x},${game.camera.y}`);
+check("the pan holds the field while it runs", drill()?.frozen === true && drill()?.step === "pan",
+  `step=${drill()?.step}`);
+
+runFrames(90);
+check("the pan ends on the tactics card",
+  drill()?.step === "tactics" && drill().frozen === true && drill().overlay !== null,
+  `step=${drill()?.step}`);
+const tacticsCard = game.tutorialOverlay.layout();
+check("the tactics card describes the three things in the line",
+  drill()?.overlay?.bodyKeys?.length === 3
+    && tacticsCard.bodyLines.join("") === drill().overlay.bodyKeys.map((key) => translate(key)).join(""),
+  `beats=${drill()?.overlay?.bodyKeys?.length} lines=${tacticsCard?.bodyLines?.length}`);
+check("the tactics card has no keyboard hints on it either",
+  !keyHint.test([tacticsCard.title, ...tacticsCard.bodyLines, translate("tutorial.confirm")].join("")),
+  `card="${[tacticsCard.title, ...tacticsCard.bodyLines].join(" / ")}"`);
+// Three beats wrap wider than two, and the button is the only way out of a frozen
+// field: the panel has to stay inside the canvas.
+const viewHeight = game.view.height;
+check("the taller card still fits the view, button and all",
+  tacticsCard.y >= 0 && tacticsCard.y + tacticsCard.height <= viewHeight
+    && tacticsCard.confirm.y + tacticsCard.confirm.height <= viewHeight,
+  `panel y=${tacticsCard.y} height=${tacticsCard.height} button ends at ${tacticsCard.confirm.y + tacticsCard.confirm.height}`);
+check("the tactics card raises nothing of its own", game.state.fireHeld === false && game.state.fireHold === 0);
+dispatchWindow("keydown", { key: " " });
+dispatchWindow("keyup", { key: " " });
+check("the tactics card's Space confirms and walks the camera back",
+  drill()?.step === "return" && game.state.cameraFocus === null && drill().frozen === true
+    && game.state.fireHeld === false,
+  `step=${drill()?.step} focus=${game.state.cameraFocus} fireHeld=${game.state.fireHeld}`);
+
+runFrames(100);
+check("the camera returns and hands the field back",
+  drill()?.step === "engage" && drill().frozen === false && drill().objective !== null,
+  `step=${drill()?.step}`);
+check("the engagement points the guide at the line",
+  query("#extraction-guide").hidden === false
+    && query("#objective-label").textContent === translate("tutorial.lineLabel"),
+  `label="${query("#objective-label").textContent}"`);
+
+for (const unit of drill().line) game.damageEnemy(unit, 999);
+runFrames(2);
+check("the last of the line clears the drill and opens the extraction",
+  game.state.tutorial === null && game.state.phase === "extract" && game.campaign.tutorialHandoff === true,
+  `tutorial=${game.state.tutorial} phase=${game.state.phase} handoff=${game.campaign.tutorialHandoff}`);
+check("the cleared drill goes back to pointing at the extraction point",
+  query("#extraction-guide").hidden === false
+    && query("#extraction-guide-label").textContent === translate("battle.extractGuide"),
+  `label="${query("#extraction-guide-label").textContent}"`);
+
+// Walk to the extraction and the drill hands the shop a stage-1 campaign.
+game.player.x = game.state.extractionPoint.x;
+game.player.y = game.state.extractionPoint.y;
+runFrames(3);
+check("the cleared drill opens the shop instead of the victory card",
+  game.state.mode === "shop", `mode=${game.state.mode}`);
+check("the drill was stage 1 and did not advance the run",
+  game.campaign.stage === 1, `stage=${game.campaign.stage}`);
+query("#next-battle").dispatch("click");
+runFrames(2);
+check("the shop after a drill leads into the campaign's stage 1",
+  game.state.mode === "running" && game.state.battleMode === "campaign"
+    && game.campaign.stage === 1 && game.campaign.tutorialHandoff === false,
+  `mode=${game.state.mode} battleMode=${game.state.battleMode} stage=${game.campaign.stage}`);
+check("the campaign battle after a drill has no tiger in it",
+  game.state.tutorial === null && game.state.wilds.length === 0
+    && game.state.enemies.every((unit) => unit.wild !== true),
+  `wilds=${game.state.wilds.length}`);
+check("the stage tile counts the campaign again",
+  query("#wave").textContent === String(game.campaign.stage).padStart(2, "0"),
+  `wave="${query("#wave").textContent}"`);
 
 check("no errors after UI interactions", loggedErrors.length === 0, loggedErrors[0]);
 checkCamera("after UI interactions");

@@ -35,6 +35,33 @@ export const formationPatterns = [
   },
 ];
 
+// Scenario lines: a fixed composition laid out by the caller instead of rolled
+// from `formationPatterns` above. They are deliberately kept out of that array,
+// because the campaign picks its patterns with `(formationsSpawned + wave - 1) %
+// formationPatterns.length` - a drill line placed in it would turn up in a real
+// battle.
+//
+// Slots use the same frame as every other pattern: local -Y is the front, so the
+// line faces the player it is spawned against, and the ranks read from the front
+// (halberdiers) to the back (bows).
+//
+// `tutorialLine` is the tiger drill's second half: one chariot at the centre, six
+// halberdiers in front of it, two archers behind. Ten bodies including the tiger,
+// which is exactly the objective count stages.js hands a tutorial battle - the
+// extraction opens on the last of them, on the same kill-count rule a campaign
+// stage uses.
+export const formationPresets = {
+  tutorialLine: {
+    nameKey: "formation.tutorial",
+    slots: [
+      ["ge", -90, -30], ["ge", -54, -30], ["ge", -18, -30],
+      ["ge", 18, -30], ["ge", 54, -30], ["ge", 90, -30],
+      ["chariot", 0, 10],
+      ["archer", -45, 70], ["archer", 45, 70],
+    ],
+  },
+};
+
 // Chariot morale, shared by both sides of the field. The enemy roster and the
 // hireable line below both import this table, so the hysteresis band, the home
 // radius and the regroup pace are defined once - outside either roster.
@@ -202,6 +229,10 @@ export const bossTypes = [
     type: "lion",
     nameKey: "boss.lion.name",
     epithetKey: "boss.lion.epithet",
+    // The boss cousin of the tiger (src/data/wilds.js): same silhouette, a third
+    // larger again, and worth a champion's health and score. The wild animal is
+    // deliberately the small one - what the drill teaches is that a single cat is
+    // a fight, not that it is the fight.
     health: 78,
     radius: 31,
     speed: 85,

@@ -55,7 +55,8 @@ function getChariotTravelSpeed(player) {
 }
 
 export function createEnemies({
-  bossTypes, enemyStats, formationPatterns, state, player, world, campaign, random,
+  bossTypes, enemyStats, wildAnimalStats = {}, formationPatterns, formationPresets = {}, state, player,
+  world, campaign, random,
   circleIntersectsObstacle, moveEntitySafely, getChariotCollisionDamage, playTone, updateHud,
   hasLineOfSight, fireEnemy, damagePlayer, damageCompanion, damageAlly = () => {},
 }) {
@@ -64,6 +65,13 @@ export function createEnemies({
   // battle reproducible from its seed.
 
   function dropLoot(enemy) {
+    // A wild animal leaves meat, and meat is the one drop that rolls nothing: a
+    // body dropped by a scenario (the tutorial's tiger) must not be able to shift
+    // every seeded decision that follows it.
+    if (enemy.loot === "meat") {
+      state.drops.push({ x: enemy.x, y: enemy.y, type: "meat", value: 0, heal: 4, life: 30, phase: 0 });
+      return;
+    }
     const roll = random();
     const type = roll < 0.62 ? "coin" : roll < 0.9 ? "silver" : "gold";
     const values = { coin: 8 + Math.floor(random() * 8), silver: 22 + Math.floor(random() * 16), gold: 55 + Math.floor(random() * 31) };
@@ -340,6 +348,69 @@ export function createEnemies({
     return created;
   }
 
+  // A wild animal is not spawned by a search: the scenario picked its ground and
+  // had it checked before the battle started (see game/tutorial-map.js), so this
+  // only builds the body. It draws no random number either, which is what keeps a
+  // scenario spawn out of the seeded stream entirely.
+  //
+  // The body is a normal enemy with three extra columns (`wild`, `species`,
+  // `loot` from src/data/wilds.js): `state.enemies` moves, damages and draws it,
+  // `state.wilds` is the roster the species rule and the battle loop read.
+  function spawnWildAnimal(type, { x, y, angle = 0 }) {
+    const stats = wildAnimalStats[type];
+    if (!stats) throw new Error(`Unknown wild animal type "${type}".`);
+    const unit = {
+      ...stats,
+      type,
+      wild: true,
+      maxHealth: stats.health,
+      x,
+      y,
+      angle,
+      homeX: x,
+      homeY: y,
+      homeAngle: angle,
+      seesPlayer: false,
+      lastSeenX: player.x,
+      lastSeenY: player.y,
+      searchTimer: 0,
+      sweepTimer: 0,
+      shotCooldown: 0,
+      attackCooldown: 0,
+      contactCooldown: 0,
+      hitFlash: 0,
+      knockedDown: 0,
+      idleTarget: angle,
+      idleTimer: 0,
+    };
+    state.enemies.push(unit);
+    (state.wilds ??= []).push(unit);
+    return unit;
+  }
+
+  // A scenario's own line: fixed composition (`formationPresets` in
+  // data/formations.js) on ground its map check already cleared, so there is no
+  // spawn ladder to climb and nothing to reject. `groundTier` still says "dry" -
+  // the tests read the tier of every line on the field, and a preset that claimed
+  // a different one would read as a failed spawn.
+  function spawnPreset(name, { x, y, heading }) {
+    const pattern = formationPresets[name];
+    if (!pattern) throw new Error(`Unknown formation preset "${name}".`);
+    const { halfWidth, halfHeight } = formationExtent(pattern);
+    commitFormation({
+      pattern,
+      formationId: `preset-${name}`,
+      centerX: x,
+      centerY: y,
+      heading,
+      halfWidth,
+      halfHeight,
+      slotCoordinates: layoutSlots(pattern, x, y, heading),
+      groundTier: "dry",
+    });
+    return state.formations[state.formations.length - 1];
+  }
+
   function burst(x, y, color) {
     for (let index = 0; index < 9; index += 1) {
       const angle = random() * Math.PI * 2;
@@ -437,11 +508,21 @@ export function createEnemies({
   // player or a surviving companion, and the hired line is just one more body on
   // that side. The player starts as the candidate, so a tie still favours him;
   // the loop avoids the per-frame array sort this used to do.
+  //
+  // Two things are new with the wild animals of the tutorial, and both are
+  // data-driven so no campaign battle changes:
+  //   - `species`: a body never picks a target of its own species. Every campaign
+  //     row leaves `species` undefined, so the check is skipped there and the
+  //     campaign's target choice is bit-identical.
+  //   - `state.wilds`: animals are candidates too, which is what lets the drill
+  //     line fight the tiger and lets the tiger fight everything on the field.
+  //     The roster is empty in every campaign battle, so the loop costs nothing.
   function getCombatTarget(enemy) {
     let best = player;
     let bestDistance = Math.hypot(player.x - enemy.x, player.y - enemy.y);
     const consider = (unit) => {
-      if (!unit || unit.destroyed || !(unit.health > 0)) return;
+      if (!unit || unit === enemy || unit.destroyed || !(unit.health > 0)) return;
+      if (enemy.species !== undefined && unit.species === enemy.species) return;
       const distance = Math.hypot(unit.x - enemy.x, unit.y - enemy.y);
       if (distance < bestDistance) {
         best = unit;
@@ -452,11 +533,15 @@ export function createEnemies({
       for (const companion of state.footCompanions) consider(companion);
     }
     for (const ally of state.allies ?? []) consider(ally);
+    for (const wild of state.wilds ?? []) consider(wild);
     return best;
   }
 
+  // `wild` first: an animal is neither hired nor a crew member, so the two
+  // faction lanes below would hand it to a function that does not know it.
   function damageCombatTarget(target, amount, sourceX, sourceY) {
     if (target === player) damagePlayer(amount, sourceX, sourceY);
+    else if (target.wild) damageEnemy(target, amount);
     else if (target.friendly) damageAlly(target, amount, sourceX, sourceY);
     else damageCompanion(target, amount, sourceX, sourceY);
   }
@@ -679,5 +764,5 @@ export function createEnemies({
     }
   }
 
-  return { resolveInfantryCollision, spawnFormation, spawnBoss, spawnBossSquad, burst, dust, addMeleeEffect, damageEnemy, updateUnits, separateEnemies };
+  return { resolveInfantryCollision, spawnFormation, spawnPreset, spawnWildAnimal, spawnBoss, spawnBossSquad, burst, dust, addMeleeEffect, damageEnemy, updateUnits, separateEnemies };
 }

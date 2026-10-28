@@ -15,9 +15,23 @@ python3 -m http.server 8000     # 备选：使用系统自带 Python
 
 ## 游戏流程
 
-主菜单开始新征途 → 序章抽出本局的中文姓名（氏 + 名）并讲述这个名字的由来，同时告知本局将在哪一战结束 → 驾车完成战场目标（普通战局讨伐指定数量的敌军；第 4、6、8… 战局迎战随机首领并将其击败）→ 驾车前往随机生成并持续指引的撤离区域 → 在凯旋商店整备并手动开始下一战。每一局都在第 10–13 战局中的某一战迎来终局：八名首领结阵而来，击败全部首领并撤离后进入凯旋卡，随后回营休整一段时间才能再次出征。地图、敌军编队和战利品会在征途中变化；装备、战马和存活车员会保留到下一战。
+主菜单开始新征途 → 序章抽出本局的中文姓名（氏 + 名）并讲述这个名字的由来，同时告知本局将在哪一战结束 → 序章卡片上可选「猛虎下山 · 教学」先用一场两段式演练熟悉驾车、弩射与车阵（详见下一节），也可以直接「出征」→ 驾车完成战场目标（普通战局讨伐指定数量的敌军；第 4、6、8… 战局迎战随机首领并将其击败）→ 驾车前往随机生成并持续指引的撤离区域 → 在凯旋商店整备并手动开始下一战。每一局都在第 10–13 战局中的某一战迎来终局：八名首领结阵而来，击败全部首领并撤离后进入凯旋卡，随后回营休整一段时间才能再次出征。地图、敌军编队和战利品会在征途中变化；装备、战马和存活车员会保留到下一战。
 
 新征途开局时会按权重抽一次姓名：氏名取自 `src/assets/clan/clan_names.json`（如趙、魏、屈、東郭，权重 10 到 2），名取自 `src/assets/clan/given_names.json`（如黑、虎、無忌、盜跖，权重 3 到 1），两者直接相接成「趙黑」这样的姓名。抽中的两行各带一个 `namingStory.reason` 键，序章用它讲「氏从哪来」和「名为何取」，因此新增一个名字只需在表里加一行并补齐两种语言的说明。姓名是数据而不是文案：无论界面语言是哪一种，姓名始终是这两个汉字，只有它周围的句子会翻译。姓名存放在 `campaign.identity` 上，只在开始新征途时重新抽取；重试战局、进入商店、打下一战或切换语言都会沿用同一个名字，战场目标标签也会一直显示「趙黑的目标」。`?seed=` 同时固定这一次抽签，便于复盘。
+
+## 猛虎下山（教学战）
+
+序章卡片上有两个入口：右侧「出征」进入正式征途，左侧「猛虎下山 · 教学」进入一场两段式的教学战。教学战就是这一局的第一战局，只是以剧本方式演出：`state.battleMode` 为 `"tutorial"`，`campaign.stage` 始终为 1，`state.spawnTimer` 设为 `Infinity`（不刷新普通波次），`state.battleMode` 与 `state.tutorial` 都存放在 `state` 上，因此 `stages.createBattle()` 对这一战只需要换一份开局参数，其余（地图、撤离点、商店）都是同一条代码路径。打完开店整备，商店的「开始下一战」会直接进入正式的第 1 战局：`campaign.tutorialHandoff` 在 `rollForNextBattle()` 里被消费一次，战局号因此不 +1。
+
+剧本写在 `src/game/tutorial.js`，只有状态机与两次推镜：**brief**（画布卡片：摇杆怎么开车、右下角怎么放弩）→ **hunt**（猛虎在场，引导箭头指向它）→ 猛虎倒下后 **pan**（阵线在视野外列阵，镜头推过去）→ **tactics**（画布卡片，三条各说一件事：步卒守阵位、四五人围住车身会一起反击；弓手在远处朝拉车的马放箭、贴上去就边退边射；敌车先撞上来、血少时回阵中旗鼓下回血再冲）→ **return**（镜头回到战车）→ **engage**（击破步阵，引导箭头始终跟着剩下的人；最后一人倒下时按与普通战局相同的击杀数规则开启撤离点：1 只虎 + 9 名步卒 = 10 = `objectiveTarget`）。文案只讲触屏：左手摇杆、右下角「弩 / 击」、卡片自己的按钮，一个键名都不出现（单元测试对 `tutorial.*` 逐条禁止 `空格 / Space / WASD / Enter / 方向键`）。卡片不是 DOM，而是画在 canvas 上的一层（`src/render/tutorial-overlay.js`），布局与命中判定共用同一份几何，所以画出来的按钮就是能点到的按钮；三条正文比两条更高，因此面板既居中又被夹在画面内，确认按钮永远不会被挤到画布外。桌面调试时键盘 Enter / 空格仍然走同一个 `confirm()`，但这是给键盘的便利，不写进文案。
+
+卡片与推镜都是**真正的暂停**：`game.js` 的帧门在 `state.tutorial.frozen` 为真时跳过单位、投射物与生成，并让 `readControls(delta, true)` 读到空输入（战车惯性滑停，而不是整体冻住）。否则视野外的弓手会在你不能操舵的时候先放箭。镜头用 `updateCamera({ ..., focus })` 的 `focus` 点推镜，缓动比跟随更慢；`state.cameraFocus` 为 null 时恢复跟随战车。
+
+老虎是「野兽」而不是士兵：`src/data/wilds.js` 一行数据，走 `state.enemies` 同一条管线（移动、受伤、掉落、绘制都复用），另有两列是它独有的 —— `species`（同族互不攻击；正式战局的每一行都不写这一列，因此目标选择逐帧不变）与 `loot: "meat"`（掉落肉而非铜钱，拾取回 4 点耐久，且是唯一不掷随机数的掉落，野兽因此不会偏移播过种子的战场）。它没有 `formationId`，所以阵旗与阵型警报都跳过它；脑子是 `behaviours.js` 里的 `wild`：见到谁就冲谁，近身就咬，不会退。
+
+地图生成分两步：`map.js` 的 `rollBattlefield()` 只负责掷出一整张战场，`createBattlefield()` 再把这张战场交给场景自己的**地图检查**（`validate` 回调）—— 检查不通过就整张重掷（最多 12 次）。正式战局传 `null`（即「没有要求」的空白检查），因此 `?seed=` 的战场仍是原来那一张、连随机数消耗都不变；教学战传 `src/game/tutorial-map.js` 的检查，它问三件事：虎的落点周围 26px 无遮挡；从出生点到虎都有可走的通路；以及**从这张图上任何开得过去的位置**，演武阵线都找得到一整块无遮挡的落脚矩形（4×3 的格点采样，取不到的格点（被墙封死的地面）不参与要求）。这些判定都用 `src/game/reachability.js` 的 `buildWalkMap()`：以玩家体积在 60px 网格上做四邻洪泛（`isPathClear()` 只是它的一层薄包装），一次洪泛回答「这里能不能开过去」和「哪些地面算数」。虎是出生点的纯函数（车前 470px），所以检查与真正生成说的是同一块地；**阵线不是**——它在虎倒下时才列阵，落点是「当时战车所在位置」的纯函数：`findLineGround()` 从战车当前位置先试右下方 900px，再沿固定的方位 / 距离阶梯往外退（900 / 820 / 740 / 660 / 580 / 500 / 420），取第一块既无遮挡、又开得过去的地面，全程不掷骰子，因此同一张图、同一个站位永远得到同一条阵线。追着老虎跑到地图另一头的玩家不会被镜头拉回出生点，阵线会在自己身边列阵。
+
+钱与战功在重试时只会回滚到「本战开局时的军资」：`campaign.entryGold` 在每次 `createBattle()` 里快照，`restartStage()` 把它还原（打到一半倒下时，这一战路上捡的钱不算，之前各战存入的钱不动），教学战重试还会清掉 `campaign.tutorialHandoff`。教学战本身的战功正常计入这一局；`arm()` 以 `state.battleId` 为键，因此暂停、切语言、失焦回来都不会把开场再演一遍。
 
 ## 终局与休战
 
@@ -62,8 +76,8 @@ h5game/
 ├── README.md
 ├── scripts/
 │   ├── perf-test.mjs             # Frame-budget benchmark for the per-frame loops
-│   ├── smoke-test.mjs            # Boots main.js against a stub DOM: menu → prologue → battle → shop (hire a line) → defeat → the last stage → victory card → resting menu
-│   └── unit-test.mjs             # Rules, collision, ballistics, bow aim, blood, RNG, naming, shop geometry, hired formations, the last stage and the post-victory rest
+│   ├── smoke-test.mjs            # Boots main.js against a stub DOM: menu → prologue → battle → shop (hire a line) → defeat → the last stage → victory card → resting menu → the tiger drill
+│   └── unit-test.mjs             # Rules, collision, ballistics, bow aim, blood, RNG, naming, shop geometry, hired formations, the last stage, the post-victory rest and the tiger drill
 ├── styles/
 │   └── game.css
 ├── src/
@@ -80,12 +94,16 @@ h5game/
 │   │   ├── equipment.js          # Equipment, horse and personnel values; derived stat helpers
 │   │   ├── formations.js         # Formation patterns, unit/boss stats, shared chariot morale and banner aura
 │   │   ├── names.js              # Frozen clan/given name tables (weights + story keys)
-│   │   └── rules.js              # Balance constants for stats, projectiles, impact effects and campaign pacing
+│   │   ├── rules.js              # Balance constants for stats, projectiles, impact effects and campaign pacing
+│   │   └── wilds.js              # Wild animals (the tiger): one row each, with `species` and `loot`
 │   ├── game/
 │   │   ├── game.js               # Composition root: wires systems and owns the frame loop
 │   │   ├── loop.js               # requestAnimationFrame loop with failure isolation
 │   │   ├── state.js              # Player, campaign, and battle state creation
 │   │   ├── map.js                # Procedural battlefield scatter, driven by the element catalog
+│   │   ├── reachability.js       # Abstract map check: a flood fill over the rolled field's obstacles
+│   │   ├── tutorial.js           # 猛虎下山: the drill's step machine (cards, pans, targets)
+│   │   ├── tutorial-map.js       # Where the tiger stands, where the line is placed from the chariot's live position, and the map check
 │   │   ├── stages.js             # Campaign stages, objectives, extraction, the drawn last stage and the victory hand-off
 │   │   ├── victory-lock.js       # The post-victory rest: one storage key, one window, expiry and clock-skew handling
 │   │   ├── identity.js           # Weighted name roll: one clan, one given name, their story keys
@@ -100,15 +118,16 @@ h5game/
 │   │   ├── blood.js              # Blood decal accumulation
 │   │   ├── equipment.js          # Shop purchases and campaign roster
 │   │   └── units/
-│   │       ├── enemies.js        # Enemy/boss spawning, damage, and collision
+│   │       ├── enemies.js        # Enemy/boss/wild spawning, damage, and collision
 │   │       ├── allies.js         # Hired friendly line: spawn and guard
 │   │       ├── chariot.js        # Shared chariot morale: CHASE -> FLEE -> FIGHT_TO_DEATH
-│   │       ├── behaviours.js     # One brain per unit type: sight response, guard post, chase
+│   │       ├── behaviours.js     # One brain per unit type: sight response, guard post, chase, the wild charge
 │   │       └── formations.js     # Shared formation logic: leash, alerts, banner aura
 │   ├── render/
-│   │   ├── camera.js             # Player-follow camera (clamped delta, self-healing)
+│   │   ├── camera.js             # Player-follow camera (clamped delta, self-healing, optional focus point)
 │   │   ├── elements.js           # Element art: palisades, canopies, terrain patterns, cloud puffs
 │   │   ├── sprites.js            # Unit art: chariot rig and foot figure, shared by battlefield and shop
+│   │   ├── tutorial-overlay.js   # The drill's canvas card: layout, hit test and paint
 │   │   └── renderer.js           # Canvas rendering for terrain, units, and effects
 │   ├── platform/
 │   │   ├── launch.js             # Host seam: `launchQuery()` reads `?seed=` and `?reset=1` (小游戏 reads wx launch options)

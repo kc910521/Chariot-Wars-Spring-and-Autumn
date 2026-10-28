@@ -4,10 +4,20 @@ import { cloudKinds, elementRules, obstacleKinds, terrainKinds } from "../data/e
 // decides *where* things go. The draw order below is load-bearing: a battle's
 // `random` is a seeded stream, so changing the order or the number of rolls
 // changes every map that follows from a `?seed=` run.
+//
+// Placement and acceptance are separate steps: `rollBattlefield` fills the field,
+// `createBattlefield` asks the scenario's map check whether the result is
+// playable and rolls the whole thing again if it is not (see the comment on
+// createBattlefield).
 
 function randomIn([min, max], random) {
   return min + random() * (max - min);
 }
+
+// How many whole-field rolls a scenario's map check may reject before the last
+// one is accepted. Generous on purpose: a roll is cheap (a few dozen elements)
+// and the alternative is handing the player an unwinnable field.
+const MAP_ROLL_ATTEMPTS = 12;
 
 // Weighted pick over a table of `{ type, row, weight }`: one draw, and the first
 // entry whose cumulative weight covers the roll wins.
@@ -55,7 +65,31 @@ function placeAxisRect(type, row, x, y, random) {
   return { type, x, y, width, height };
 }
 
-export function createBattlefield(random, player, world, circleIntersectsObstacle, mix = null) {
+export function createBattlefield(random, player, world, circleIntersectsObstacle, mix = null, validate = null) {
+  // The abstract map check. Every battlefield is rolled whole from the stream;
+  // `validate` is the scenario's own acceptance test on the finished field, and a
+  // scenario with nothing to promise passes `null` - which is what the campaign
+  // does, so a `?seed=` run still rolls exactly the map it always did (one roll,
+  // no extra draws).
+  //
+  // A scenario that does promise something (the tutorial: the tiger and the drill
+  // line have to be walkable ground) hands in a check, and a field that fails it
+  // is thrown away and drawn again. Retrying consumes more of the same stream,
+  // which is why the campaign passes `null` rather than a check that is always
+  // true: the number of rolls is part of the seeded contract.
+  let field = null;
+  for (let attempt = 0; attempt < MAP_ROLL_ATTEMPTS; attempt += 1) {
+    field = rollBattlefield(random, player, world, circleIntersectsObstacle, mix);
+    if (!validate || validate(field)) return field;
+  }
+  // Out of attempts: the last roll is played rather than an empty field. A
+  // scenario that cannot find acceptable ground in this many rolls has a check
+  // that is too strict for the catalog, and a missing battlefield would be a
+  // crash instead of a compromise.
+  return field;
+}
+
+function rollBattlefield(random, player, world, circleIntersectsObstacle, mix) {
   const { width, height } = world;
   const safeX = width / 2;
   const safeY = height / 2;

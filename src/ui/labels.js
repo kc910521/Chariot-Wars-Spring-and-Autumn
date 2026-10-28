@@ -6,8 +6,11 @@ import { VICTORY_LOCK_MS } from "../game/victory-lock.js";
 // them without a DOM.
 
 // Every battle of a run is numbered except the last one, which is the whole point
-// of the run and is named instead.
+// of the run and is named instead. A drill is not a stage of the run at all: it
+// says so on the same tile instead of borrowing the number the campaign has not
+// started using yet.
 export function stageLabel(campaign, state, t = translate) {
+  if (state && state.tutorial) return t("battle.tutorialStage");
   if (state && state.finalBattle) return t("battle.finalStage");
   return String(campaign.stage).padStart(2, "0");
 }

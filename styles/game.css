@@ -288,6 +288,32 @@ h1 span {
   background: #c55a42;
 }
 
+/* The drill's entry on the story card, beside 出征 and deliberately the quieter of
+   the two: same box, outlined instead of filled, so the pair reads as "the
+   tutorial, then the campaign". */
+.secondary-action {
+  display: flex;
+  width: min(235px, 100%);
+  min-height: 48px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 17px;
+  border: 1px solid rgba(218, 169, 118, 0.45);
+  background: rgba(38, 31, 24, 0.62);
+  color: #e8d4ae;
+  cursor: pointer;
+  font-family: "Noto Serif SC", "Songti SC", serif;
+  font-size: 14px;
+  letter-spacing: 0.02em;
+  transition: transform 0.18s ease, border-color 0.18s ease, background 0.18s ease;
+}
+
+.secondary-action:hover {
+  transform: translateY(-2px);
+  border-color: rgba(218, 169, 118, 0.8);
+  background: rgba(58, 47, 36, 0.72);
+}
+
 .menu-footnote {
   margin: 14px 0 0;
   color: #8c785e;
@@ -314,6 +340,7 @@ h1 span {
    card hides 出征, and the defeat/victory cards hide the pause control. */
 .lock-card[hidden],
 .primary-action[hidden],
+.secondary-action[hidden],
 .start-button[hidden] {
   display: none;
 }
@@ -424,7 +451,9 @@ h1 span {
 
 .prologue-actions {
   display: flex;
+  flex-wrap: wrap;
   justify-content: center;
+  gap: 14px;
   margin-top: 30px;
 }
 

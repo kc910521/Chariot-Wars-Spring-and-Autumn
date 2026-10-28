@@ -37,19 +37,28 @@ function shortestAngleDifference(from, to) {
 // `handleObstacleImpact` owns what a rammed element does to the campaign (hull
 // damage, or a felled tree); this controller only reports the impact and which
 // element was in the way.
+// A locked frame (the tutorial's card, which is a real pause) reads neutral
+// controls rather than skipping the controller: the chariot coasts to a stop
+// instead of the simulation freezing mid-stride with dust in the air and the bow
+// half drawn. Module-level constants so a frozen frame allocates nothing.
+const NO_KEYS = new Set();
+const NO_STICK = Object.freeze({ x: 0, y: 0 });
+
 export function createPlayerController({
   player, world, keys, touchInput, moveEntitySafely, handleObstacleImpact, obstacleAt, state,
 }) {
-  function readControls(delta) {
+  function readControls(delta, locked = false) {
+    const held = locked ? NO_KEYS : keys;
+    const stick = locked ? NO_STICK : touchInput;
     if (player.mode === "foot") {
       const horizontal = Math.max(-1, Math.min(1,
-        Number(keys.has("ArrowRight") || keys.has("d") || keys.has("D"))
-        - Number(keys.has("ArrowLeft") || keys.has("a") || keys.has("A"))
-        + touchInput.x));
+        Number(held.has("ArrowRight") || held.has("d") || held.has("D"))
+        - Number(held.has("ArrowLeft") || held.has("a") || held.has("A"))
+        + stick.x));
       const vertical = Math.max(-1, Math.min(1,
-        Number(keys.has("ArrowDown") || keys.has("s") || keys.has("S"))
-        - Number(keys.has("ArrowUp") || keys.has("w") || keys.has("W"))
-        + touchInput.y));
+        Number(held.has("ArrowDown") || held.has("s") || held.has("S"))
+        - Number(held.has("ArrowUp") || held.has("w") || held.has("W"))
+        + stick.y));
       const length = Math.hypot(horizontal, vertical);
       const speed = 108;
       if (length > 0) {
@@ -70,16 +79,16 @@ export function createPlayerController({
     }
 
     const inputX = clamp(
-      Number(keys.has("ArrowRight") || keys.has("d") || keys.has("D"))
-      - Number(keys.has("ArrowLeft") || keys.has("a") || keys.has("A"))
-      + touchInput.x,
+      Number(held.has("ArrowRight") || held.has("d") || held.has("D"))
+      - Number(held.has("ArrowLeft") || held.has("a") || held.has("A"))
+      + stick.x,
       -1,
       1,
     );
     const inputY = clamp(
-      Number(keys.has("ArrowDown") || keys.has("s") || keys.has("S"))
-      - Number(keys.has("ArrowUp") || keys.has("w") || keys.has("W"))
-      + touchInput.y,
+      Number(held.has("ArrowDown") || held.has("s") || held.has("S"))
+      - Number(held.has("ArrowUp") || held.has("w") || held.has("W"))
+      + stick.y,
       -1,
       1,
     );

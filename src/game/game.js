@@ -1,6 +1,7 @@
-import { bossTypes, enemyStats, formationPatterns } from "../data/formations.js";
+import { bossTypes, enemyStats, formationPatterns, formationPresets } from "../data/formations.js";
 import { calculateChariotCollisionDamage, hasMaxedAxleCap } from "../data/equipment.js";
 import { campaignRules, chariotArtRules } from "../data/rules.js";
+import { wildAnimalStats } from "../data/wilds.js";
 import { createAudio } from "../assets/audio.js";
 import { launchQuery } from "../platform/launch.js";
 import { createEquipmentShop } from "./equipment.js";
@@ -24,9 +25,11 @@ import { createShopScene } from "../ui/shop-scene.js";
 import { createStageManager } from "./stages.js";
 import { createVictoryLock } from "./victory-lock.js";
 import { createPlayerIdentity } from "./identity.js";
+import { createTutorial } from "./tutorial.js";
 import { getGameElements } from "../ui/elements.js";
 import { applyTranslations, getLocale, setLocale, translate } from "../i18n/index.js";
 import { createPrologue } from "../ui/prologue.js";
+import { createTutorialOverlay } from "../render/tutorial-overlay.js";
 import { distanceBetween } from "../utils/math.js";
 
 // The combat <-> enemy <-> projectile triangle is mutually recursive by nature.
@@ -58,7 +61,7 @@ function boot() {
     canvas, menuScreen, prologueScreen, battleScreen, shopScreen, menuStartButton, nextBattleButton,
     prologueNameElement, prologueBirthElement, prologueNameLineElement, prologueClanElement,
     prologueGivenElement, prologueAmbitionElement, prologueFinalElement,
-    prologueStartButton,
+    prologueStartButton, prologueTutorialButton,
     shopItemsElement, shopStatsElement, shopGoldElement, shopScoreElement, shopKillsElement,
     shopStageElement, shopLocationElement, shopMessageElement, scoreElement,
     shopRigCanvas, shopCampCanvas, shopRigCaptionElement, shopCampCaptionElement,
@@ -66,7 +69,7 @@ function boot() {
     waveElement, goldElement, modeElement, hullLabelElement, hullValueElement, hullHealthElement,
     overlay, overlayEyebrow, overlayTitle, overlayCopy, overlayButton, startButton,
     startLabel, objectiveCountElement, objectiveProgressElement, objectiveLabelElement,
-    extractionGuideElement, extractionArrowElement, extractionDistanceElement,
+    extractionGuideElement, extractionArrowElement, extractionDistanceElement, guideLabelElement,
     touchPadElement, touchHintElement, touchControlsElement,
     touchJoystickElement, touchJoystickKnob, touchFireElement,
     bossWarningElement, bossWarningTitleElement, bossWarningSubtitleElement,
@@ -112,7 +115,7 @@ function boot() {
       scoreElement, waveElement, goldElement, modeElement, hullLabelElement, hullValueElement,
       hullHealthElement, objectiveCountElement, objectiveProgressElement,
       objectiveLabelElement, extractionGuideElement, extractionArrowElement,
-      extractionDistanceElement, touchPadElement, touchHintElement, touchControlsElement,
+      extractionDistanceElement, guideLabelElement, touchPadElement, touchHintElement, touchControlsElement,
       touchJoystickElement, touchJoystickKnob, touchFireElement,
     },
   });
@@ -129,14 +132,23 @@ function boot() {
     getEquipment: () => campaign.equipment,
     getStumps: () => campaign.stumps ?? [],
   });
+  // The tutorial's card is canvas UI, not a DOM screen: the beat it introduces is
+  // a pause of the field beneath it, so it paints in the same layer as the field.
+  const tutorialOverlay = createTutorialOverlay({ context, view, state });
   // The frame's draw: the field first, then the one number a DOM card has to keep
   // live (the resting countdown on the menu). The screens are built below; the
   // ref keeps this function callable during construction without a TDZ read.
   const screensRef = { current: null };
   function draw() {
     renderer.draw();
+    tutorialOverlay.draw();
     screensRef.current?.paint();
   }
+  // The tutorial arms itself on every entry into "running" (a battle opening, a
+  // pause being dismissed, a tab regaining focus after a blur). The ref exists
+  // because it is built further down, once the enemy system it spawns through does
+  // - and setMode() is already callable at this point.
+  const tutorialRef = { current: null };
   const screens = createScreens({
     state,
     campaign,
@@ -144,7 +156,10 @@ function boot() {
     victoryLock,
     // The shop's preview runs on its own clock and must start and stop with the
     // screen, not with the battle loop.
-    onModeChange: (mode) => shopScene.setActive(mode === "shop"),
+    onModeChange: (mode) => {
+      shopScene.setActive(mode === "shop");
+      tutorialRef.current?.arm();
+    },
     elements: {
       menuScreen, prologueScreen, battleScreen, shopScreen, victoryScreen, overlay, startLabel,
       startButton, menuStartButton, menuLockElement, menuLockTitleElement, menuLockDetailElement,
@@ -212,7 +227,7 @@ function boot() {
   const damageAlly = defer(() => alliesRef.current, "damageAlly");
 
   const enemySystem = createEnemies({
-    bossTypes, enemyStats, formationPatterns, state, player, world, campaign,
+    bossTypes, enemyStats, wildAnimalStats, formationPatterns, formationPresets, state, player, world, campaign,
     // Resolved on every roll: createBattle re-seeds campaign.random, so the AI
     // must never capture the generator at wiring time.
     random: () => campaign.random(),
@@ -226,6 +241,12 @@ function boot() {
   const {
     spawnFormation, spawnBoss, spawnBossSquad, burst, dust, addMeleeEffect, damageEnemy, updateUnits,
   } = enemySystem;
+
+  // The tutorial: a step machine that spawns through the enemy system's scenario
+  // entry points (a tiger, then a preset line) and hands the HUD its objective.
+  // It runs only in a tutorial battle; `arm()` is idempotent per battle.
+  const tutorial = createTutorial({ state, player, world, campaign, enemySystem, updateHud });
+  tutorialRef.current = tutorial;
 
   // The hired line fights with the same verbs the enemies do: `damageEnemy` for
   // its blows, the projectile system's `fireAllyArrow` for its bows, and the
@@ -252,7 +273,14 @@ function boot() {
     state, player, campaign, collision, projectiles,
     damageEnemy, addMeleeEffect, burst, playTone, updateHud,
     announceBanner,
-    onDefeat: () => setMode("over"),
+    onDefeat: () => {
+      // A battle lost keeps none of its takings: the purse rolls back to what the
+      // fight was entered with, so the number on the defeat card ("you keep N") is
+      // the number the retry really leaves the player holding. Coins banked by
+      // earlier battles are untouched - the snapshot is taken per battle.
+      campaign.totalGold = campaign.entryGold;
+      setMode("over");
+    },
   });
   combatRef.current = combat;
 
@@ -314,7 +342,7 @@ function boot() {
     lockVictory: (summary) => victoryLock.lock(summary),
   });
   const {
-    beginMission, resetCampaign, resetMission, beginExtraction, enterShop, enterVictory,
+    beginMission, beginTutorial, resetCampaign, resetMission, beginExtraction, enterShop, enterVictory,
     rollForNextBattle, restartStage, rollFinalStage,
   } = stageManager;
 
@@ -338,6 +366,23 @@ function boot() {
     setMode("prologue");
   }
 
+  // The prologue's second door: the tiger drill. Same freshly rolled run, one
+  // scenario instead of a campaign battle (see stages.beginTutorial), and nothing
+  // about the run is spent by playing it.
+  function startTutorial() {
+    if (!victoryLock.releaseIfExpired()) {
+      setMode("menu");
+      return;
+    }
+    resetCampaign();
+    campaign.identity = createPlayerIdentity(campaign.random);
+    rollFinalStage();
+    // The story card keeps the same identity: the drill belongs to this run, so a
+    // language switch must not repaint the previous run's nameplate behind it.
+    prologue.show(campaign.identity);
+    beginTutorial();
+  }
+
   // The victory card's only button: the run is over, so the campaign goes back to
   // nothing and the menu (now locked) shows what the next wait is for.
   function endRun() {
@@ -349,8 +394,22 @@ function boot() {
   function update(delta) {
     state.elapsed += delta;
     player.swarmDamageCooldown = Math.max(0, player.swarmDamageCooldown - delta);
-    readControls(delta);
+    // A tutorial card (or a pan) is a real pause: every control reads neutral, so
+    // the chariot coasts to a stop instead of the field freezing mid-stride.
+    const frozen = state.tutorial?.frozen === true;
+    readControls(delta, frozen);
     if (state.mode !== "running") return;
+    tutorial.update(delta);
+    if (state.tutorial?.frozen) {
+      // Nothing moves, nothing is fired and nothing lands while a card is up. The
+      // bow's draw state is dropped rather than carried across the pause, and the
+      // camera still eases (a pan is a frozen field, not a frozen camera).
+      state.fireHold = 0;
+      state.fireHeld = false;
+      updateHud();
+      updateCamera({ player, world, view, camera, focus: state.cameraFocus }, delta);
+      return;
+    }
     combat.updatePlayerFire(delta, keys.has(" ") || keys.has("Spacebar"));
     player.cooldown = Math.max(0, player.cooldown - delta);
     player.invulnerable = Math.max(0, player.invulnerable - delta);
@@ -388,13 +447,23 @@ function boot() {
       drop.life -= delta;
       drop.phase += delta * 2.2;
       if (distanceBetween(player.x, player.y, drop.x, drop.y) < player.radius + 17) {
-        campaign.totalGold += drop.value;
+        // Meat is a wild animal's drop and pays in hull, not coin: the drill is
+        // meant to teach the controls, so it heals what the tiger bit off rather
+        // than starting a ledger the shop cannot spend.
+        if (drop.type === "meat") {
+          player.health = Math.min(player.maxHealth, player.health + (drop.heal ?? 0));
+        } else {
+          campaign.totalGold += drop.value;
+        }
         drop.collected = true;
         playTone(drop.type === "gold" ? 680 : 520, 0.1, "sine", 0.018);
       }
     }
     state.drops = state.drops.filter((drop) => !drop.collected && drop.life > 0);
     state.enemies = state.enemies.filter((enemy) => !enemy.destroyed);
+    // Animals come out of their roster on the same frame: the tutorial's script
+    // reads the tiger's `destroyed` flag, never its presence in the list.
+    state.wilds = state.wilds.filter((unit) => !unit.destroyed);
     state.formations = state.formations.filter((formation) => state.enemies.some((enemy) => enemy.formationId === formation.id));
     // After the units have moved and before the particles are integrated, so a
     // puff raised this frame is already on its way.
@@ -412,7 +481,7 @@ function boot() {
       playTone(520, 0.14, "sine", 0.025);
     }
     updateHud();
-    updateCamera({ player, world, view, camera }, delta);
+    updateCamera({ player, world, view, camera, focus: state.cameraFocus }, delta);
     if (state.bossWarningTimer > 0) {
       state.bossWarningTimer = Math.max(0, state.bossWarningTimer - delta);
       if (state.bossWarningTimer === 0) bossWarningElement.hidden = true;
@@ -433,6 +502,7 @@ function boot() {
     state,
     keys,
     startRun,
+    startTutorial,
     beginMission,
     rollForNextBattle,
     restartStage,
@@ -441,10 +511,22 @@ function boot() {
     battleScreen,
     touchInput,
     endRun,
+    // The card is canvas UI, so "click the button" and "press Enter" are the same
+    // call as far as the controls are concerned.
+    confirmTutorial: () => tutorial.confirm(),
     elements: {
-      startButton, menuStartButton, prologueStartButton, nextBattleButton, overlayButton,
-      victoryReturnButton, soundButton, soundIcon, touchJoystickElement, touchJoystickKnob,
+      startButton, menuStartButton, prologueStartButton, prologueTutorialButton, nextBattleButton,
+      overlayButton, victoryReturnButton, soundButton, soundIcon,
+      touchJoystickElement, touchJoystickKnob,
     },
+  });
+
+  // The tutorial card's button lives on the canvas, so its hit test happens here
+  // rather than in the DOM.
+  canvas.addEventListener("pointerdown", (event) => {
+    if (state.mode !== "running" || !state.tutorial?.overlay) return;
+    const point = tutorialOverlay.toView(event, canvas);
+    if (tutorialOverlay.hitConfirm(point.x, point.y)) tutorial.confirm();
   });
 
   elements.localeSelect.addEventListener("change", () => {
@@ -475,7 +557,7 @@ function boot() {
   // record instead of waiting out the rest.
   globalThis.__h5game = {
     state, player, campaign, world, view, camera, combat, stageManager, equipmentShop, shopScene,
-    damageEnemy, victoryLock,
+    damageEnemy, victoryLock, tutorial, tutorialOverlay,
   };
 
   startGameLoop({

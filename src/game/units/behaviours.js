@@ -207,10 +207,27 @@ export function createBehaviours({
     damageCombatTarget(target, enemy.damage, enemy.x, enemy.y);
   }
 
+  // A wild animal: the tiger of the tutorial (src/data/wilds.js). It has no line
+  // to defend and no morale to break, so - unlike every other brain - there is no
+  // `think` pass and no second opinion about the target: whoever
+  // `getCombatTarget` hands it is charged, and it keeps charging until the body
+  // is dead. `honestReach` keeps the claws on the hull instead of inside it
+  // (a 20px body with a 46px reach would otherwise have to overlap the player).
+  function wildOnSight(enemy, target, distance, angle, delta) {
+    const reach = honestReach(enemy, target);
+    if (distance > reach) {
+      advance(enemy, angle, delta);
+      return;
+    }
+    if (enemy.attackCooldown !== 0) return;
+    strike(enemy, target, angle);
+  }
+
   return {
     infantry: { onSight: infantryOnSight },
     ranged: { onSight: rangedOnSight },
     cavalry: { think: cavalryThink, onSight: cavalryOnSight },
     boss: { onSight: bossOnSight },
+    wild: { onSight: wildOnSight },
   };
 }

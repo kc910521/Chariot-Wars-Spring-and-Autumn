@@ -28,7 +28,7 @@ export function createHud({
     const {
       scoreElement, waveElement, goldElement, modeElement, hullLabelElement, hullValueElement,
       hullHealthElement, objectiveCountElement, objectiveProgressElement, objectiveLabelElement,
-      extractionGuideElement, extractionArrowElement, extractionDistanceElement,
+      extractionGuideElement, extractionArrowElement, extractionDistanceElement, guideLabelElement,
       touchPadElement, touchHintElement, touchControlsElement,
     } = elements;
     const onFoot = player.mode === "foot";
@@ -56,6 +56,10 @@ export function createHud({
     objectiveCountElement.textContent = `${Math.min(state.kills, state.objectiveTarget)} / ${state.objectiveTarget}`;
     objectiveProgressElement.style.width = `${Math.min(100, state.kills / state.objectiveTarget * 100)}%`;
     const extracting = state.phase === "extract" && state.extractionPoint;
+    // The tutorial names its own two objectives and counts its own bodies, and its
+    // guide arrow points at whatever the script is asking for (the tiger, then the
+    // drill line) instead of at an extraction point that does not exist yet.
+    const tutorial = state.tutorial;
     const bossAlive = state.bossStage && !state.bossDefeated && state.bosses.length > 0;
     // The objective is the player's own, so it carries their name once the
     // prologue has rolled one. `battle.objective` stays behind as the plain
@@ -88,21 +92,35 @@ export function createHud({
       }
     }
 
-    if (extracting) {
-      const dx = state.extractionPoint.x - player.x;
-      const dy = state.extractionPoint.y - player.y;
+    if (tutorial?.hud) {
+      objectiveLabel = translate(tutorial.hud.labelKey);
+      objectiveCount = `${tutorial.hud.count} / ${tutorial.hud.total}`;
+      objectiveProgress = tutorial.hud.total > 0
+        ? Math.min(100, tutorial.hud.count / tutorial.hud.total * 100)
+        : 0;
+    }
+
+    const guideTarget = extracting ? state.extractionPoint : tutorial?.objective ?? null;
+    if (guideTarget) {
+      const dx = guideTarget.x - player.x;
+      const dy = guideTarget.y - player.y;
       const distance = Math.hypot(dx, dy);
-      objectiveCount = translate("battle.steps", { distance: Math.ceil(distance) });
-      objectiveProgress = Math.max(0, Math.min(100, 100 - distance / 10));
+      // Only the retreat borrows the count tile for a distance: the tutorial has
+      // its own count and the arrow alone is enough to steer by.
+      if (extracting) {
+        objectiveCount = translate("battle.steps", { distance: Math.ceil(distance) });
+        objectiveProgress = Math.max(0, Math.min(100, 100 - distance / 10));
+      }
       extractionDistanceElement.textContent = translate("battle.distance", { distance: Math.ceil(distance) });
       extractionArrowElement.style.setProperty("--guide-angle", `${Math.atan2(dy, dx) + Math.PI / 2}rad`);
     }
 
+    guideLabelElement.textContent = translate(extracting ? "battle.extractGuide" : "tutorial.guide");
     objectiveLabelElement.textContent = objectiveLabel;
     objectiveCountElement.textContent = objectiveCount;
     objectiveProgressElement.style.width = `${objectiveProgress}%`;
     objectiveProgressElement.classList.toggle("boss-health", squadHealth);
-    extractionGuideElement.hidden = !extracting;
+    extractionGuideElement.hidden = !guideTarget;
     updateCharge();
   }
 

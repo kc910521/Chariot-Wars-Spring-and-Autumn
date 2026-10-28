@@ -15,6 +15,9 @@ const SELECTORS = {
   // appears once the campaign has rolled a length (campaign.finalStage).
   prologueFinalElement: "#prologue-final",
   prologueStartButton: "#prologue-start",
+  // The prologue's second door, left of 出征: the tiger drill
+  // (src/game/tutorial.js) - a tutorial battle, not a stage of the run.
+  prologueTutorialButton: "#prologue-tutorial",
   battleScreen: "#battle-screen",
   shopScreen: "#shop-screen",
   menuStartButton: "#menu-start",
@@ -68,6 +71,9 @@ const SELECTORS = {
   extractionGuideElement: "#extraction-guide",
   extractionArrowElement: "#extraction-arrow",
   extractionDistanceElement: "#extraction-distance",
+  // The guide's caption. It says what the arrow is pointing at, which is the
+  // extraction point on a campaign stage and the tutorial's target in the drill.
+  guideLabelElement: "#extraction-guide-label",
   touchPadElement: "#touch-pad",
   touchHintElement: "#touch-hint",
   touchControlsElement: ".touch-controls",

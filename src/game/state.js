@@ -55,6 +55,14 @@ export function createGameState({ seedSource = () => null } = {}) {
     // (see stages.rollFinalStage). 0 means "not rolled yet", which never matches
     // a stage number.
     finalStage: 0,
+    // What the purse was when the current battle began. A retry rewinds the
+    // battle's takings to this - the coin picked up on a field the player then
+    // died on is lost, the coin banked by earlier battles is not.
+    entryGold: 0,
+    // True between a cleared tutorial and the battle its shop leads into: the
+    // drill *is* stage 1 of the run, so the shop must send the player into stage 1
+    // of the campaign rather than into stage 2.
+    tutorialHandoff: false,
   };
   const state = {
     mode: "menu",
@@ -99,6 +107,26 @@ export function createGameState({ seedSource = () => null } = {}) {
     damageFlash: 0,
     drops: [],
     footCompanions: [],
+    // Wild animals of the current battle (src/data/wilds.js). They live in
+    // `state.enemies` as well - that is what moves, damages and draws them - and
+    // `wilds` is the roster the species rule and the battle loop prune. Empty in
+    // every campaign battle.
+    wilds: [],
+    // Which scenario the current battle belongs to: "campaign" or "tutorial".
+    // stages.createBattle reads it for the map check, the objective and the enemy
+    // cap, and the next battle after a tutorial handoff clears it.
+    battleMode: "campaign",
+    // Bumped by every createBattle(). A scenario that arms itself when the field
+    // opens (src/game/tutorial.js) asks this instead of a boolean, so a pause, a
+    // language switch or a blur - all of which re-enter "running" - cannot re-run
+    // the opening beat of the same battle.
+    battleId: 0,
+    // The tutorial's step machine, or null. Owned by src/game/tutorial.js; the
+    // HUD and the canvas overlay only read it.
+    tutorial: null,
+    // Where the camera should look instead of the player, or null to follow the
+    // chariot. Only the tutorial writes it (its two pans).
+    cameraFocus: null,
     // Bow draw, written by combat.updatePlayerFire() and read by the HUD: the
     // seconds the fire control has been held, and whether it was held last frame
     // (so only a real press -> release is a shot).

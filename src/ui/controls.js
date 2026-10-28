@@ -1,12 +1,12 @@
 import { translate } from "../i18n/index.js";
 
 export function bindControls({
-  state, keys, startRun, beginMission, rollForNextBattle, restartStage, setMode, resizeCanvas,
-  battleScreen, touchInput, endRun, elements,
+  state, keys, startRun, startTutorial, beginMission, rollForNextBattle, restartStage, setMode,
+  resizeCanvas, battleScreen, touchInput, endRun, confirmTutorial = () => {}, elements,
 }) {
   const {
-    startButton, menuStartButton, prologueStartButton, nextBattleButton, overlayButton,
-    victoryReturnButton, soundButton, soundIcon,
+    startButton, menuStartButton, prologueStartButton, prologueTutorialButton, nextBattleButton,
+    overlayButton, victoryReturnButton, soundButton, soundIcon,
     touchJoystickElement, touchJoystickKnob,
   } = elements;
 
@@ -25,6 +25,14 @@ export function bindControls({
       && (event.target.isContentEditable || ["INPUT", "SELECT", "TEXTAREA"].includes(event.target.tagName))) return;
     const key = event.key;
     if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", " "].includes(key)) event.preventDefault();
+    // A tutorial card is the only thing on the field that answers to the keyboard
+    // while it is up: the battle underneath it is frozen, so Enter and Space mean
+    // "understood", not "go". Neither key is registered either - a Space that
+    // confirmed a card must not also start a bow draw the player cannot see.
+    if (state.tutorial?.overlay && (key === "Enter" || key === " " || key === "Spacebar")) {
+      confirmTutorial();
+      return;
+    }
     keys.add(key);
     if (key === "p" || key === "P" || key === "Escape") {
       togglePause();
@@ -54,6 +62,8 @@ export function bindControls({
   });
   menuStartButton.addEventListener("click", () => startRun());
   prologueStartButton.addEventListener("click", () => beginMission());
+  // The drill opens from the same story card, with the same freshly rolled run.
+  prologueTutorialButton.addEventListener("click", () => startTutorial());
   nextBattleButton.addEventListener("click", rollForNextBattle);
   // The victory card's only button: the run is over, so the campaign goes back to
   // nothing and the menu (now locked) shows what the next wait is for.

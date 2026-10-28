@@ -23,10 +23,17 @@ import {
   elementSpeedAt, fellTree, isFellable, obstacleShape, rectHitsAnyObstacle, rectTerrain,
 } from "../src/game/elements.js";
 import { createBattlefield } from "../src/game/map.js";
+import { isPathClear } from "../src/game/reachability.js";
+import { createTutorial } from "../src/game/tutorial.js";
+import {
+  LINE_DISTANCES, TUTORIAL_LAYOUT, createTutorialMapCheck, findLineGround, lineGroundExtent, planTigerGround,
+} from "../src/game/tutorial-map.js";
+import { createTutorialOverlay } from "../src/render/tutorial-overlay.js";
+import { wildAnimalStats } from "../src/data/wilds.js";
 import { createElementRenderer } from "../src/render/elements.js";
 import { chariotRigBox, createSpriteArt, spritePalette } from "../src/render/sprites.js";
 import { CHARIOT_CONTROL_CONFIG, createPlayerController } from "../src/game/player.js";
-import { bossTypes, chariotTactics, enemyStats, formationAura, formationConfig, formationPatterns } from "../src/data/formations.js";
+import { bossTypes, chariotTactics, enemyStats, formationAura, formationConfig, formationPatterns, formationPresets } from "../src/data/formations.js";
 import {
   createBallisticProjectile, createProjectileSystem, solveBallisticElevation,
   solveTimeToGround, updateProjectiles,
@@ -1715,6 +1722,9 @@ function formationRig({ sight = { on: true }, seed = 11, obstacles = [], terrain
     // The champion roster: `spawnBoss`/`spawnBossSquad` fill it, and the squad
     // stage reads it back to decide when the battle is won.
     bosses: [], bossStage: false, bossDefeated: false, finalBattle: false,
+    // Wild animals live in both lists: `enemies` moves them, `wilds` is the
+    // species roster and the tutorial's script handle.
+    wilds: [],
   };
   const player = {
     x: world.width / 2, y: world.height / 2, radius: 17, mode: "chariot", angle: 0, speed: 0,
@@ -1729,7 +1739,9 @@ function formationRig({ sight = { on: true }, seed = 11, obstacles = [], terrain
   const enemies = createEnemies({
     bossTypes,
     enemyStats,
+    wildAnimalStats,
     formationPatterns,
+    formationPresets,
     state,
     player,
     world,
@@ -3938,6 +3950,530 @@ test("the camp pitches one tent per hire, and a hover stays a preview", () => {
     assert.equal(scene.lastFrame().camp.formations, 2, "a capped hover imagined a third tent");
     scene.setActive(false);
   });
+});
+
+console.log("[unit] the map check");
+
+// Every battlefield is rolled whole and then accepted or rejected by the
+// scenario's own check (see createBattlefield). The campaign passes none, which
+// is what keeps a `?seed=` run byte-identical; a scenario that promises something
+// about the ground passes one, and this is the plumbing that re-rolls for it.
+test("a battlefield with no check is exactly the roll it always was", () => {
+  const plain = createBattlefield(createSeededRandom(21), { x: 0, y: 0, radius: 17 }, battlefieldWorld, () => false);
+  const explicitNull = createBattlefield(
+    createSeededRandom(21), { x: 0, y: 0, radius: 17 }, battlefieldWorld, () => false, null, null,
+  );
+  assert.deepEqual(explicitNull, plain, "an explicit null check changed the campaign's map");
+});
+
+test("a field that fails its check is rolled again instead of trimmed", () => {
+  let rolls = 0;
+  const field = createBattlefield(
+    createSeededRandom(21), { x: 0, y: 0, radius: 17 }, battlefieldWorld, () => false, null,
+    () => { rolls += 1; return rolls === 3; },
+  );
+  assert.equal(rolls, 3, "the check was not given a second and third roll");
+  assert.equal(field.obstacles.length, elementRules.obstacleTarget,
+    "a rejected roll left the field short of elements");
+});
+
+test("a check that never passes still hands back a whole field", () => {
+  let rolls = 0;
+  const field = createBattlefield(
+    createSeededRandom(4), { x: 0, y: 0, radius: 17 }, battlefieldWorld, () => false, null,
+    () => { rolls += 1; return false; },
+  );
+  assert.ok(rolls > 1, "the check was consulted once and ignored");
+  assert.equal(field.obstacles.length, elementRules.obstacleTarget, "the give-up field is bare");
+  assert.equal(field.clouds.length, cloudKinds.sky.count, "the give-up field lost its sky");
+});
+
+console.log("[unit] reachability");
+
+const reachWorld = { width: 1200, height: 900 };
+const reachFrom = { x: 150, y: 450 };
+const reachTo = { x: 1050, y: 450 };
+const wallAt = (x, y, width, height) => ({ type: "wall", x, y, width, height });
+
+test("an empty field is a clear path and needs no grid", () => {
+  assert.equal(isPathClear({ from: reachFrom, to: reachTo, world: reachWorld, obstacles: [], radius: 17 }), true);
+});
+
+test("a palisade across the field separates the two points", () => {
+  const closed = [wallAt(560, 0, 80, reachWorld.height)];
+  assert.equal(isPathClear({ from: reachFrom, to: reachTo, world: reachWorld, obstacles: closed, radius: 17 }), false,
+    "a wall across the whole field still read as walkable");
+});
+
+test("a gap in the same wall opens the path again", () => {
+  const gapped = [wallAt(560, 0, 80, 300), wallAt(560, 600, 80, 300)];
+  assert.equal(isPathClear({ from: reachFrom, to: reachTo, world: reachWorld, obstacles: gapped, radius: 17 }), true,
+    "the flood fill did not find the gap");
+});
+
+test("one tree in an open field is walked around, not through", () => {
+  const obstacles = [{ type: "tree", x: 600, y: 450, radius: 30 }];
+  assert.equal(isPathClear({ from: reachFrom, to: reachTo, world: reachWorld, obstacles, radius: 17 }), true);
+});
+
+console.log("[unit] the tiger drill's ground");
+
+const drillWorld = battlefieldWorld;
+const drillSpawn = { x: drillWorld.width / 2, y: drillWorld.height / 2 };
+const drillIntersects = (x, y, radius, obstacles = []) => obstacles.some(
+  (obstacle) => elementIntersects(x, y, radius, obstacle),
+);
+
+test("the tiger stands where the layout says, from the spawn point", () => {
+  const tiger = planTigerGround(drillWorld, drillSpawn);
+  const span = Math.hypot(tiger.x - drillSpawn.x, tiger.y - drillSpawn.y);
+  assert.ok(Math.abs(span - TUTORIAL_LAYOUT.tiger.distance) < 1,
+    `the tiger moved to ${span.toFixed(1)}px from the spawn`);
+  // Pure: the map check and the spawn both ask this, and they must agree.
+  assert.deepEqual(planTigerGround(drillWorld, drillSpawn), tiger);
+});
+
+test("the line stands at the preferred bearing on open ground, off screen", () => {
+  const spot = findLineGround(drillSpawn, { world: drillWorld, obstacles: [] });
+  const span = Math.hypot(spot.x - drillSpawn.x, spot.y - drillSpawn.y);
+  assert.ok(Math.abs(span - TUTORIAL_LAYOUT.line.distance) < 1, `the line stood ${span.toFixed(1)}px off`);
+  assert.equal(spot.clear, true, "open ground was not read as clear");
+  // The preferred ground is the first rung of the ladder, and it has to start
+  // outside the 960x592 view or the pan that reveals it is not a reveal.
+  assert.equal(TUTORIAL_LAYOUT.line.distance, LINE_DISTANCES[0]);
+  assert.ok(Math.abs(spot.x - drillSpawn.x) > 960 / 2, "the line starts on screen");
+  assert.ok(Math.abs(spot.y - drillSpawn.y) > 592 / 2, "the line starts on screen");
+  // The line faces the chariot it was summoned against.
+  assert.equal(spot.heading, Math.atan2(drillSpawn.y - spot.y, drillSpawn.x - spot.x));
+  // A pure function of the standing place and the field: no random numbers in it.
+  assert.deepEqual(findLineGround(drillSpawn, { world: drillWorld, obstacles: [] }), spot);
+});
+
+test("the line is placed against wherever the chariot is standing now", () => {
+  // The animal runs, so the player is rarely where they started: each standing
+  // place gets its own line, at the authored distance from *it*.
+  const origins = [
+    drillSpawn,
+    { x: drillSpawn.x + 420, y: drillSpawn.y - 300 },
+    { x: drillSpawn.x - 520, y: drillSpawn.y + 260 },
+  ];
+  const spots = origins.map((origin) => findLineGround(origin, { world: drillWorld, obstacles: [] }));
+  for (const [index, spot] of spots.entries()) {
+    const origin = origins[index];
+    const span = Math.hypot(spot.x - origin.x, spot.y - origin.y);
+    assert.ok(Math.abs(span - TUTORIAL_LAYOUT.line.distance) < 1,
+      `from (${origin.x}, ${origin.y}) the line stood ${span.toFixed(1)}px off`);
+    assert.equal(spot.heading, Math.atan2(origin.y - spot.y, origin.x - spot.x),
+      "the line did not face the chariot that summoned it");
+  }
+  assert.notDeepEqual(spots[1], spots[2], "two standing places 800px apart got the same line");
+  const drift = Math.hypot(spots[1].x - spots[0].x, spots[1].y - spots[0].y);
+  assert.ok(drift > 200, `the line only moved ${drift.toFixed(1)}px after the player drove 500`);
+});
+
+test("a blocked preferred spot is stepped over, never closer than the ladder's floor", () => {
+  const preferred = findLineGround(drillSpawn, { world: drillWorld, obstacles: [] });
+  const { halfWidth, halfHeight } = lineGroundExtent();
+  // A palisade right on the preferred ground, and nothing else.
+  const obstacles = [wallAt(preferred.x - 130, preferred.y - 130, 260, 260)];
+  const stepped = findLineGround(drillSpawn, { world: drillWorld, obstacles });
+  assert.equal(stepped.clear, true, "the search gave up on a field with one wall in it");
+  assert.equal(
+    rectHitsAnyObstacle(stepped.x, stepped.y, halfWidth, halfHeight, stepped.heading, obstacles),
+    false,
+    "the line was stood in the palisade it was supposed to step around",
+  );
+  assert.notDeepEqual(stepped, preferred, "the line did not move off the blocked ground");
+  const span = Math.hypot(stepped.x - drillSpawn.x, stepped.y - drillSpawn.y);
+  assert.ok(span >= LINE_DISTANCES[LINE_DISTANCES.length - 1] - 1,
+    `the line fell back to ${span.toFixed(1)}px, nearer than the ladder allows`);
+});
+
+test("in a corner the line is only ever stood on ground that fits the world", () => {
+  const { halfWidth, halfHeight } = lineGroundExtent();
+  const spot = findLineGround({ x: 60, y: 60 }, { world: drillWorld, obstacles: [] });
+  const reach = Math.hypot(halfWidth, halfHeight);
+  assert.ok(spot.x - reach >= 0 && spot.x + reach <= drillWorld.width,
+    `the line's footprint runs off the field at x=${spot.x.toFixed(1)}`);
+  assert.ok(spot.y - reach >= 0 && spot.y + reach <= drillWorld.height,
+    `the line's footprint runs off the field at y=${spot.y.toFixed(1)}`);
+  assert.equal(spot.clear, true, "a corner with room was refused");
+});
+
+test("a field with nowhere clear to stand still gets a line", () => {
+  // The drill must never soft-lock: with a wall over every rung of the ladder the
+  // search reports clear=false, and the caller stands the line there anyway.
+  const obstacles = [wallAt(0, 0, drillWorld.width, drillWorld.height)];
+  const spot = findLineGround(drillSpawn, { world: drillWorld, obstacles });
+  assert.equal(spot.clear, false, "a walled-in field was reported as clear");
+  assert.ok(Number.isFinite(spot.x) && Number.isFinite(spot.y), "the search returned no ground at all");
+});
+
+test("the check wants a clear, reachable tiger and room for the line from anywhere", () => {
+  const check = createTutorialMapCheck({
+    world: drillWorld, spawn: drillSpawn, circleIntersectsObstacle: drillIntersects,
+  });
+  const tiger = planTigerGround(drillWorld, drillSpawn);
+  assert.equal(check({ obstacles: [] }), true, "an empty field was refused");
+  assert.equal(check({ obstacles: [wallAt(tiger.x - 40, tiger.y - 40, 80, 80)] }), false,
+    "the tiger's own ground was not checked");
+  // A palisade on the preferred line ground is not a refusal any more: the line is
+  // placed when the tiger dies, and the search steps around a wall.
+  const preferred = findLineGround(drillSpawn, { world: drillWorld, obstacles: [] });
+  assert.equal(check({ obstacles: [wallAt(preferred.x - 60, preferred.y - 60, 120, 120)] }), true,
+    "one wall on the preferred ground was treated as unreplayable");
+  // A wall sealing the spawn off from the tiger.
+  const sealX = (drillSpawn.x + tiger.x) / 2;
+  assert.equal(check({ obstacles: [wallAt(sealX - 60, 0, 120, drillWorld.height)] }), false,
+    "a sealed-off tiger was accepted");
+});
+
+test("a field too small to hold the line anywhere is refused", () => {
+  // Every rung of the ladder is 420px or more out and the line's footprint needs a
+  // 150px circumradius: a 700x700 field has nowhere to put it, from anywhere.
+  const cramped = { width: 700, height: 700 };
+  const check = createTutorialMapCheck({
+    world: cramped, spawn: { x: 350, y: 350 }, circleIntersectsObstacle: drillIntersects,
+  });
+  assert.equal(check({ obstacles: [] }), false, "a field with no room for the line was accepted");
+});
+
+test("a real battlefield can always satisfy the drill's check", () => {
+  const check = createTutorialMapCheck({
+    world: drillWorld, spawn: drillSpawn, circleIntersectsObstacle: drillIntersects,
+  });
+  for (let seed = 1; seed <= 12; seed += 1) {
+    const field = createBattlefield(
+      createSeededRandom(seed), { x: 0, y: 0, radius: 17 }, drillWorld, drillIntersects,
+      battlefields[0].mix, check,
+    );
+    assert.equal(check(field), true, `seed ${seed} came back unsatisfied`);
+  }
+});
+
+console.log("[unit] the tiger drill");
+
+function drillRig({ seed = 5 } = {}) {
+  const rig = formationRig({ seed });
+  rig.state.battleMode = "tutorial";
+  rig.state.battleId = 7;
+  rig.state.tutorial = null;
+  rig.state.cameraFocus = null;
+  rig.campaign.tutorialHandoff = false;
+  let hudCalls = 0;
+  const tutorial = createTutorial({
+    state: rig.state,
+    player: rig.player,
+    world: rig.world,
+    campaign: rig.campaign,
+    enemySystem: rig.enemies,
+    updateHud: () => { hudCalls += 1; },
+  });
+  return { ...rig, tutorial, hudCalls: () => hudCalls };
+}
+
+test("the drill opens frozen, with one wild animal on the field", () => {
+  const rig = drillRig();
+  rig.tutorial.arm();
+  const tutorial = rig.state.tutorial;
+  assert.equal(tutorial.step, "brief");
+  assert.equal(tutorial.frozen, true, "the brief is not a pause");
+  assert.ok(tutorial.overlay, "the brief has no card");
+  assert.equal(rig.state.formations.length, 0, "the drill rolled a campaign wave");
+  assert.equal(rig.state.wilds.length, 1);
+  assert.equal(rig.state.enemies.length, 1, "the tiger never reached the battlefield");
+  const tiger = rig.state.wilds[0];
+  assert.equal(tiger.species, wildAnimalStats.tiger.species);
+  assert.equal(tiger.loot, "meat");
+  assert.equal(tiger.health, tiger.maxHealth);
+  assert.equal(tiger.formationId, undefined, "the animal joined a formation");
+  // The HUD is told what to count before the player can move.
+  assert.equal(tutorial.hud.total, 1);
+  assert.equal(tutorial.hud.labelKey, "tutorial.huntLabel");
+});
+
+test("re-entering the battle does not spawn a second tiger", () => {
+  const rig = drillRig();
+  rig.tutorial.arm();
+  const tiger = rig.state.tutorial.tiger;
+  // A pause dismissed, a locale switch, a tab regaining focus: all of them
+  // re-enter "running" and all of them call arm() again.
+  rig.tutorial.arm();
+  assert.equal(rig.state.wilds.length, 1, "a second tiger was spawned");
+  assert.equal(rig.state.tutorial.tiger, tiger);
+  // Even once the script has finished, the same battle stays finished.
+  rig.state.tutorial = null;
+  rig.tutorial.arm();
+  assert.equal(rig.state.wilds.length, 1, "the drill restarted itself inside one battle");
+  assert.equal(rig.state.tutorial, null, "the cleared drill was re-armed");
+});
+
+test("confirming the brief hands the field over with the arrow on the tiger", () => {
+  const rig = drillRig();
+  rig.tutorial.arm();
+  const tiger = rig.state.wilds[0];
+  rig.tutorial.confirm();
+  const tutorial = rig.state.tutorial;
+  assert.equal(tutorial.step, "hunt");
+  assert.equal(tutorial.frozen, false, "the card is still holding the field");
+  assert.equal(tutorial.overlay, null);
+  assert.deepEqual(tutorial.objective, { x: tiger.x, y: tiger.y });
+  // And it keeps following the animal, not the ground it spawned on.
+  tiger.x += 40;
+  rig.tutorial.update(1 / 60);
+  assert.equal(tutorial.objective.x, tiger.x, "the arrow stayed on the old spot");
+});
+
+test("a wild animal charges whatever is nearest and bites the hull", () => {
+  const rig = drillRig();
+  rig.tutorial.arm();
+  rig.tutorial.confirm();
+  const tiger = rig.state.wilds[0];
+  // Park the animal inside its own reach: the brain spends its cool-down bite.
+  tiger.x = rig.player.x + 30;
+  tiger.y = rig.player.y;
+  tiger.homeX = tiger.x;
+  tiger.homeY = tiger.y;
+  tiger.attackCooldown = 0;
+  for (let frame = 0; frame < 200; frame += 1) rig.enemies.updateUnits(1 / 60);
+  assert.ok(rig.hits.length > 0, "the tiger never bit the hull");
+  assert.equal(rig.hits.every((amount) => amount === wildAnimalStats.tiger.damage), true,
+    `the animal dealt ${rig.hits.join("/")} instead of its row's damage`);
+});
+
+test("two animals of the same species ignore each other", () => {
+  const rig = drillRig();
+  // Two tigers shoulder to shoulder, the player far out of sight: with no species
+  // rule each animal's nearest target is its neighbour.
+  const first = rig.enemies.spawnWildAnimal("tiger", { x: 600, y: 600 });
+  const second = rig.enemies.spawnWildAnimal("tiger", { x: 630, y: 600 });
+  rig.player.x = 3200;
+  rig.player.y = 2400;
+  for (let frame = 0; frame < 200; frame += 1) rig.enemies.updateUnits(1 / 60);
+  assert.equal(first.health, first.maxHealth, "a tiger bit another tiger");
+  assert.equal(second.health, second.maxHealth, "a tiger bit another tiger");
+  assert.equal(rig.hits.length, 0, "an animal reached the player from across the field");
+});
+
+test("a line of soldiers fights the tiger and the tiger fights back", () => {
+  const rig = drillRig();
+  const tiger = rig.enemies.spawnWildAnimal("tiger", { x: 600, y: 600 });
+  const formation = rig.enemies.spawnPreset("tutorialLine", { x: 610, y: 660, heading: 0 });
+  assert.equal(rig.state.formations.length, 1, "the preset spawned no line");
+  assert.equal(formation.id, "preset-tutorialLine");
+  assert.equal(formation.groundTier, "dry", "a preset claimed a spawn tier it never searched");
+  assert.equal(rig.state.enemies.length, 10, "the line is nine ranks plus the animal");
+  for (let frame = 0; frame < 120; frame += 1) rig.enemies.updateUnits(1 / 60);
+  assert.ok(tiger.destroyed || tiger.health < tiger.maxHealth, "the line never touched the animal");
+});
+
+test("the drill pans to the line, holds the field, and hands it back", () => {
+  const rig = drillRig();
+  rig.tutorial.arm();
+  rig.tutorial.confirm();
+  const tiger = rig.state.wilds[0];
+
+  rig.enemies.damageEnemy(tiger, 999);
+  rig.tutorial.update(1 / 60);
+  let tutorial = rig.state.tutorial;
+  assert.equal(tutorial.step, "pan", `the animal's death left the drill at ${tutorial.step}`);
+  assert.equal(tutorial.frozen, true, "the pan is not a pause");
+  assert.equal(tutorial.line.length, 9, `the line formed with ${tutorial.line.length} bodies`);
+  const lineSpot = tutorial.lineSpot;
+  assert.deepEqual(rig.state.cameraFocus, { x: lineSpot.x, y: lineSpot.y });
+  assert.equal(tutorial.objective, null, "the arrow was left on a dead animal");
+
+  rig.tutorial.update(2);
+  tutorial = rig.state.tutorial;
+  assert.equal(tutorial.step, "tactics");
+  assert.ok(tutorial.overlay, "the tactics card never appeared");
+  assert.equal(tutorial.overlay.bodyKeys.length, 3, "the tactics card lost a beat");
+  assert.equal(tutorial.frozen, true);
+
+  rig.tutorial.confirm();
+  tutorial = rig.state.tutorial;
+  assert.equal(tutorial.step, "return");
+  assert.equal(rig.state.cameraFocus, null, "the camera was left on the line");
+  assert.equal(tutorial.frozen, true, "the camera walk is not a pause");
+
+  rig.tutorial.update(2);
+  tutorial = rig.state.tutorial;
+  assert.equal(tutorial.step, "engage");
+  assert.equal(tutorial.frozen, false);
+  // The arrow starts on the middle of the line and follows it as the ranks fall.
+  const living = tutorial.line.filter((unit) => !unit.destroyed);
+  const centroid = {
+    x: living.reduce((sum, unit) => sum + unit.x, 0) / living.length,
+    y: living.reduce((sum, unit) => sum + unit.y, 0) / living.length,
+  };
+  assert.deepEqual(tutorial.objective, centroid);
+
+  // The last body of the line is the trigger, and it is what hands the run on.
+  for (const unit of tutorial.line) rig.enemies.damageEnemy(unit, 999);
+  rig.tutorial.update(1 / 60);
+  assert.equal(rig.state.tutorial, null, "the drill never finished");
+  assert.equal(rig.campaign.tutorialHandoff, true, "the cleared drill did not hand the run on");
+});
+
+test("the line forms around the chariot's live position, not its spawn corner", () => {
+  const rig = drillRig();
+  rig.tutorial.arm();
+  rig.tutorial.confirm();
+  // Off across the field, the way a player who chased the animal would be.
+  rig.player.x = 900;
+  rig.player.y = 700;
+  rig.enemies.damageEnemy(rig.state.wilds[0], 999);
+  rig.tutorial.update(1 / 60);
+
+  const tutorial = rig.state.tutorial;
+  assert.equal(tutorial.step, "pan");
+  const span = Math.hypot(tutorial.lineSpot.x - rig.player.x, tutorial.lineSpot.y - rig.player.y);
+  assert.ok(Math.abs(span - TUTORIAL_LAYOUT.line.distance) < 1,
+    `the line formed ${span.toFixed(1)}px from the chariot`);
+  // The old behaviour put it at a fixed offset from the spawn point; a player who
+  // drove away from that corner must not be panned back to it.
+  const spawn = { x: rig.world.width / 2, y: rig.world.height / 2 };
+  const fromSpawn = Math.hypot(tutorial.lineSpot.x - spawn.x, tutorial.lineSpot.y - spawn.y);
+  assert.ok(fromSpawn > 400, `the line formed ${fromSpawn.toFixed(1)}px from the spawn corner it was not asked about`);
+  // The camera goes where the line went, and so does the formation on the field.
+  assert.deepEqual(rig.state.cameraFocus, { x: tutorial.lineSpot.x, y: tutorial.lineSpot.y });
+  assert.deepEqual(
+    { x: tutorial.formation.x, y: tutorial.formation.y },
+    { x: tutorial.lineSpot.x, y: tutorial.lineSpot.y },
+  );
+});
+
+test("the arrow keeps pointing at the ranks that are left", () => {
+  const rig = drillRig();
+  rig.tutorial.arm();
+  rig.tutorial.confirm();
+  rig.enemies.damageEnemy(rig.state.wilds[0], 999);
+  rig.tutorial.update(1 / 60);
+  rig.tutorial.update(2);
+  rig.tutorial.confirm();
+  rig.tutorial.update(2);
+  const tutorial = rig.state.tutorial;
+  assert.equal(tutorial.step, "engage");
+
+  // Kill the half of the line nearest the chariot, then walk the survivors away
+  // from where the line formed: the arrow has to move with them.
+  const firstHalf = tutorial.line.slice(0, 4);
+  for (const unit of firstHalf) rig.enemies.damageEnemy(unit, 999);
+  for (const unit of tutorial.line) {
+    if (!unit.destroyed) unit.x += 120;
+  }
+  rig.tutorial.update(1 / 60);
+  const living = tutorial.line.filter((unit) => !unit.destroyed);
+  const centroid = {
+    x: living.reduce((sum, unit) => sum + unit.x, 0) / living.length,
+    y: living.reduce((sum, unit) => sum + unit.y, 0) / living.length,
+  };
+  assert.deepEqual(tutorial.objective, centroid, "the arrow stayed on the line's old ground");
+  assert.notDeepEqual(tutorial.objective, { x: tutorial.lineSpot.x, y: tutorial.lineSpot.y },
+    "the arrow is still the spawn point of the line");
+  assert.equal(tutorial.hud.count, firstHalf.length, "the counter lost the fallen");
+});
+
+
+test("the drill's card paints a title, its lines, and a button the hit test agrees with", () => {
+  const drawn = [];
+  const context = {
+    font: "", textAlign: "left", fillStyle: "", strokeStyle: "", lineWidth: 1,
+    save() {}, restore() {},
+    measureText: (text) => ({ width: text.length * 12 }),
+    fillRect() {}, strokeRect() {},
+    fillText: (text, x, y) => drawn.push({ text, x, y }),
+  };
+  const view = { width: 960, height: 592 };
+  const state = {
+    tutorial: {
+      overlay: { titleKey: "tutorial.brief.title", bodyKeys: ["tutorial.brief.drive", "tutorial.brief.fire"] },
+    },
+  };
+  const overlay = createTutorialOverlay({ context, view, state });
+  overlay.draw();
+
+  const title = drawn.find((entry) => entry.text === translate("tutorial.brief.title"));
+  assert.ok(title, "the card never painted its title");
+  const button = drawn.find((entry) => entry.text === translate("tutorial.confirm"));
+  assert.ok(button, "the card never painted its button");
+  assert.ok(drawn.length > 3, "the card's copy never reached the canvas");
+
+  // The button the pointer can hit is the button that was painted.
+  assert.equal(overlay.hitConfirm(button.x, button.y), true, "the painted button is not clickable");
+  assert.equal(overlay.hitConfirm(button.x, button.y + 200), false, "a click far below the button confirmed the card");
+  // Canvas pixels are view units: a pointer event arrives in CSS pixels.
+  const canvas = { getBoundingClientRect: () => ({ left: 10, top: 20, width: 960, height: 592 }) };
+  assert.deepEqual(overlay.toView({ clientX: 110, clientY: 120 }, canvas), { x: 100, y: 100 });
+
+  // With no card there is nothing to paint and nothing to hit.
+  state.tutorial = null;
+  drawn.length = 0;
+  overlay.draw();
+  assert.equal(drawn.length, 0, "the overlay painted without a card");
+  assert.equal(overlay.hitConfirm(400, 300), false);
+});
+
+test("a drill battle says so on the stage tile instead of a number", () => {
+  assert.equal(stageLabel({ stage: 1 }, { tutorial: {} }), translate("battle.tutorialStage"));
+  assert.equal(stageLabel({ stage: 1 }, { finalBattle: true, tutorial: {} }), translate("battle.tutorialStage"),
+    "a drill borrowed the last stage's name");
+  assert.equal(stageLabel({ stage: 3 }, {}), "03");
+});
+
+test("both locales carry the drill's copy and the drilled line's name", () => {
+  const keys = [
+    "prologue.tutorial", "battle.tutorialStage", "formation.tutorial",
+    "tutorial.brief.title", "tutorial.brief.drive", "tutorial.brief.fire",
+    "tutorial.tactics.title", "tutorial.tactics.infantry",
+    "tutorial.tactics.archers", "tutorial.tactics.chariot",
+    "tutorial.confirm", "tutorial.huntLabel", "tutorial.lineLabel", "tutorial.guide",
+  ];
+  for (const locale of Object.keys(supportedLocales)) {
+    for (const key of keys) assert.ok(hasTranslation(locale, key), `${locale} is missing ${key}`);
+  }
+});
+
+test("the drill's copy never sends a touch player to the keyboard", () => {
+  // The drill is played on a phone: the left joystick drives, the fire button
+  // shoots, and the card's own button confirms. A key name in the copy is an
+  // instruction the player cannot follow.
+  const forbidden = [/空格/, /space/i, /\bWASD\b/i, /\bEnter\b/i, /↑/, /↓/, /←/, /→/, /\bA \/ D\b/i, /\bW \/ /];
+  for (const [locale, table] of Object.entries({ "zh-CN": zhCN, en })) {
+    for (const [key, value] of Object.entries(table)) {
+      if (!key.startsWith("tutorial.")) continue;
+      for (const pattern of forbidden) {
+        const hit = value.match(pattern);
+        assert.equal(hit, null, `${locale} ${key} still names a key: "${hit?.[0]}"`);
+      }
+    }
+  }
+});
+
+test("the drill line is nine ranks led by one chariot, and not a rolled pattern", () => {
+  const preset = formationPresets.tutorialLine;
+  assert.equal(preset.slots.length, 9, `the line is ${preset.slots.length} bodies`);
+  assert.equal(preset.slots.filter(([type]) => type === "chariot").length, 1);
+  assert.equal(preset.slots.filter(([type]) => type === "archer").length, 2);
+  for (const [type] of preset.slots) assert.ok(enemyStats[type], `no stats row for "${type}"`);
+  // The campaign picks its lines with `formationsSpawned + wave - 1` modulo the
+  // pattern list: a preset in that list would turn up in a real battle.
+  assert.equal(formationPatterns.includes(preset), false, "the drill line is in the campaign's rotation");
+  assert.equal(hasTranslation(defaultLocale, preset.nameKey), true, "the preset has no banner name");
+});
+
+test("index.html puts the drill beside 出征 on the story card", () => {
+  const html = readFileSync(new URL("../index.html", import.meta.url), "utf8");
+  const actionsAt = html.indexOf('class="prologue-actions"');
+  assert.ok(actionsAt > 0, "the story card has no action row");
+  const actions = html.slice(actionsAt, html.indexOf("</div>", actionsAt));
+  const tutorialAt = actions.indexOf('id="prologue-tutorial"');
+  const campaignAt = actions.indexOf('id="prologue-start"');
+  assert.ok(tutorialAt >= 0, "index.html has no tutorial button");
+  assert.ok(campaignAt > tutorialAt, "the drill does not sit to the left of 出征");
+  // The guide arrow needed a caption to retitle: it points at the drill's own
+  // target as well as at an extraction point.
+  assert.ok(html.includes('id="extraction-guide-label"'), "the guide arrow has no caption element");
 });
 
 console.log(`\n[unit] PASS (${passed} checks)`);

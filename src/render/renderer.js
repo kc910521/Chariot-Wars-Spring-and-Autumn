@@ -157,6 +157,69 @@ export function createRenderer({
       context.moveTo(-25, -4);
       context.lineTo(-38, -11);
       context.stroke();
+    } else if (kind === "tiger") {
+      // A smaller, hotter cat than the lion above: the wild animal of the
+      // tutorial (src/data/wilds.js) reads as the same family at two-thirds the
+      // size, striped where the boss is maned. Same local frame as every other
+      // silhouette: +X is forward, so the head sits ahead of the shoulder.
+      context.fillStyle = "rgba(44, 32, 21, 0.3)";
+      context.beginPath();
+      context.ellipse(2, 8, 27, 16, 0, 0, Math.PI * 2);
+      context.fill();
+      context.fillStyle = "#8a4a22";
+      for (const legX of [-15, 12]) {
+        for (const legY of [-10, 10]) context.fillRect(legX, legY, 6, 15);
+      }
+      context.fillStyle = unit.hitFlash > 0 ? "#f0d2a4" : unit.visual.robe;
+      context.beginPath();
+      context.ellipse(0, 0, 23, 15, 0, 0, Math.PI * 2);
+      context.fill();
+      context.beginPath();
+      context.arc(18, -1, 13, 0, Math.PI * 2);
+      context.fill();
+      // Ears, muzzle, then the stripes over crown and flank.
+      context.beginPath();
+      context.moveTo(10, -11);
+      context.lineTo(13, -19);
+      context.lineTo(19, -12);
+      context.closePath();
+      context.fill();
+      context.beginPath();
+      context.moveTo(19, -12);
+      context.lineTo(24, -20);
+      context.lineTo(27, -10);
+      context.closePath();
+      context.fill();
+      context.fillStyle = "#e5cba1";
+      context.beginPath();
+      context.ellipse(28, 2, 6.5, 5, 0, 0, Math.PI * 2);
+      context.fill();
+      context.strokeStyle = "#3b2416";
+      context.lineWidth = 2;
+      for (const stripeX of [-15, -7, 1, 9]) {
+        context.beginPath();
+        context.moveTo(stripeX, -12);
+        context.lineTo(stripeX - 3, 2);
+        context.stroke();
+      }
+      context.beginPath();
+      context.moveTo(14, -8);
+      context.lineTo(18, -4);
+      context.stroke();
+      context.beginPath();
+      context.moveTo(20, -10);
+      context.lineTo(23, -5);
+      context.stroke();
+      context.fillStyle = "#2b2118";
+      context.beginPath();
+      context.arc(22, -5, 1.8, 0, Math.PI * 2);
+      context.fill();
+      context.strokeStyle = "#8a4a22";
+      context.lineWidth = 3;
+      context.beginPath();
+      context.moveTo(-22, -2);
+      context.quadraticCurveTo(-34, -7, -29, -18);
+      context.stroke();
     } else if (kind === "catapult") {
       context.fillStyle = "rgba(44, 32, 21, 0.3)";
       context.beginPath();
@@ -494,7 +557,22 @@ export function createRenderer({
       context.beginPath();
       context.ellipse(0, 8, 9, 4, 0, 0, Math.PI * 2);
       context.fill();
-      if (drop.type === "coin") {
+      if (drop.type === "meat") {
+        // A wild animal's drop: a scrap of game, not coin. Same shadow, same bob -
+        // the HUD's gold counter never sees it, the hull does (game.js heals on
+        // pickup).
+        context.fillStyle = "#a8412f";
+        context.beginPath();
+        context.ellipse(0, 0, 8, 5.5, -0.4, 0, Math.PI * 2);
+        context.fill();
+        context.fillStyle = "#e8dcc4";
+        context.fillRect(3, -5, 4.5, 4);
+        context.strokeStyle = "#6d2b1e";
+        context.lineWidth = 1;
+        context.beginPath();
+        context.ellipse(0, 0, 8, 5.5, -0.4, 0, Math.PI * 2);
+        context.stroke();
+      } else if (drop.type === "coin") {
         context.fillStyle = "#d9a94e";
         context.beginPath();
         context.arc(0, 0, 6, 0, Math.PI * 2);
