@@ -1,12 +1,6 @@
 ---
 name: controlled-cross-platform-migration
-description: >-
-  Plan and execute controlled incremental migrations between software projects,
-  platforms, frameworks, languages, or runtimes. Use when porting a feature or
-  branch from a source project to a target project, synchronizing platform
-  implementations, or reviewing migration readiness. Prevents unauthorized
-  migration, protects feature-branch scope, requires a migration plan, official
-  documentation research, behavior and presentation parity, and verification.
+description: Plan and execute controlled incremental migrations between software projects, platforms, frameworks, languages, or runtimes. Use when porting a feature or branch from a source project to a target project, synchronizing platform implementations, or reviewing migration readiness. Prevents unauthorized migration, protects feature-branch scope, requires a migration plan, official documentation research, behavior and presentation parity, and verification.
 ---
 
 # Controlled Cross-Platform Migration
@@ -47,6 +41,60 @@ Record:
 - how the target can be tested (simulator, emulator, browser, device, screenshot, or automated tests).
 
 If a required path, branch, or repository identity is ambiguous, ask one concise question before any write. Confirm the two project roots separately in your response.
+
+
+## Project Context Resolution — Mandatory
+
+Before interpreting a development request or modifying any files, determine which project the user is referring to.
+
+### 1. Project selection priority
+
+Resolve the target project using the following priority:
+
+1. **Explicit project reference in the current user message.**
+   Examples: "modify the H5 version", "fix the WeChat Mini Game version", or an explicitly named repository.
+2. **Unambiguous project reference in the current task context.**
+   Use recent conversation context only when it clearly identifies the project the user is discussing.
+3. **Ask the user when the intended project remains ambiguous.**
+
+Never assume that the most recently modified, inspected, or migrated project is the intended project for the next request.
+
+### 2. Mandatory clarification rule
+
+If a request could reasonably refer to either the source project or the target project, and the intended project cannot be determined confidently from explicit instructions or unambiguous context, STOP and ask the user which project they mean.
+
+For example, after migrating a feature from H5 to WeChat Mini Game, the user says:
+"The movement speed is still wrong. Please fix it."
+
+If both projects have a movement-speed implementation and the user has not identified which one to change, ask:
+
+"Do you want me to fix the movement speed in the H5 source project or the WeChat Mini Game target project?"
+
+Do not inspect or modify either project to guess the user's intent.
+
+### 3. Project context is task-scoped
+
+- Project context from a completed task does not automatically carry over as the target of a new task.
+- Completing a migration does not make the target project the default project for subsequent development.
+- A request to modify one project does not authorize changes to the other project.
+- When the user explicitly establishes a project context for a continuing task, retain it while the task remains clearly continuous.
+- If a later request introduces ambiguity, ask again rather than relying solely on the previous project selection.
+
+### 4. Separate project selection from migration authorization
+
+Knowing which project the user means does not authorize cross-project migration.
+
+- A source-project request authorizes work on the source project only.
+- A target-project request authorizes work on the target project only.
+- A request to synchronize, port, or migrate changes across projects must follow the migration workflow, including planning, readiness checks, and required approval.
+- Never automatically propagate a fix from one project to the other.
+
+### 5. Minimize unnecessary questions
+
+Do not ask when the current message explicitly identifies the project or the ongoing task unambiguously establishes it.
+
+When clarification is necessary, ask one concise question naming the available projects. Wait for the answer before reading files, running project-specific commands, or making changes.
+
 
 ## Modes
 
