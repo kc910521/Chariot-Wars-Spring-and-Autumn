@@ -366,6 +366,20 @@ export function createRenderer({
       && y >= camera.y - margin && y <= camera.y + view.height + margin;
   }
 
+  // The sky is the last thing painted in the world, and that is the whole point:
+  // a cloud is a translucent veil (its row's `opacity` tops out near a fifth), so
+  // it can cross the field without hiding a silhouette - while a canopy or a hull
+  // painted after it would break the one ordering the eye reads instantly. The
+  // cull is the cloud's own box, because a puff is wider than the camera margin.
+  function drawSky() {
+    for (const cloud of getClouds()) {
+      const x = cloudDrift(cloud, state.elapsed, world.width);
+      if (x < camera.x - cloud.width || x > camera.x + view.width + cloud.width
+        || cloud.y < camera.y - cloud.height || cloud.y > camera.y + view.height + cloud.height) continue;
+      elements.drawCloud(cloud, x, state.elapsed);
+    }
+  }
+
   // One particle pass for every kind, filtered by `match`. Splitting the list this
   // way lets the ground wake be painted under the bodies and the sparks over them
   // without a second copy of the fade, the cull and the alpha reset - and without
@@ -427,13 +441,6 @@ export function createRenderer({
     for (const patch of getTerrain()) {
       if (!inView(patch.x, patch.y, Math.max(patch.radiusX, patch.radiusY) + 8)) continue;
       elements.drawTerrain(patch);
-    }
-
-    for (const cloud of getClouds()) {
-      const x = cloudDrift(cloud, state.elapsed, world.width);
-      if (x < camera.x - cloud.width || x > camera.x + view.width + cloud.width
-        || cloud.y < camera.y - cloud.height || cloud.y > camera.y + view.height + cloud.height) continue;
-      elements.drawCloud(cloud, x, state.elapsed);
     }
 
     for (const stain of state.bloodStains) {
@@ -711,6 +718,9 @@ export function createRenderer({
     context.strokeStyle = "rgba(111, 64, 35, 0.45)";
     context.lineWidth = 2;
     context.strokeRect(0, 0, world.width, world.height);
+    // The sky closes the world pass: nothing above it can cover a cloud, and a
+    // layer added after it would put a body in front of the sky.
+    drawSky();
     context.restore();
 
     if (state.damageFlash > 0) {

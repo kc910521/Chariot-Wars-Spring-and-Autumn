@@ -34,6 +34,7 @@ import { createTutorialOverlay } from "../src/render/tutorial-overlay.js";
 import { wildAnimalStats } from "../src/data/wilds.js";
 import { createElementRenderer } from "../src/render/elements.js";
 import { createGroundPainter } from "../src/render/ground.js";
+import { createRenderer } from "../src/render/renderer.js";
 import { chariotRigBox, createSpriteArt, spritePalette } from "../src/render/sprites.js";
 import { CHARIOT_CONTROL_CONFIG, createPlayerController } from "../src/game/player.js";
 import { bossTypes, chariotTactics, enemyStats, formationAura, formationConfig, formationPatterns, formationPresets } from "../src/data/formations.js";
@@ -421,18 +422,27 @@ test("every row's visual.kind has a silhouette, and its palettes are full", () =
   assert.equal(cloudKinds.sky.visual.shade.length, 3, "the cloud shadow reads three stops");
 });
 
-// A recording 2D context: enough of the canvas API for the floor and the terrain
-// patches, with every style write and every call kept in order, so a test can
-// read the picture back instead of trusting the painter's source. (The sprite
-// tests further down use `recordingContext`, which measures extents instead.)
+// A recording 2D context: with every style write and every call kept in order, so
+// a test can read the picture back instead of trusting the painter's source. The
+// named handful is what the floor and the terrain patches use; everything else the
+// canvas API has (text, dashes, clips) still lands in the log through the proxy
+// fallback, which is what lets one recorder drive a whole `draw()` and still say
+// "the last two paints in the frame are the cloud's". (The sprite tests further
+// down use `recordingContext`, which measures extents instead.)
 function callLog() {
   const log = [];
-  const state = { fillStyle: "", strokeStyle: "", lineWidth: 1 };
+  // Style state kept aside so a test (or a painter) can read a property back.
+  const style = new Map([["fillStyle", ""], ["strokeStyle", ""], ["lineWidth", 1], ["globalAlpha", 1]]);
   const gradient = () => ({
     addColorStop: (offset, color) => log.push(["addColorStop", [offset, color]]),
   });
-  const context = {
+  const api = {
     log,
+    // Wide enough that a label box stays positive: no test asserts on its width.
+    measureText: (text) => {
+      log.push(["measureText", [text]]);
+      return { width: String(text).length * 6 };
+    },
     createLinearGradient: (...args) => {
       log.push(["createLinearGradient", args]);
       return gradient();
@@ -441,26 +451,29 @@ function callLog() {
       log.push(["createRadialGradient", args]);
       return gradient();
     },
+    createPattern: () => null,
   };
-  for (const name of [
-    "save", "restore", "translate", "scale", "rotate", "beginPath", "fill", "stroke",
-    "fillRect", "strokeRect", "rect", "roundRect",
-    "arc", "ellipse", "moveTo", "lineTo", "quadraticCurveTo", "bezierCurveTo",
-  ]) {
-    context[name] = (...args) => log.push([name, args]);
-  }
-  for (const key of Object.keys(state)) {
-    Object.defineProperty(context, key, {
-      get: () => state[key],
-      set: (value) => {
-        state[key] = value;
-        // A gradient object cannot be compared across two runs, so the log keeps
-        // its name: the stops themselves are recorded by `addColorStop`.
-        log.push([key, [typeof value === "object" ? "<gradient>" : value]]);
-      },
-    });
-  }
-  return context;
+  return new Proxy(api, {
+    get(target, property) {
+      if (property in target) return target[property];
+      if (typeof property !== "string") return undefined;
+      if (style.has(property)) return style.get(property);
+      // Any other method only has to exist and log itself.
+      const recorder = (...args) => {
+        log.push([property, args]);
+        return undefined;
+      };
+      target[property] = recorder;
+      return recorder;
+    },
+    set(target, property, value) {
+      style.set(property, value);
+      // A gradient object cannot be compared across two runs, so the log keeps its
+      // name: the stops themselves are recorded by `addColorStop`.
+      log.push([property, [typeof value === "object" && value !== null ? "<gradient>" : value]]);
+      return true;
+    },
+  });
 }
 
 // Colours are authored as hex or rgba(), and the floor's whole contract is about
@@ -609,6 +622,87 @@ test("a grass patch is tall blades and weeds, not a tint", () => {
   // A patch is drawn per frame too: the ratchet keeps a future "more blades!"
   // edit from quietly turning seven patches into seven thousand calls.
   assert.ok(context.log.length < 260, `one grass patch costs ${context.log.length} canvas calls`);
+});
+
+// The battlefield's layering is part of the art: a cloud is translucent by design,
+// so it may cross the field over anything at all - but only if it is painted last.
+// This drives one whole frame through the real renderer and reads the calls back,
+// so "the sky is on top" stays a fact about the picture instead of a claim about
+// the source order that a later layer can quietly break.
+test("clouds are the last thing painted, and only ever a veil", () => {
+  const view = { width: 960, height: 592 };
+  const context = callLog();
+  const sky = cloudKinds.sky;
+  // Deliberately overlapping: the puff sits over the tree, the wall and the enemy.
+  const cloud = { type: "sky", x: 300, y: 280, width: 240, height: 96, opacity: sky.opacity[1], phase: 0, speed: 0 };
+  const tree = { type: "tree", x: 250, y: 300, radius: 30 };
+  const wall = { type: "wall", x: 360, y: 250, width: 150, height: 34, rotation: 0 };
+  const robe = "#123456";
+  const enemy = {
+    x: 320, y: 330, angle: 0.3, radius: 12, health: 6, maxHealth: 10,
+    knockedDown: 0, hitFlash: 0, destroyed: false,
+    visual: { kind: "foot", robe, scale: 1.3, overlays: ["sword"] },
+  };
+  createRenderer({
+    canvas: { width: view.width, height: view.height },
+    context, view,
+    camera: { x: 0, y: 0 },
+    world: { width: 2800, height: 1800 },
+    player: {
+      x: 90, y: 470, angle: 0, radius: 14, health: 10, maxHealth: 10,
+      invulnerable: 0, mode: "mounted", destroyed: false,
+    },
+    state: {
+      elapsed: 1.5, shake: 0, damageFlash: 0, phase: "running", extractionPoint: null,
+      particles: [], bloodStains: [], groundArrows: [], drops: [], meleeEffects: [],
+      formations: [], allyFormations: [], bullets: [],
+      enemies: [enemy], footCompanions: [], allies: [],
+    },
+    getObstacles: () => [tree, wall],
+    getTerrain: () => [{ type: "grass", x: 720, y: 430, radiusX: 90, radiusY: 62 }],
+    getClouds: () => [cloud],
+    getHorseCount: () => 2,
+    getRoster: () => [],
+  }).draw();
+
+  const log = context.log;
+  // The cloud is found by its own shade stops, which no other painter uses: the
+  // first stop is where its paint begins, and the body write lands a little later.
+  const cloudStart = log.findIndex(([name, args]) => name === "addColorStop" && args[1] === sky.visual.shade[0]);
+  const cloudAt = log.findIndex(([name, args]) => name === "fillStyle" && args[0] === sky.visual.body);
+  assert.ok(cloudStart > 0 && cloudStart < cloudAt, "the cloud was never painted");
+
+  // Everything that used to be able to cover a cloud is painted before it: the
+  // canopy, a palisade, and a body with its health bar.
+  const markers = [
+    ["the canopy", obstacleKinds.tree.visual.leaf[0]],
+    ["the palisade", obstacleKinds.wall.visual.body],
+    ["the body", robe],
+  ];
+  for (const [what, color] of markers) {
+    const index = log.findIndex(([name, args]) => name === "fillStyle" && args[0] === color);
+    assert.ok(index >= 0, `${what} was never painted`);
+    assert.ok(index < cloudAt, `${what} is painted over the cloud`);
+  }
+
+  // And nothing at all follows the cloud except its own body and rim: exactly two
+  // paints to the end of the frame.
+  const after = log.slice(cloudAt)
+    .filter(([name]) => name === "fill" || name === "stroke" || name === "fillRect" || name === "fillText");
+  assert.deepEqual(after.map(([name]) => name), ["fill", "stroke"],
+    `something painted over the cloud: ${after.map(([name]) => name).join(", ")}`);
+
+  // Being on top is only safe because it is a veil: the strongest alpha the cloud
+  // ever reaches is its own row's ceiling, times the deepest breath it takes.
+  const ceiling = sky.opacity[1] * (sky.visual.breathe.base + sky.visual.breathe.depth);
+  // The shade's alpha is written before its gradient is even built, so the veil
+  // starts two entries above the first stop: a shade, a body and a rim, in order.
+  assert.equal(log[cloudStart - 2][0], "globalAlpha", "the cloud no longer fades its own shade");
+  const alphas = log.slice(cloudStart - 2).filter(([name]) => name === "globalAlpha").map(([, [value]]) => value);
+  assert.equal(alphas.length, 3, `the cloud painted ${alphas.length} alphas, not a shade, a body and a rim`);
+  for (const alpha of alphas) {
+    assert.ok(alpha <= ceiling + 1e-9, `a cloud painted at ${alpha} is not translucent any more`);
+  }
 });
 
 test("a tree leans inside its declared wind, and one hit adds one decaying wobble", () => {
