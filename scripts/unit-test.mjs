@@ -66,6 +66,8 @@ import {
 import { drawCamp, drawRig } from "../src/ui/shop-scene.js";
 import { drawRadar } from "../src/ui/shop-dossier.js";
 import { createShopScreen } from "../src/ui/shop-screen.js";
+import { createMenuPage } from "../src/ui/menu-page.js";
+import { computeMenuLayout } from "../src/ui/menu-layout.js";
 import { prologueLines } from "../src/ui/prologue.js";
 import { setLocale, translate } from "../src/i18n/index.js";
 import { defaultLocale, hasTranslation, registerLocale, supportedLocales, translator } from "../src/i18n/locales.js";
@@ -3335,7 +3337,7 @@ test("the camp fire wears the colours the battlefield paints", () => {
 // browser used to do for the DOM shop and this file has to do for the canvas one.
 // That split is what lets the page be tested without a browser: the router is the
 // whole of the device-facing code.
-function fakeShopCanvas(box, context) {
+function fakePageCanvas(box, context) {
   const listeners = new Map();
   return {
     width: 0,
@@ -3393,7 +3395,7 @@ const shopPoint = (rect) => ({ clientX: rect.x + rect.width / 2, clientY: rect.y
 
 test("opening the shop page paints the frame its targets come from", () => {
   const recorder = recordingContext();
-  const canvas = fakeShopCanvas({ width: 960, height: 592 }, recorder.context);
+  const canvas = fakePageCanvas({ width: 960, height: 592 }, recorder.context);
   const campaign = shopCampaign({ totalGold: 900 });
   const equipmentShop = stubEquipmentShop(campaign);
   const liveRegion = { textContent: "" };
@@ -3429,7 +3431,7 @@ test("opening the shop page paints the frame its targets come from", () => {
 });
 
 test("a tap on a buy button spends once, announces once and repaints", () => {
-  const canvas = fakeShopCanvas({ width: 960, height: 592 }, recordingContext().context);
+  const canvas = fakePageCanvas({ width: 960, height: 592 }, recordingContext().context);
   const campaign = shopCampaign({ totalGold: 9000 });
   const equipmentShop = stubEquipmentShop(campaign);
   const liveRegion = { textContent: "" };
@@ -3463,7 +3465,7 @@ test("a tap on a buy button spends once, announces once and repaints", () => {
 });
 
 test("a press that slides off the button buys nothing", () => {
-  const canvas = fakeShopCanvas({ width: 960, height: 592 }, recordingContext().context);
+  const canvas = fakePageCanvas({ width: 960, height: 592 }, recordingContext().context);
   const campaign = shopCampaign({ totalGold: 9000 });
   const equipmentShop = stubEquipmentShop(campaign);
   const page = createShopScreen({
@@ -3489,7 +3491,7 @@ test("a press that slides off the button buys nothing", () => {
 });
 
 test("a buy the purse cannot afford is refused without spending", () => {
-  const canvas = fakeShopCanvas({ width: 960, height: 592 }, recordingContext().context);
+  const canvas = fakePageCanvas({ width: 960, height: 592 }, recordingContext().context);
   const campaign = shopCampaign({ totalGold: 0 });
   const equipmentShop = stubEquipmentShop(campaign);
   const liveRegion = { textContent: "" };
@@ -3517,7 +3519,7 @@ test("a buy the purse cannot afford is refused without spending", () => {
 });
 
 test("a closed shop page answers no taps and parks its frame", () => {
-  const canvas = fakeShopCanvas({ width: 960, height: 592 }, recordingContext().context);
+  const canvas = fakePageCanvas({ width: 960, height: 592 }, recordingContext().context);
   const campaign = shopCampaign({ totalGold: 9000 });
   const equipmentShop = stubEquipmentShop(campaign);
   const page = createShopScreen({
@@ -3549,7 +3551,7 @@ test("a closed shop page answers no taps and parks its frame", () => {
 
 test("a shop canvas with no box is left alone", () => {
   const recorder = recordingContext();
-  const canvas = fakeShopCanvas({ width: 0, height: 0 }, recorder.context);
+  const canvas = fakePageCanvas({ width: 0, height: 0 }, recorder.context);
   const campaign = shopCampaign({ totalGold: 900 });
   const equipmentShop = stubEquipmentShop(campaign);
   const page = createShopScreen({
@@ -3572,7 +3574,7 @@ test("a shop canvas with no box is left alone", () => {
 
 test("a resize re-fits the page to its box and keeps its width", () => {
   const box = { width: 960, height: 592 };
-  const canvas = fakeShopCanvas(box, recordingContext().context);
+  const canvas = fakePageCanvas(box, recordingContext().context);
   const campaign = shopCampaign({ totalGold: 900 });
   const equipmentShop = stubEquipmentShop(campaign);
   const page = createShopScreen({
@@ -3598,6 +3600,322 @@ test("a resize re-fits the page to its box and keeps its width", () => {
   // The catalogue was re-sliced for the new shape instead of carried over from the
   // old one, so the rows on the page are the rows this box has room for.
   assert.equal(portrait.rows.length, rowsPerPageFor(portrait.view.height, portrait.view.width));
+  page.setActive(false);
+});
+
+console.log("[unit] the home page");
+
+const menuPoint = (rect) => ({ clientX: rect.x + rect.width / 2, clientY: rect.y + rect.height / 2 });
+
+// The resting lock, as the page reads it: two numbers and a record.
+function stubVictoryLock(remaining = 0, last = null) {
+  return { remainingMs: () => remaining, summary: () => last };
+}
+
+// A live region that counts its writes, so "announced once per change" is a fact
+// about the page and not about how many frames the test happened to paint.
+function countingLiveRegion() {
+  const region = { writes: 0, value: "" };
+  Object.defineProperty(region, "textContent", {
+    get: () => region.value,
+    set: (value) => { region.value = value; region.writes += 1; },
+  });
+  return region;
+}
+
+function menuPageUnderTest({
+  box = { width: 960, height: 592 }, lock = stubVictoryLock(), proxy = null, live = null,
+} = {}) {
+  const starts = [];
+  const recorder = recordingContext();
+  const canvas = fakePageCanvas(box, recorder.context);
+  const page = createMenuPage({
+    canvas,
+    victoryLock: lock,
+    liveRegion: live,
+    startProxy: proxy,
+    onStart: () => starts.push(true),
+  });
+  return { page, canvas, box, starts, recorder, proxy };
+}
+
+test("the card is the mini game's card, laid out in the page's own space", () => {
+  const layout = computeMenuLayout({ width: 960, height: 592 });
+  // 550x380, centred: the same card `chariot-wars/src/ui/screens.js` paints.
+  assert.deepEqual(layout.panel, { x: 205, y: 106, width: 550, height: 380 });
+  // The four lines above the button, at the offsets the mini game uses.
+  assert.equal(layout.eyebrow.y, 148);
+  assert.equal(layout.title.y, 202);
+  assert.equal(layout.seal.y, 242);
+  assert.equal(layout.lede.y, 278);
+  for (const line of [layout.eyebrow, layout.title, layout.seal, layout.lede]) {
+    assert.equal(line.x, 480, "a line of the card was not centred on the page");
+  }
+  // 出征: 224x50, inside the card and clear of the last line of lede.
+  assert.deepEqual(layout.start, { x: 368, y: 418, width: 224, height: 50 });
+  assert.ok(layout.start.y >= layout.lede.y + layout.lede.lineHeight * layout.lede.maxLines,
+    "出征 overlaps the lede");
+  assert.ok(layout.start.y + layout.start.height <= layout.panel.y + layout.panel.height,
+    "出征 hangs out of the card");
+  // The resting card covers the button's slot and then some.
+  assert.deepEqual(layout.lock, { x: 368, y: 406, width: 224, height: 74 });
+  assert.equal(layout.lock.y, layout.start.y - 12);
+});
+
+test("the card shrinks with a short page and never with a wide one", () => {
+  // A wide window: the card is capped at 550, so the page gets margins instead.
+  const wide = computeMenuLayout({ width: 1600, height: 900 });
+  assert.equal(wide.panel.width, 550);
+  assert.equal(wide.panel.x, (1600 - 550) / 2);
+  // A short one: the height follows, and the card keeps its full height until the
+  // page has no room for it.
+  const portrait = computeMenuLayout({ width: 960, height: 1740 });
+  assert.equal(portrait.panel.height, 380);
+  assert.equal(portrait.panel.y, (1740 - 380) / 2);
+  const short = computeMenuLayout({ width: 960, height: 300 });
+  assert.equal(short.panel.height, 240);
+  assert.equal(short.panel.y, 30);
+  // Nothing has a negative size, which a canvas would paint as nothing at all.
+  for (const rect of [short.panel, short.start, short.lock]) {
+    assert.ok(rect.width >= 0 && rect.height >= 0, "a rect went negative");
+  }
+});
+
+test("a page with no box at all is laid out without a NaN", () => {
+  for (const view of [{ width: 0, height: 0 }, { width: 40, height: 40 }, { width: 960, height: 0 }]) {
+    const layout = computeMenuLayout(view);
+    const numbers = [layout.panel, layout.start, layout.lock, layout.lede, layout.title]
+      .flatMap((rect) => [rect.x, rect.y, rect.width ?? 0, rect.height ?? 0]);
+    assert.ok(numbers.every(Number.isFinite), `a NaN escaped the layout at ${JSON.stringify(view)}`);
+    assert.ok(layout.panel.width >= 0 && layout.panel.height >= 0, "a card went negative");
+  }
+});
+
+test("opening the home page paints the card its target comes from", () => {
+  const { page, canvas } = menuPageUnderTest();
+  assert.equal(page.lastFrame(), null, "a page that was never opened painted a frame");
+  page.setActive(true);
+  const frame = page.lastFrame();
+  assert.ok(frame, "opening the page painted nothing");
+  assert.deepEqual(frame.view, { width: 960, height: 592 });
+  assert.deepEqual(page.view, { width: 960, height: 592 });
+  // The backing store follows the CSS box at the device ratio, capped at 2.
+  const ratio = Math.min(globalThis.devicePixelRatio || 1, 2);
+  assert.equal(canvas.width, Math.round(960 * ratio));
+  assert.equal(canvas.height, Math.round(592 * ratio));
+  // Nothing is resting, so the button is drawn in the slot the layout gave it and
+  // the page has exactly one target.
+  assert.equal(frame.locked, false);
+  assert.deepEqual(frame.startRect, computeMenuLayout(page.view).start);
+  assert.equal(frame.title, translate("menu.title"));
+  assert.equal(frame.headline, null);
+  assert.equal(frame.detail, null);
+  assert.ok(frame.lede.length >= 1 && frame.lede.length <= 2, "the lede is not two lines or fewer");
+  page.setActive(false);
+});
+
+test("a tap on the painted 出征 starts the run once, and only on the button", () => {
+  const { page, canvas, starts } = menuPageUnderTest();
+  page.setActive(true);
+  const frame = page.lastFrame();
+
+  // The card around the button is not a target: pressing the middle of the card
+  // does nothing, which is what the mini game does too.
+  const card = menuPoint(frame.panel);
+  canvas.touch("pointerdown", { pointerId: 1, ...card });
+  canvas.touch("pointerup", { pointerId: 1, ...card });
+  assert.equal(starts.length, 0, "the card itself started a run");
+
+  const button = menuPoint(frame.startRect);
+  canvas.touch("pointerdown", { pointerId: 2, ...button });
+  canvas.touch("pointerup", { pointerId: 2, ...button });
+  assert.equal(starts.length, 1, "the tap on 出征 did not start the run");
+
+  // A second finger's release must not buy a second run: there is only one press.
+  canvas.touch("pointerup", { pointerId: 2, ...button });
+  assert.equal(starts.length, 1, "a released press fired twice");
+  page.setActive(false);
+});
+
+test("sliding off 出征 cancels the tap, and a press the card replaced never fires", () => {
+  let remaining = 0;
+  const lock = {
+    remainingMs: () => remaining,
+    summary: () => ({ name: "姬仇", stage: 4, score: 1234 }),
+  };
+  const { page, canvas, starts } = menuPageUnderTest({ lock });
+  page.setActive(true);
+  const button = menuPoint(page.lastFrame().startRect);
+
+  // A finger that travels more than the drag threshold is a scroll, not a tap.
+  canvas.touch("pointerdown", { pointerId: 1, ...button });
+  canvas.touch("pointermove", { pointerId: 1, clientX: button.clientX + 40, clientY: button.clientY });
+  canvas.touch("pointerup", { pointerId: 1, ...button });
+  assert.equal(starts.length, 0, "a drag across 出征 started the run");
+
+  // Pressing 出征 and then having the victory lock land under the finger: the next
+  // frame draws the resting card in that slot, and the release must not fire the
+  // button the player is no longer looking at.
+  canvas.touch("pointerdown", { pointerId: 2, ...button });
+  remaining = 90_000;
+  page.refresh();
+  assert.equal(page.lastFrame().locked, true, "the resting card was not painted");
+  canvas.touch("pointerup", { pointerId: 2, ...button });
+  assert.equal(starts.length, 0, "a release fired a button that had already gone");
+  page.setActive(false);
+});
+
+test("the resting card says how long, and what the last run was, and cannot be pressed", () => {
+  const last = { name: "姬仇", stage: 4, score: 1234 };
+  const live = countingLiveRegion();
+  const { page, canvas, starts } = menuPageUnderTest({ lock: stubVictoryLock(90_000, last), live });
+  page.setActive(true);
+  const frame = page.lastFrame();
+
+  assert.equal(frame.locked, true);
+  assert.equal(frame.headline, translate("menu.locked", { time: countdownLabel(90_000) }));
+  assert.equal(frame.detail, translate("menu.lockedLast", last));
+  // It stands where 出征 would be, one line taller than the button it replaced.
+  assert.deepEqual(frame.lockRect, computeMenuLayout(page.view).lock);
+  assert.equal(frame.lockRect.y, frame.startRect.y - 12);
+  assert.equal(frame.lockRect.height, frame.startRect.height + 24);
+  // A screen reader hears the countdown; the canvas itself is opaque.
+  assert.equal(live.textContent, `${frame.headline}. ${frame.detail}`);
+
+  // Nothing to press: the resting card registers no target anywhere in its rect.
+  for (const point of [menuPoint(frame.lockRect), menuPoint(frame.startRect)]) {
+    canvas.touch("pointerdown", { pointerId: 1, ...point });
+    canvas.touch("pointerup", { pointerId: 1, ...point });
+  }
+  assert.equal(starts.length, 0, "the resting card started a run");
+  page.setActive(false);
+});
+
+test("the countdown is announced once per change, and the card unlocks in place", () => {
+  let remaining = 90_000;
+  const lock = { remainingMs: () => remaining, summary: () => ({ name: "姬仇", stage: 4, score: 7 }) };
+  const live = countingLiveRegion();
+  const { page, canvas, starts } = menuPageUnderTest({ lock, live });
+  page.setActive(true);
+  assert.equal(live.writes, 1, "the first countdown was not announced");
+  const painted = page.lastFrame().headline;
+
+  // Sixty frames of the same second are not sixty announcements.
+  page.refresh();
+  page.refresh();
+  assert.equal(live.writes, 1, "the same countdown was announced again");
+  assert.equal(page.lastFrame().headline, painted);
+
+  remaining = 89_000;
+  page.refresh();
+  assert.equal(live.writes, 2, "a new countdown was not announced");
+  assert.notEqual(page.lastFrame().headline, painted);
+
+  // The rest runs out: the card becomes the button again, and the live region is
+  // cleared rather than left holding a countdown that is no longer true.
+  remaining = 0;
+  page.refresh();
+  const frame = page.lastFrame();
+  assert.equal(frame.locked, false);
+  assert.equal(frame.headline, null);
+  assert.equal(live.writes, 3);
+  assert.equal(live.textContent, "");
+
+  // ...and the slot is a button again, so a tap there starts the run.
+  const button = menuPoint(frame.startRect);
+  canvas.touch("pointerdown", { pointerId: 3, ...button });
+  canvas.touch("pointerup", { pointerId: 3, ...button });
+  assert.equal(starts.length, 1, "the unlocked button did not start the run");
+  page.setActive(false);
+});
+
+test("a language switch re-labels the card without reopening it", () => {
+  const previousDocument = globalThis.document;
+  globalThis.document = { documentElement: { lang: "" } };
+  try {
+    const { page } = menuPageUnderTest();
+    page.setActive(true);
+    const chinese = page.lastFrame();
+    assert.equal(chinese.title, "逐鹿中原");
+    assert.equal(setLocale("en"), "en");
+    page.refresh();
+    const english = page.lastFrame();
+    assert.equal(english.title, "Claim the Central Plains", "the canvas kept the old language");
+    assert.equal(english.lede.length, 2, "the English lede is not the two lines the card reserves");
+    assert.ok(english.lede.every((line) => translate("menu.lede").includes(line.replace(/\s+/g, " ").trim())
+      || translate("menu.lede").includes(line.trim())), "a lede line is not part of the copy");
+    page.setActive(false);
+    setLocale(defaultLocale);
+  } finally {
+    globalThis.document = previousDocument;
+  }
+});
+
+test("the focus proxy sits on the painted 出征 and leaves the page while the rest runs", () => {
+  const proxy = { hidden: true, disabled: true, style: {} };
+  let remaining = 0;
+  const lock = { remainingMs: () => remaining, summary: () => ({ name: "姬仇", stage: 2, score: 9 }) };
+  const { page, box } = menuPageUnderTest({ lock, proxy });
+  page.setActive(true);
+  const frame = page.lastFrame();
+
+  // Nothing in the page can be tabbed to that is not where the button is drawn.
+  assert.equal(proxy.hidden, false);
+  assert.equal(proxy.disabled, false);
+  assert.equal(proxy.style.left, `${frame.startRect.x}px`);
+  assert.equal(proxy.style.top, `${frame.startRect.y}px`);
+  assert.equal(proxy.style.width, `${frame.startRect.width}px`);
+  assert.equal(proxy.style.height, `${frame.startRect.height}px`);
+
+  // A narrower box scales the proxy with the canvas: the rect is in view units, the
+  // button is in CSS pixels.
+  box.width = 480;
+  box.height = 296;
+  page.resize();
+  assert.equal(proxy.style.left, `${frame.startRect.x / 2}px`);
+  assert.equal(proxy.style.width, `${frame.startRect.width / 2}px`);
+  assert.equal(proxy.style.height, `${frame.startRect.height / 2}px`);
+
+  // While the campaign rests there is nothing to press, so there is nothing to
+  // focus either: the proxy is hidden and disabled rather than left to fail.
+  remaining = 60_000;
+  page.refresh();
+  assert.equal(proxy.hidden, true);
+  assert.equal(proxy.disabled, true);
+  page.setActive(false);
+});
+
+test("a portrait page re-fits the card in its own space", () => {
+  const proxy = { hidden: false, disabled: false, style: {} };
+  const { page, canvas, box, starts } = menuPageUnderTest({ proxy });
+  page.setActive(true);
+  const landscape = page.lastFrame();
+
+  box.width = 420;
+  box.height = 760;
+  page.resize();
+  const portrait = page.lastFrame();
+  assert.notEqual(portrait, landscape, "the resize did not repaint");
+  // The width stays 960 - every rect is computed in that space - and the height
+  // grows with the element, so the card is centred in a taller page.
+  assert.equal(portrait.view.width, 960);
+  assert.equal(portrait.view.height, 960 * 760 / 420);
+  assert.equal(portrait.panel.height, 380);
+  assert.equal(portrait.panel.y, (portrait.view.height - 380) / 2);
+  const ratio = Math.min(globalThis.devicePixelRatio || 1, 2);
+  assert.equal(canvas.width, Math.round(420 * ratio));
+  assert.equal(canvas.height, Math.round(760 * ratio));
+  assert.equal(proxy.style.width, `${portrait.startRect.width * 420 / 960}px`);
+
+  // The button moved with the card and still starts the run where it is drawn.
+  const point = menuPoint(portrait.startRect);
+  canvas.touch("pointerdown", {
+    pointerId: 1, clientX: point.clientX * 420 / 960, clientY: point.clientY * 760 / portrait.view.height,
+  });
+  canvas.touch("pointerup", {
+    pointerId: 1, clientX: point.clientX * 420 / 960, clientY: point.clientY * 760 / portrait.view.height,
+  });
+  assert.equal(starts.length, 1, "the re-fitted button did not start the run");
   page.setActive(false);
 });
 
@@ -4120,18 +4438,27 @@ test("the story card grows a sixth line that names the last stage", () => {
   assert.equal(prologueLines(null, 12).length, 0, "no identity, no card");
 });
 
-test("index.html carries the victory card and the resting card", () => {
+test("index.html carries the victory card, and a menu whose 出征 is painted", () => {
   const html = readFileSync(new URL("../index.html", import.meta.url), "utf8");
   for (const id of ["victory-screen", "victory-eyebrow", "victory-title", "victory-subtitle",
-    "victory-stats", "victory-note", "victory-return", "menu-lock", "menu-lock-title",
-    "menu-lock-detail"]) {
+    "victory-stats", "victory-note", "victory-return"]) {
     assert.ok(html.includes(`id="${id}"`), `index.html is missing #${id}`);
   }
-  // Both cards are hidden in the markup: neither may flash before a run has
-  // earned it, and the victory card must not cover the menu at boot.
+  // The victory card is hidden in the markup: it may not flash before a run has
+  // earned it, and it must not cover the menu at boot.
   const victoryTag = html.match(/<div[^>]*id="victory-screen"[^>]*>/)?.[0] ?? "";
   assert.ok(victoryTag.includes("hidden"), `the victory card is not hidden at boot: ${victoryTag}`);
-  assert.match(html, /id="menu-lock"[^>]*hidden/, "the resting card is not hidden at boot");
+  // The home page is one canvas now: the resting card is painted on it, so what the
+  // page keeps is the canvas, the live region that announces the countdown, and the
+  // focus proxy that stands in for the painted 出征.
+  for (const id of ["menu-screen", "menu-canvas", "menu-live", "menu-start"]) {
+    assert.ok(html.includes(`id="${id}"`), `index.html is missing #${id}`);
+  }
+  assert.ok(!html.includes("menu-lock"), "the resting card is no longer DOM");
+  assert.match(html, /<canvas[^>]*id="menu-canvas"/, "the menu canvas is a canvas");
+  assert.match(html, /id="menu-start"[^>]*>[\s\S]*?data-i18n="menu.start"/,
+    "the focus proxy carries the button's label, so it has an accessible name");
+  assert.match(html, /class="menu-start-proxy"/, "the proxy is styled as a proxy, not as the old button");
 });
 
 test("?reset=1 reaches the launch query, and a bare launch is empty", () => {

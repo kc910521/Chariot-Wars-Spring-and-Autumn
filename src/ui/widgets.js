@@ -82,7 +82,7 @@ export function text(context, value, x, y, options = {}) {
 // The pager label and the price buttons are both drawn at a fixed size into a
 // rect that a phone may shrink, so the caller asks for the size instead of
 // guessing one.
-function fitTextSize(context, value, maxWidth, options = {}) {
+export function fitTextSize(context, value, maxWidth, options = {}) {
   const { size = 16, min = 9, weight = "normal", family } = options;
   const content = String(value);
   let candidate = size;

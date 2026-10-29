@@ -30,22 +30,19 @@
         </button>
       </header>
 
-      <section class="screen menu-screen" id="menu-screen">
-        <div class="menu-seal" data-i18n="menu.seal">车之战</div>
-        <p class="eyebrow"><span class="status-dot"></span><span data-i18n="menu.eyebrow">周室衰微 · 群雄并起</span></p>
-        <h1><span data-i18n="menu.title.first">逐鹿</span><span data-i18n="menu.title.second">中原</span></h1>
-        <p class="menu-lede"><span data-i18n="menu.lede.first">以战车为锋，刀戈为言。</span><br><span data-i18n="menu.lede.second">集结你的车队，在乱世中写下自己的篇章。</span></p>
-        <div class="menu-features">
-          <article><span aria-hidden="true">01</span><strong data-i18n="menu.feature.1.title">驰骋战场</strong><p data-i18n="menu.feature.1.copy">驾驶战车冲阵，以弩箭与车刺击退列国军队。</p></article>
-          <article><span aria-hidden="true">02</span><strong data-i18n="menu.feature.2.title">搜集战利</strong><p data-i18n="menu.feature.2.copy">拾取铜钱、银锭与金饼，补充军资。</p></article>
-          <article><span aria-hidden="true">03</span><strong data-i18n="menu.feature.3.title">整备再战</strong><p data-i18n="menu.feature.3.copy">调整战车属性、增购战马并招募车员，迎战新的随机战场。</p></article>
-        </div>
-        <button class="primary-action" id="menu-start" type="button"><span data-i18n="menu.start">击鼓出征</span><span aria-hidden="true">→</span></button>
-        <div class="lock-card" id="menu-lock" hidden aria-live="polite">
-          <strong class="lock-card-title" id="menu-lock-title"></strong>
-          <span class="lock-card-detail" id="menu-lock-detail"></span>
-        </div>
-        <p class="menu-footnote" data-i18n="controls.chariot">W / ↑ 地图向上 · S / ↓ 地图向下 · A D / ← → 转向并漂移 · 空格发弩</p>
+      <section class="screen menu-screen" id="menu-screen" aria-labelledby="menu-heading">
+        <!-- The card is one canvas (src/ui/menu.js); the heading stays in the page so
+             the section has a name a screen reader can announce. -->
+        <h1 class="sr-only" id="menu-heading" data-i18n="menu.title">逐鹿中原</h1>
+        <canvas id="menu-canvas" class="menu-canvas" data-i18n-aria-label="menu.aria" aria-label="首页：逐鹿中原。按「击鼓出征」开始新的战役。"></canvas>
+        <p class="sr-only" id="menu-live" role="status" aria-live="polite"></p>
+        <!-- 出征 is painted, so this is the keyboard's and the screen reader's copy of
+             it: invisible, never hit-tested, and moved onto the painted rect after
+             every frame. Enter and Space reach it through the same click listener the
+             DOM button had. -->
+        <button class="menu-start-proxy" id="menu-start" type="button">
+          <span data-i18n="menu.start">击鼓出征</span>
+        </button>
       </section>
 
       <section class="screen prologue-screen" id="prologue-screen" hidden aria-labelledby="prologue-name">

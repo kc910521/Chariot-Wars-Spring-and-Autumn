@@ -35,7 +35,7 @@ const cancelFrame = typeof globalThis.cancelAnimationFrame === "function"
 // lives exactly as long as the frame that drew it. `onOpen` runs each time the
 // page is shown, which is where a page resets whatever a previous visit left.
 export function createCanvasPage({
-  canvas, view, draw, actions = {}, onOpen = () => {}, liveRegion = null,
+  canvas, view, draw, actions = {}, onOpen = () => {}, onPaint = () => {}, liveRegion = null,
 }) {
   const context = canvas.getContext("2d");
   const targets = [];
@@ -85,6 +85,10 @@ export function createCanvasPage({
     if (!measure()) return;
     targets.length = 0;
     draw(context, input, actions);
+    // Anything the page draws that has to exist in the DOM as well - the home
+    // page's focus proxy is one - is positioned here, after the frame that decided
+    // where it belongs.
+    onPaint();
   }
 
   function frame(time) {

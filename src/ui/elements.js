@@ -20,13 +20,15 @@ const SELECTORS = {
   prologueTutorialButton: "#prologue-tutorial",
   battleScreen: "#battle-screen",
   shopScreen: "#shop-screen",
+  // 出征 is painted on the menu canvas, so this is the focus proxy the page keeps
+  // on the painted rect: Tab reaches it, Enter presses it, and the click listener
+  // in controls.js is the same one the DOM button had.
   menuStartButton: "#menu-start",
-  // The resting card that stands where 出征 would be while the post-victory lock
-  // is live: a headline with the countdown and a line about the run that earned
-  // it, and nothing to press.
-  menuLockElement: "#menu-lock",
-  menuLockTitleElement: "#menu-lock-title",
-  menuLockDetailElement: "#menu-lock-detail",
+  // The home page is one canvas too (src/ui/menu.js): the card, the resting
+  // countdown and the button are all painted, so the page only has to hand over
+  // the element to draw in and the live region that announces the countdown.
+  menuCanvas: "#menu-canvas",
+  menuLiveElement: "#menu-live",
   // The shop is one canvas: the dossier, the ledger and the next-battle button
   // are all painted on it (src/ui/shop.js), so the page only has to hand over the
   // element to draw in and the live region that announces a purchase.

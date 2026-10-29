@@ -399,11 +399,49 @@ function checkCamera(label) {
 }
 
 runFrames(3);
+
+// ---- the home page ----------------------------------------------------------
+// The menu is one canvas page now, like the shop below: the card, the resting
+// countdown and 出征 are painted, so the start is a tap on a rect the page drew.
+// The conversion is the router's, run in reverse.
+const menuCanvas = query("#menu-canvas");
+const menuPage = game.menuPage;
+const menuStartProxy = query("#menu-start");
+
+function menuPoint(rect) {
+  const box = menuCanvas.getBoundingClientRect();
+  return {
+    pointerId: 1,
+    clientX: box.left + ((rect.x + rect.width / 2) * box.width) / menuPage.view.width,
+    clientY: box.top + ((rect.y + rect.height / 2) * box.height) / menuPage.view.height,
+  };
+}
+
+function tapMenuStart() {
+  const point = menuPoint(menuPage.lastFrame().startRect);
+  menuCanvas.dispatch("pointerdown", point);
+  menuCanvas.dispatch("pointerup", point);
+}
+
+const bootFrame = menuPage.lastFrame();
+check("the home page painted its card", bootFrame !== null, "the menu canvas painted nothing");
+check("the card was opened unlocked", bootFrame?.locked === false, `locked=${bootFrame?.locked}`);
+check("the card draws the title, the seal and two lines of lede at most",
+  bootFrame.title === translate("menu.title") && bootFrame.lede.length >= 1 && bootFrame.lede.length <= 2,
+  `title="${bootFrame?.title}" lines=${bootFrame?.lede.length}`);
+// The keyboard's and the screen reader's copy of 出征 is not drawn on the canvas:
+// it is the invisible button the page moves onto the painted rect.
+check("the focus proxy is moved onto the painted 出征",
+  menuStartProxy.hidden === false
+    && menuStartProxy.style.left === `${bootFrame.startRect.x}px`
+    && menuStartProxy.style.top === `${bootFrame.startRect.y}px`,
+  `left=${menuStartProxy.style.left} top=${menuStartProxy.style.top} rect=${JSON.stringify(bootFrame.startRect)}`);
+
 // A new run names the player before the first battle, so the menu now opens the
 // story card rather than the battlefield. The name is rolled from the campaign's
 // stream, which createBattle() re-seeds below it: a seeded run is named the same
 // way on every reload, and the battle still draws from an untouched stream.
-query("#menu-start").dispatch("click");
+tapMenuStart();
 const identity = game.campaign.identity;
 check("menu start opens the prologue", query("#prologue-screen").hidden === false,
   `mode=${game.state.mode}`);
@@ -1237,28 +1275,40 @@ query("#victory-return").dispatch("click");
 runFrames(1);
 check("the card returns to the menu", game.state.mode === "menu", `mode=${game.state.mode}`);
 check("the menu rests instead of offering a new run",
-  query("#menu-lock").hidden === false && query("#menu-start").hidden === true,
-  `lockHidden=${query("#menu-lock").hidden} startHidden=${query("#menu-start").hidden}`);
-check("the resting card prints the countdown", query("#menu-lock-title").textContent
+  menuPage.lastFrame().locked === true && menuStartProxy.hidden === true,
+  `locked=${menuPage.lastFrame().locked} startHidden=${menuStartProxy.hidden}`);
+check("the resting card paints the countdown", menuPage.lastFrame().headline
   === translate("menu.locked", { time: countdownLabel(game.victoryLock.remainingMs()) }),
-  `title="${query("#menu-lock-title").textContent}"`);
-check("the resting card names the run that earned it", query("#menu-lock-detail").textContent
+  `headline="${menuPage.lastFrame().headline}"`);
+check("the resting card names the run that earned it", menuPage.lastFrame().detail
   === translate("menu.lockedLast", { name: identity.fullName, stage: finalStage, score: victoryScore }),
-  `detail="${query("#menu-lock-detail").textContent}"`);
+  `detail="${menuPage.lastFrame().detail}"`);
+// The canvas is opaque to a screen reader, so the one line that changes while the
+// card is up is mirrored into the live region.
+check("the resting countdown is announced", query("#menu-live").textContent.includes(
+  menuPage.lastFrame().headline), `live="${query("#menu-live").textContent}"`);
 
 // The card is not the gate: a start that arrives anyway must be refused, or a
 // stale keypress would open the prologue behind the rest.
 dispatchWindow("keydown", { key: "Enter" });
 runFrames(1);
 check("a start during the rest is refused", game.state.mode === "menu", `mode=${game.state.mode}`);
+// And the painted slot has no target at all: a tap where 出征 used to be does
+// nothing, which is what the resting card means. The refusal is synchronous -
+// there is no target to deliver the release to - so the tap needs no frame.
+const stalePoint = menuPoint(menuPage.lastFrame().startRect);
+menuCanvas.dispatch("pointerdown", stalePoint);
+menuCanvas.dispatch("pointerup", stalePoint);
+check("a tap where the button used to be does nothing", game.state.mode === "menu",
+  `mode=${game.state.mode}`);
 
 // Rewind the record instead of waiting out the window, then prove the menu opens
 // again: that is the whole life cycle, expiry included.
 game.victoryLock.reset();
 runFrames(1);
 check("a cleared or expired rest unlocks the menu",
-  query("#menu-lock").hidden === true && query("#menu-start").hidden === false,
-  `lockHidden=${query("#menu-lock").hidden} startHidden=${query("#menu-start").hidden}`);
+  menuPage.lastFrame().locked === false && menuStartProxy.hidden === false,
+  `locked=${menuPage.lastFrame().locked} startHidden=${menuStartProxy.hidden}`);
 dispatchWindow("keydown", { key: "Enter" });
 check("a run starts again once the rest is over", game.state.mode === "prologue",
   `mode=${game.state.mode}`);

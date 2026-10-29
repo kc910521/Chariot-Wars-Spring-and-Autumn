@@ -147,109 +147,52 @@ button {
   box-shadow: 0 0 12px rgba(210, 173, 104, 0.58);
 }
 
-h1 {
-  margin: 22px 0 14px;
-  font-family: "Noto Serif SC", "Songti SC", serif;
-  font-size: clamp(54px, 6vw, 76px);
-  font-weight: 700;
-  letter-spacing: -0.035em;
-  line-height: 0.82;
-  text-transform: uppercase;
-}
-
-h1 span {
-  color: #c75a42;
-}
-
+/* The home page is one page on one canvas, like the shop: the card, the resting
+   countdown and 出征 are painted (ui/menu.js, ui/menu-layout.js), so the section
+   only gives the canvas a height and the shape comes from the element's own aspect
+   ratio. */
 .menu-screen {
-  display: grid;
-  min-height: min(760px, calc(100vh - 128px));
-  align-content: center;
-  justify-items: start;
-  padding: 58px clamp(20px, 8vw, 110px);
-  border-bottom: 1px solid var(--line);
-  background:
-    radial-gradient(ellipse at 76% 50%, rgba(168, 68, 50, 0.1), transparent 46%),
-    linear-gradient(125deg, rgba(75, 53, 34, 0.18), transparent 66%);
+  position: relative;
 }
 
-.menu-seal {
-  display: grid;
-  width: 70px;
-  height: 70px;
-  place-items: center;
-  margin-bottom: 32px;
-  border: 2px solid #a94432;
-  color: #c45e45;
-  font-family: "Noto Serif SC", "Songti SC", serif;
-  font-size: 22px;
-  font-weight: 700;
-  writing-mode: vertical-rl;
-  box-shadow: inset 0 0 0 4px rgba(169, 68, 50, 0.12);
+.menu-canvas {
+  /* A short window still gets the whole card: the layout caps it at 380 units, and
+     the canvas is never given less room than that needs. */
+  height: max(540px, calc(100vh - 128px));
+  /* A drag across the card must read as a drag, never as a tap on 出征. */
+  touch-action: manipulation;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
-.menu-screen h1 {
-  margin: 22px 0 14px;
-  font-size: clamp(74px, 12vw, 132px);
-  line-height: 1.06;
-  letter-spacing: 0.06em;
+/* 出征 is painted, so Tab would have nothing to land on and a screen reader nothing
+   to press. This is the button the DOM menu used to own, kept invisible and moved
+   onto the painted rect after every frame: `pointer-events: none` keeps every tap on
+   the canvas so a press can never be delivered twice, and `:focus-visible` reveals
+   it, so a keyboard player sees the focus ring exactly where the button is drawn. */
+.menu-start-proxy {
+  position: absolute;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: transparent;
+  pointer-events: none;
 }
 
-.menu-screen h1 span {
-  margin-left: 0.8em;
+.menu-start-proxy:focus-visible {
+  border-color: var(--lime);
+  box-shadow: 0 0 0 3px rgba(210, 173, 104, 0.3);
+  outline: none;
 }
 
-[lang="en"] .menu-screen h1 {
-  font-size: clamp(48px, 8vw, 100px);
-  letter-spacing: -0.025em;
-  line-height: 0.98;
-}
-
-[lang="en"] .menu-screen h1 span {
-  display: block;
-  margin-left: 0;
-}
-
-.menu-lede {
-  margin: 15px 0 36px;
-  color: #b8a68a;
-  font-family: "Noto Serif SC", "Songti SC", serif;
-  font-size: 17px;
-  line-height: 1.9;
-}
-
-.menu-features {
-  display: grid;
-  width: min(860px, 100%);
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
-  margin-bottom: 30px;
-}
-
-.menu-features article {
-  min-height: 112px;
-  padding: 16px;
-  border: 1px solid var(--line);
-  background: rgba(39, 28, 20, 0.48);
-}
-
-.menu-features article > span {
-  float: right;
-  color: #a94432;
-  font-family: "Noto Serif SC", "Songti SC", serif;
-  font-size: 18px;
-}
-
-.menu-features strong {
-  font-family: "Noto Serif SC", "Songti SC", serif;
-  font-size: 15px;
-}
-
-.menu-features p {
-  margin: 9px 0 0;
-  color: #a69478;
-  font-size: 11px;
-  line-height: 1.65;
+/* The proxy is taken out of the page while the campaign rests, so it needs the same
+   rule the buttons the cards stand in for carry. */
+.menu-start-proxy[hidden],
+.primary-action[hidden],
+.secondary-action[hidden],
+.start-button[hidden] {
+  display: none;
 }
 
 .primary-action {
@@ -297,52 +240,6 @@ h1 span {
   transform: translateY(-2px);
   border-color: rgba(218, 169, 118, 0.8);
   background: rgba(58, 47, 36, 0.72);
-}
-
-.menu-footnote {
-  margin: 14px 0 0;
-  color: #8c785e;
-  font-family: "DM Mono", monospace;
-  font-size: 9px;
-  letter-spacing: 0.03em;
-}
-
-/* Where 出征 would be while the post-victory rest is running: the same width as
-   the button it replaces, but a card with a headline and a line about the run
-   that earned it, and nothing to press. */
-.lock-card {
-  display: grid;
-  gap: 6px;
-  width: min(270px, 100%);
-  padding: 12px 17px;
-  border: 1px solid var(--line);
-  background: rgba(58, 49, 38, 0.7);
-}
-
-/* The card is toggled with the `hidden` attribute, which the display rule above
-   would otherwise out-rank. `.primary-action` and `.start-button` set `display:
-   flex`, so the buttons the cards stand in for need the same rule: the resting
-   card hides 出征, and the defeat/victory cards hide the pause control. */
-.lock-card[hidden],
-.primary-action[hidden],
-.secondary-action[hidden],
-.start-button[hidden] {
-  display: none;
-}
-
-.lock-card-title {
-  color: var(--lime);
-  font-family: "Noto Serif SC", "Songti SC", serif;
-  font-size: 13px;
-  font-weight: 600;
-  letter-spacing: 0.01em;
-}
-
-.lock-card-detail {
-  color: #8c785e;
-  font-family: "DM Mono", monospace;
-  font-size: 9px;
-  letter-spacing: 0.03em;
 }
 
 /* The prologue is a story card, not a menu: one column, generous leading, and
@@ -886,19 +783,6 @@ canvas {
     letter-spacing: 0.04em;
     text-align: center;
   }
-
-  .menu-screen {
-    min-height: calc(100vh - 128px);
-    padding: 38px 8px;
-  }
-
-  .menu-features {
-    grid-template-columns: 1fr;
-  }
-
-  .menu-features article {
-    min-height: 82px;
-  }
 }
 
 @media (max-width: 560px) {
@@ -912,28 +796,6 @@ canvas {
 
   .topbar-note {
     display: none;
-  }
-
-  .menu-screen {
-    min-height: calc(100vh - 103px);
-    padding: 32px 0;
-  }
-
-  .menu-screen h1 {
-    font-size: 72px;
-  }
-
-  [lang="en"] .menu-screen h1 {
-    font-size: clamp(42px, 12vw, 62px);
-  }
-
-  .menu-lede {
-    font-size: 14px;
-  }
-
-  .menu-footnote {
-    font-size: 8px;
-    line-height: 1.8;
   }
 
   .game-layout {

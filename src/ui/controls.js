@@ -2,7 +2,7 @@ import { translate } from "../i18n/index.js";
 
 export function bindControls({
   state, keys, startRun, startTutorial, beginMission, restartStage, setMode,
-  resizeCanvas, resizeShop = () => {}, battleScreen, touchInput, endRun,
+  resizeCanvas, resizeShop = () => {}, resizeMenu = () => {}, battleScreen, touchInput, endRun,
   confirmTutorial = () => {}, elements,
 }) {
   const {
@@ -136,10 +136,11 @@ export function bindControls({
     updateTouchLayout();
     releaseJoystick();
     // Both canvases are measured from their own box: the battlefield's only while
-    // it is on screen, the shop page's whatever the mode (it is a no-op unless the
-    // page is open and drops its cached size either way).
+    // it is on screen, the pages' whatever the mode (a no-op unless the page is
+    // open, and it drops its cached size either way).
     if (!battleScreen.hidden) resizeCanvas();
     resizeShop();
+    resizeMenu();
   });
   updateTouchLayout();
 

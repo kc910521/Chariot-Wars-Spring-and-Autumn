@@ -21,6 +21,7 @@ import { createRenderer } from "../render/renderer.js";
 import { createHud } from "../ui/hud.js";
 import { bindControls } from "../ui/controls.js";
 import { createScreens } from "../ui/screens.js";
+import { createMenuPage } from "../ui/menu-page.js";
 import { createShopScreen } from "../ui/shop-screen.js";
 import { createStageManager } from "./stages.js";
 import { createVictoryLock } from "./victory-lock.js";
@@ -62,7 +63,7 @@ function boot() {
     prologueNameElement, prologueBirthElement, prologueNameLineElement, prologueClanElement,
     prologueGivenElement, prologueAmbitionElement, prologueFinalElement,
     prologueStartButton, prologueTutorialButton,
-    shopCanvas, shopLiveElement, scoreElement,
+    shopCanvas, shopLiveElement, menuCanvas, menuLiveElement, scoreElement,
     waveElement, goldElement, modeElement, hullLabelElement, hullValueElement, hullHealthElement,
     overlay, overlayEyebrow, overlayTitle, overlayCopy, overlayButton, startButton,
     startLabel, objectiveCountElement, objectiveProgressElement, objectiveLabelElement,
@@ -71,8 +72,7 @@ function boot() {
     touchJoystickElement, touchJoystickKnob, touchFireElement,
     bossWarningElement, bossWarningTitleElement, bossWarningSubtitleElement,
     victoryScreen, victoryEyebrow, victoryTitle, victorySubtitle, victoryStats, victoryNote,
-    victoryReturnButton, menuLockElement, menuLockTitleElement, menuLockDetailElement,
-    soundButton, soundIcon, fatalErrorReloadButton,
+    victoryReturnButton, soundButton, soundIcon, fatalErrorReloadButton,
   } = elements;
   const context = canvas.getContext("2d");
   // Read once here so no engine module has to know about `location` (or `wx`).
@@ -98,6 +98,17 @@ function boot() {
     equipmentShop,
     liveRegion: shopLiveElement,
     onNextBattle: () => rollForNextBattle(),
+  });
+  // The home page: one canvas with the card on it, and the one button the DOM menu
+  // used to own kept as an invisible focus proxy over the painted 出征, so Tab and a
+  // screen reader still reach it. `victoryLock` is read every frame, which is what
+  // makes the resting countdown tick without the battle loop writing the DOM.
+  const menuPage = createMenuPage({
+    canvas: menuCanvas,
+    victoryLock,
+    liveRegion: menuLiveElement,
+    startProxy: menuStartButton,
+    onStart: () => startRun(),
   });
   const updateHud = createHud({
     state,
@@ -132,14 +143,12 @@ function boot() {
   // The tutorial's card is canvas UI, not a DOM screen: the beat it introduces is
   // a pause of the field beneath it, so it paints in the same layer as the field.
   const tutorialOverlay = createTutorialOverlay({ context, view, state });
-  // The frame's draw: the field first, then the one number a DOM card has to keep
-  // live (the resting countdown on the menu). The screens are built below; the
-  // ref keeps this function callable during construction without a TDZ read.
-  const screensRef = { current: null };
+  // The frame's draw: the field, then the tutorial card that pauses it. Both pages
+  // - the shop and the home page - paint on their own canvases and their own clock,
+  // so nothing here has to keep a DOM card live.
   function draw() {
     renderer.draw();
     tutorialOverlay.draw();
-    screensRef.current?.paint();
   }
   // The tutorial arms itself on every entry into "running" (a battle opening, a
   // pause being dismissed, a tab regaining focus after a blur). The ref exists
@@ -151,21 +160,21 @@ function boot() {
     campaign,
     draw,
     victoryLock,
-    // The shop page runs on its own clock and must start and stop with the
+    // Both canvas pages run on their own clock and must start and stop with the
     // screen, not with the battle loop.
     onModeChange: (mode) => {
       shopPage.setActive(mode === "shop");
+      menuPage.setActive(mode === "menu");
       tutorialRef.current?.arm();
     },
     elements: {
       menuScreen, prologueScreen, battleScreen, shopScreen, victoryScreen, overlay, startLabel,
-      startButton, menuStartButton, menuLockElement, menuLockTitleElement, menuLockDetailElement,
+      startButton,
       overlayEyebrow, overlayTitle, overlayCopy, overlayButton,
       victoryEyebrow, victoryTitle, victorySubtitle, victoryStats, victoryNote, victoryReturnButton,
     },
   });
   const { setMode } = screens;
-  screensRef.current = screens;
 
   // The story card is painted, never rolled: `startRun()` below picks the name
   // and the length of the run, and a language switch only repaints this same
@@ -500,9 +509,11 @@ function boot() {
     restartStage,
     setMode,
     resizeCanvas,
-    // The shop page sizes its own canvas from the element's box, so it needs the
-    // same resize the battlefield gets - it is just never the battlefield's clock.
+    // Both pages size their own canvas from the element's box, so they need the
+    // same resize the battlefield gets - they are just never the battlefield's
+    // clock.
     resizeShop: () => shopPage.resize(),
+    resizeMenu: () => menuPage.resize(),
     battleScreen,
     touchInput,
     endRun,
@@ -528,10 +539,11 @@ function boot() {
     setLocale(elements.localeSelect.value);
     applyTranslations();
     controls.refreshLocale();
-    // The shop draws every label from the translator on each frame, so a language
-    // switch only has to get the page repainted - and it is only on screen, and so
-    // only painting, while the shop is open.
+    // The shop and the home page draw every label from the translator on each
+    // frame, so a language switch only has to get the pages repainted - and each is
+    // only on screen, and so only painting, while it is open.
     stageManager.refreshShop();
+    menuPage.refresh();
     // The prologue keeps the name it was shown with; only the story around it
     // is re-translated. updateHud() runs after applyTranslations() so the
     // objective label never flashes a raw {name} placeholder.
@@ -550,11 +562,12 @@ function boot() {
   // convention — gameplay code never reads from it. `combat` and `stageManager`
   // are on it so a harness can drive a real dismount and a real next battle
   // instead of reaching into module internals, `damageEnemy` for the same reason
-  // on the last stage's champion squad, and `victoryLock` so a test can rewind a
-  // record instead of waiting out the rest.
+  // on the last stage's champion squad, `victoryLock` so a test can rewind a
+  // record instead of waiting out the rest, and `menuPage` so it can press the
+  // painted 出征 without guessing where the card put it.
   globalThis.__h5game = {
     state, player, campaign, world, view, camera, combat, stageManager, equipmentShop, shopPage,
-    damageEnemy, victoryLock, tutorial, tutorialOverlay,
+    menuPage, damageEnemy, victoryLock, tutorial, tutorialOverlay,
   };
 
   startGameLoop({
