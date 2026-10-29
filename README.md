@@ -29,7 +29,7 @@ python3 -m http.server 8000     # 备选：使用系统自带 Python
 
 老虎是「野兽」而不是士兵：`src/data/wilds.js` 一行数据，走 `state.enemies` 同一条管线（移动、受伤、掉落、绘制都复用），另有两列是它独有的 —— `species`（同族互不攻击；正式战局的每一行都不写这一列，因此目标选择逐帧不变）与 `loot: "meat"`（掉落肉而非铜钱，拾取回 4 点耐久，且是唯一不掷随机数的掉落，野兽因此不会偏移播过种子的战场）。它没有 `formationId`，所以阵旗与阵型警报都跳过它；脑子是 `behaviours.js` 里的 `wild`：见到谁就冲谁，近身就咬，不会退。
 
-地图生成分两步：`map.js` 的 `rollBattlefield()` 只负责掷出一整张战场，`createBattlefield()` 再把这张战场交给场景自己的**地图检查**（`validate` 回调）—— 检查不通过就整张重掷（最多 12 次）。正式战局传 `null`（即「没有要求」的空白检查），因此 `?seed=` 的战场仍是原来那一张、连随机数消耗都不变；教学战传 `src/game/tutorial-map.js` 的检查，它问三件事：虎的落点周围 26px 无遮挡；从出生点到虎都有可走的通路；以及**从这张图上任何开得过去的位置**，演武阵线都找得到一整块无遮挡的落脚矩形（4×3 的格点采样，取不到的格点（被墙封死的地面）不参与要求）。这些判定都用 `src/game/reachability.js` 的 `buildWalkMap()`：以玩家体积在 60px 网格上做四邻洪泛（`isPathClear()` 只是它的一层薄包装），一次洪泛回答「这里能不能开过去」和「哪些地面算数」。虎是出生点的纯函数（车前 470px），所以检查与真正生成说的是同一块地；**阵线不是**——它在虎倒下时才列阵，落点是「当时战车所在位置」的纯函数：`findLineGround()` 从战车当前位置先试右下方 900px，再沿固定的方位 / 距离阶梯往外退（900 / 820 / 740 / 660 / 580 / 500 / 420），取第一块既无遮挡、又开得过去的地面，全程不掷骰子，因此同一张图、同一个站位永远得到同一条阵线。追着老虎跑到地图另一头的玩家不会被镜头拉回出生点，阵线会在自己身边列阵。
+地图生成分两步：`map.js` 的 `rollBattlefield()` 只负责掷出一整张战场，`createBattlefield()` 再把这张战场交给场景自己的**地图检查**（`validate` 回调）—— 检查不通过就整张重掷（最多 12 次）。正式战局传 `null`（即「没有要求」的空白检查），因此 `?seed=` 的战场仍是原来那一张、连随机数消耗都不变；教学战传 `src/game/tutorial-map.js` 的检查，它问三件事：虎的落点周围 26px 无遮挡；从出生点到虎都有可走的通路；以及**从这张图上任何开得过去的位置**，演武阵线都找得到一整块无遮挡的落脚矩形（4×3 的格点采样，取不到的格点（被墙封死的地面）不参与要求）。这些判定都用 `src/game/reachability.js` 的 `buildWalkMap()`：以玩家体积在 60px 网格上做四邻洪泛，一次洪泛回答「这里能不能开过去」和「哪些地面算数」。虎是出生点的纯函数（车前 470px），所以检查与真正生成说的是同一块地；**阵线不是**——它在虎倒下时才列阵，落点是「当时战车所在位置」的纯函数：`findLineGround()` 从战车当前位置先试右下方 900px，再沿固定的方位 / 距离阶梯往外退（900 / 820 / 740 / 660 / 580 / 500 / 420），取第一块既无遮挡、又开得过去的地面，全程不掷骰子，因此同一张图、同一个站位永远得到同一条阵线。追着老虎跑到地图另一头的玩家不会被镜头拉回出生点，阵线会在自己身边列阵。
 
 战场本身是「回」字形的四层环带，比例也是数据：`src/data/rings.js` 只写下 A/B/C/D 四条环带各占多少（默认 20/45/20/15），外加 `innermostSpan`——它说明中心带的那 20 是「中心到边的一半」还是「一条厚度」，两种读法差 560px 的中庭。`src/game/rings.js` 在每次开战时把这张表换算成像素几何（`ringAt()` 只需要一个 `t`：以中心为 0、以世界边缘为 1、取两轴中更大的那一个），掷地图、刷新点与将来的调试叠层都读同一份推导 —— 一张表、一处推导，没有第二处能跟它不一致。比例随时可改：改表即改下一战的地图，或者用 `?rings=10,40,30,20` 只为这一次启动换一组比例（任何正数刻度都行，函数会归一化）；比例和不为 1、或中心带留不下外侧三环时，`resolveRingHalves()` 直接抛错，而不是悄悄生成一张有洞的地图。
 
@@ -82,6 +82,7 @@ h5game/
 ├── index.html
 ├── README.md
 ├── scripts/
+│   ├── dom-stub.mjs              # The one browser global the gameplay modules read at import time, so the tests can load them
 │   ├── perf-test.mjs             # Frame-budget benchmark for the per-frame loops
 │   ├── smoke-test.mjs            # Boots main.js against a stub DOM: menu → prologue → battle → shop (hire a line) → defeat → the last stage → victory card → resting menu → the tiger drill
 │   └── unit-test.mjs             # Rules, collision, ballistics, bow aim, blood, RNG, naming, shop geometry, hired formations, the last stage, the post-victory rest and the tiger drill
@@ -164,8 +165,8 @@ h5game/
 │       ├── shop-dossier.js       # Left column: five-axis radar, the team, the crew tab's night camp
 │       ├── shop-scene.js         # The chariot rig and the camp fire, fitted into a rect
 │       ├── shop-layout.js        # Pure geometry: rows, radar axes, rig fit, camp seats
-│       ├── theme.js              # The shop's palette, radii and the three font stacks
-│       └── widgets.js            # Canvas primitives: panel, text, wrap, button, bar, hit test
+│       ├── theme.js              # The shop's palette, radii and the two font stacks
+│       └── widgets.js            # Canvas primitives: panel, text, wrap, button, fit, hit test
 └── assets/                       # Reserved for imported art, music, and sound effects
 ```
 
