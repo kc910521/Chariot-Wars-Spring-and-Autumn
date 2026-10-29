@@ -229,29 +229,15 @@ globalThis.window = {
     return preRenderQueue.length;
   },
   cancelAnimationFrame() {},
-  AudioContext: class {
-    constructor() {
-      this.currentTime = 0;
-      this.destination = {};
-    }
-
-    createOscillator() {
-      return {
-        type: "square",
-        frequency: { setValueAtTime() {} },
-        connect() {},
-        start() {},
-        stop() {},
-      };
-    }
-
-    createGain() {
-      return { gain: { setValueAtTime() {}, exponentialRampToValueAtTime() {} }, connect() {} };
-    }
-  },
 };
 
 globalThis.HTMLElement = class HTMLElement {};
+
+// Note what is deliberately NOT stubbed: `AudioContext` / `Audio` / `fetch`. The
+// sound player probes for a decoder (src/platform/audio.js) and goes silent, once,
+// when the host has none, which is what this harness has to prove: a battle must
+// run every frame with no audio device at all. It used to be faked here with a
+// createOscillator stub, which only existed to keep the old playTone() alive.
 
 // Browsers expose the frame source on the global object as well as on `window`,
 // and the loop deliberately resolves it from `globalThis` so one file can run

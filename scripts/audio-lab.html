@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>声音试听 · audio lab</title>
+    <style>
+      :root { color-scheme: dark; }
+      body {
+        margin: 0; padding: 24px 28px 64px;
+        background: #14110c; color: #e8dcc2;
+        font: 14px/1.55 -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+      }
+      h1 { margin: 0 0 4px; font-size: 20px; letter-spacing: 0.04em; }
+      h2 { margin: 32px 0 10px; font-size: 15px; color: #c9b184; font-weight: 600; }
+      p.hint { margin: 0 0 20px; color: #9a8d76; max-width: 68ch; }
+      code { color: #d8c48f; }
+      table { border-collapse: collapse; width: 100%; max-width: 1080px; }
+      th, td { text-align: left; padding: 5px 10px 5px 0; border-bottom: 1px solid #2a241b; vertical-align: top; }
+      th { color: #8e8272; font-weight: 500; font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; }
+      tr.borrowed td { background: rgba(120, 80, 30, 0.13); }
+      tr.bad td { background: rgba(150, 45, 30, 0.22); }
+      td.name { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: #f0e3c4; }
+      button {
+        background: #2b2419; color: #f0e3c4; border: 1px solid #4a3f2c;
+        border-radius: 6px; padding: 3px 11px; font: inherit; cursor: pointer;
+      }
+      button:hover { background: #3a3122; }
+      button:active { background: #4a3f2c; }
+      #bar {
+        position: sticky; top: 0; display: flex; gap: 10px; align-items: center;
+        background: #14110c; padding: 10px 0 12px; border-bottom: 1px solid #2a241b;
+      }
+      #state { color: #9a8d76; }
+    </style>
+  </head>
+  <body>
+    <h1>声音试听 · audio lab</h1>
+    <p class="hint">
+      每一行都是 <code>src/data/sounds.js</code> 里真实存在的一条：点「▶」听的就是游戏里会响那一下（含音量、随机取版本、限流）；
+      「原始」绕过混音直接播那个文件，用来比较替身。<br />
+      换替身的做法只有一个：改 <code>soundBorrowed</code> 里的一行（黄底的就是还没有专属音效、暂时借用的事件），
+      或者把新文件按 <code>&lt;cue&gt;_&lt;n&gt;.wav</code> 命名丢进 <code>src/assets/sound/</code>，再跑一次
+      <code>node scripts/transcode-audio.mjs</code>。<br />
+      「菜单 / 战场 / 首领 / 营地」是按真实声道起停背景乐，和游戏里同一条路径；上表 Status 显示
+      <code>paused</code> 就是被自动播放策略拦住了（不是文件缺失），按「解锁 / 恢复」接着放。
+    </p>
+    <div id="bar">
+      <button id="stop">全部停止</button>
+      <button id="unlock">解锁 / 恢复</button>
+      <button data-scene="menu">菜单</button>
+      <button data-scene="battle">战场</button>
+      <button data-scene="boss">首领</button>
+      <button data-scene="camp">营地</button>
+      <span id="state">正在初始化…</span>
+    </div>
+    <div id="out"></div>
+    <script type="module" src="./audio-lab.js"></script>
+  </body>
+</html>

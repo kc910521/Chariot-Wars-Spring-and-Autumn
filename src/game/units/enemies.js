@@ -1,5 +1,6 @@
 import { addBloodStain } from "../blood.js";
 import { campaignRules, effectRules } from "../../data/rules.js";
+import { soundCues, soundDeathCues } from "../../data/sounds.js";
 import { clamp, shortestAngleDifference } from "../../utils/math.js";
 import { rectHitsAnyObstacle, rectTerrain } from "../elements.js";
 import { spawnParticle } from "../particles.js";
@@ -57,7 +58,7 @@ function getChariotTravelSpeed(player) {
 export function createEnemies({
   bossTypes, enemyStats, wildAnimalStats = {}, formationPatterns, formationPresets = {}, state, player,
   world, campaign, random,
-  circleIntersectsObstacle, moveEntitySafely, getChariotCollisionDamage, playTone, updateHud,
+  circleIntersectsObstacle, moveEntitySafely, getChariotCollisionDamage, playSound, updateHud,
   hasLineOfSight, fireEnemy, damagePlayer, damageCompanion, damageAlly = () => {},
 }) {
   // `random` is late-bound by the caller so every gameplay roll (and the
@@ -497,7 +498,10 @@ export function createEnemies({
       }
       dropLoot(enemy);
       burst(enemy.x, enemy.y, enemy.deathBurst);
-      playTone(125, 0.12, "triangle", 0.03);
+      // The silhouette decides the death: a champion riding a chariot sounds like
+      // a chariot going, a foot soldier like a man going. `visual.kind` is the same
+      // field the renderer draws from, so the two can never disagree.
+      playSound(soundDeathCues[enemy.visual?.kind] ?? soundCues.footDied);
     } else {
       burst(enemy.x, enemy.y, "#e6c88d");
     }

@@ -2,6 +2,7 @@ import {
   calculateChariotStats, calculateCrewSlots, equipment, horses, personnel,
 } from "../data/equipment.js";
 import { formationConfig } from "../data/formations.js";
+import { soundCues, soundPurchaseCues } from "../data/sounds.js";
 import { translate } from "../i18n/index.js";
 import { drawDossier } from "./shop-dossier.js";
 import {
@@ -29,7 +30,7 @@ import { drawButton, panel, text, wrapText } from "./widgets.js";
 // not the battlefield's: the shop is a page, the battlefield is a camera, and
 // they resize independently.
 export function createShop({
-  campaign, equipmentShop, view, now = () => 0, onNotice = () => {},
+  campaign, equipmentShop, view, now = () => 0, onNotice = () => {}, playSound = () => {},
 }) {
   let category = "equipment";
   let page = 0;
@@ -43,6 +44,15 @@ export function createShop({
 
   function livingRoster() {
     return campaign.roster.filter((member) => member.alive !== false);
+  }
+
+  // A purchase sounds like its outcome: steel for a part, a shout for a body, and
+  // nothing at all for a refusal (the notice already says why). The cue is read
+  // from the data table by purchase type, the same key `purchaseItem` takes.
+  function buy(purchaseType, itemId) {
+    const result = equipmentShop.purchaseItem(purchaseType, itemId);
+    if (result?.ok) playSound(soundPurchaseCues[purchaseType] ?? soundCues.shopUpgrade);
+    return result;
   }
 
   // Every notice goes through here: the page prints it above the footer, and the
@@ -106,7 +116,7 @@ export function createShop({
           buy: resolveBuy({ price, gold, maxedKey: next ? null : "shop.full" }),
           info: itemInfo(item.id, item.nameKey, translate(item.descriptionKey)),
           preview: next ? { levels: { ...campaign.equipment, [item.id]: level + 1 }, horses: campaign.horseCount } : null,
-          action: () => equipmentShop.purchaseItem("equipment", item.id),
+          action: () => buy("equipment", item.id),
         };
       });
     }
@@ -124,7 +134,7 @@ export function createShop({
         buy: resolveBuy({ price, gold, maxedKey: next ? null : "shop.fullHorses" }),
         info: itemInfo("horse", "shop.horse", translate(horses.descriptionKey)),
         preview: next ? { levels: campaign.equipment, horses: next.count } : null,
-        action: () => equipmentShop.purchaseItem("horse"),
+        action: () => buy("horse"),
       }];
     }
     const slots = calculateCrewSlots(campaign.equipment);
@@ -149,7 +159,7 @@ export function createShop({
       // A recruit previews as an extra body on the hull - but only if the
       // chariot box has a slot left for him.
       preview: { levels: campaign.equipment, horses: campaign.horseCount, crew: crewAfterRecruit(member.id) },
-      action: () => equipmentShop.purchaseItem("personnel", member.id),
+      action: () => buy("personnel", member.id),
     }));
 
     // The hired line: a fixed-price formation bought for the run, capped at two.
@@ -185,7 +195,7 @@ export function createShop({
         horses: campaign.horseCount,
         campTents: Math.min(formationConfig.maxHires, hired + (formationFull ? 0 : 1)),
       },
-      action: () => equipmentShop.purchaseItem("formation"),
+      action: () => buy("formation"),
     });
     return rows;
   }

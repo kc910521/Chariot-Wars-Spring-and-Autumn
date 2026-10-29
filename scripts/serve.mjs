@@ -21,6 +21,7 @@ const contentTypes = {
   ".jpg": "image/jpeg",
   ".webp": "image/webp",
   ".mp3": "audio/mpeg",
+  ".wav": "audio/wav",
   ".ogg": "audio/ogg",
   ".woff2": "font/woff2",
 };

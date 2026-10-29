@@ -1,16 +1,18 @@
 import { calculateChariotStats, calculateProtectionChance, personnel } from "../data/equipment.js";
 import { projectileRules } from "../data/rules.js";
+import { soundBorrowed, soundCues } from "../data/sounds.js";
 import { translate } from "../i18n/index.js";
 import { distanceBetween } from "../utils/math.js";
 import { selectAimTarget } from "./aim.js";
 import { addBloodStain } from "./blood.js";
 
 // Player-side combat: chariot/foot attacks, crew, dismounted companions, and
-// the damage model. Screen transitions are delegated through `onDefeat` and
-// banner text through `announceBanner`, so this module never touches the DOM.
+// the damage model. Screen transitions are delegated through `onDefeat`, banner
+// text through `announceBanner` and sound through `playSound`, so this module
+// never touches the DOM or the audio device.
 export function createCombatSystem({
   state, player, campaign, collision, projectiles,
-  damageEnemy, addMeleeEffect, burst, playTone, updateHud,
+  damageEnemy, addMeleeEffect, burst, playSound, updateHud,
   announceBanner, onDefeat,
 }) {
   // Two releases share one button. While the button is down the bow is only
@@ -63,7 +65,9 @@ export function createCombatSystem({
         damageEnemy(target, 1);
         burst(target.x, target.y, "#d9bb79");
       }
-      playTone(target ? 180 : 250, 0.08, "triangle", 0.02);
+      // A whiff and a connect have to sound different: the swing is the chariot's
+      // own melee drop, the impact is the unit hit.
+      playSound(target ? soundCues.hitByMelee : soundCues.chariotMelee);
       return;
     }
     const rules = projectileRules.playerVolley;
@@ -78,9 +82,7 @@ export function createCombatSystem({
         hasLineOfSight: collision.hasLineOfSight,
       });
       // An empty cone still shoots: the tap loses its helper, not the arrow.
-      projectiles.firePlayerVolley(target
-        ? { aimX: target.x, aimY: target.y, tone: rules.tapTone }
-        : { tone: rules.tapTone });
+      projectiles.firePlayerVolley(target ? { aimX: target.x, aimY: target.y } : {});
       player.cooldown = rules.tapCooldown;
       return;
     }
@@ -182,7 +184,7 @@ export function createCombatSystem({
       titleText: translate("battle.dismounted"),
       subtitleText: translate("battle.crewFollow", { count: roster.length }),
       duration: 4.5,
-      tone: { frequency: 145, duration: 0.4, type: "sawtooth", volume: 0.035 },
+      cue: soundCues.chariotExit,
     });
     updateHud();
   }
@@ -256,7 +258,8 @@ export function createCombatSystem({
     if (player.mode === "chariot" && isRanged
       && campaign.random() < calculateProtectionChance(calculateChariotStats(campaign.equipment, campaign.horseCount))) {
       burst(player.x, player.y, "#d7c68a");
-      playTone(520, 0.06, "sine", 0.018);
+      // A deflected shot is a shield taking the arrow, not the hull.
+      playSound(soundBorrowed.playerBlocked);
       return;
     }
     const angle = Math.atan2(player.y - sourceY, player.x - sourceX);
@@ -268,12 +271,19 @@ export function createCombatSystem({
     player.knockbackY += Math.sin(angle) * 100;
     state.shake = Math.max(state.shake, 7);
     burst(player.x, player.y, "#d9a34f");
-    playTone(95, 0.18, "triangle", 0.04);
+    // What the player is riding decides the cue. The crash is the chariot's own
+    // hull - almost three seconds of splintering timber - and it is wrong twice
+    // over for a champion on foot: there is no hull, and a 3s cue outlives the
+    // 1.05s of invulnerability that follows it. On foot the hit gets one short
+    // impact instead, thin for an arrow and blunt for a blade.
+    if (player.mode === "chariot") playSound(soundCues.chariotCrash);
+    else playSound(isRanged ? soundCues.arrowHit : soundCues.hitByMelee);
     if (player.health === 0) {
       if (player.mode === "chariot") {
         burst(player.x, player.y, "#f0c46a");
         dismountPlayer();
       } else {
+        playSound(soundBorrowed.playerDied);
         updateHud();
         onDefeat();
         return;

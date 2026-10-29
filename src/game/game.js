@@ -1,6 +1,7 @@
 import { bossTypes, enemyStats, formationPatterns, formationPresets } from "../data/formations.js";
 import { calculateChariotCollisionDamage, hasMaxedAxleCap } from "../data/equipment.js";
 import { campaignRules, chariotArtRules } from "../data/rules.js";
+import { soundBorrowed, soundCadence, soundCues } from "../data/sounds.js";
 import { wildAnimalStats } from "../data/wilds.js";
 import { createAudio } from "../assets/audio.js";
 import { launchQuery } from "../platform/launch.js";
@@ -86,7 +87,53 @@ function boot() {
   // needs when walking the flow a second time in the same browser.
   const victoryLock = createVictoryLock();
   if (launchQuery().reset === "1") victoryLock.reset();
-  const playTone = createAudio(state).playTone;
+  // The sound player and the one function gameplay gets: `playSound(cue)`. Every
+  // caller names a cue from src/data/sounds.js, so no gameplay module knows a file
+  // name, a gain or a loop lane.
+  const audio = createAudio(state);
+  const playSound = (cue, options) => audio.play(cue, options);
+  // Browsers only start a context inside a gesture, so every press or key of the
+  // session unlocks it: the first one starts the context and the warm-up decode,
+  // and the rest hand back a music bed that opened on a later screen change and
+  // was refused in between (Safari does not retry on its own). Both calls are
+  // idempotent and cheap, so the listeners stay for the whole session rather than
+  // being removed after the first tap - removing them is what used to leave a bed
+  // silent for good.
+  const unlockAudio = () => audio.unlock();
+  window.addEventListener("pointerdown", unlockAudio);
+  window.addEventListener("keydown", unlockAudio);
+
+  // What the soundscape is: the screen, whether a champion is on the field, and
+  // whether the chariot is rolling. Idempotent and cheap, so the battle loop calls
+  // it every frame while a screen change calls it once.
+  function syncSoundscape() {
+    audio.setState({
+      mode: state.mode,
+      boss: state.bosses.length > 0,
+      moving: state.mode === "running" && player.mode === "chariot" && player.speed > 40,
+    });
+  }
+
+  // Footsteps are the one cue driven by distance walked rather than by an event, so
+  // they are measured here, where the frame's movement has already been applied.
+  // `soundCadence.footstepStride` is how far a step is; the five takes in the bank
+  // are what stop a stride from sounding like a metronome.
+  let strideCarry = 0;
+  let lastStepX = player.x;
+  let lastStepY = player.y;
+  function updateFootsteps() {
+    const moved = Math.hypot(player.x - lastStepX, player.y - lastStepY);
+    lastStepX = player.x;
+    lastStepY = player.y;
+    if (player.mode !== "foot" || state.mode !== "running") {
+      strideCarry = 0;
+      return;
+    }
+    strideCarry += moved;
+    if (strideCarry < soundCadence.footstepStride) return;
+    strideCarry = 0;
+    playSound(soundCues.footstep);
+  }
   // The shop page: one canvas, and the campaign's own purchase rules. The page
   // paints itself while it is open (its own frame clock, never the battle's) and
   // is handed the footer's "next battle" as a callback, because the stage manager
@@ -98,6 +145,7 @@ function boot() {
     equipmentShop,
     liveRegion: shopLiveElement,
     onNextBattle: () => rollForNextBattle(),
+    playSound,
   });
   // The home page: one canvas with the card on it, and the one button the DOM menu
   // used to own kept as an invisible focus proxy over the painted 出征, so Tab and a
@@ -166,6 +214,9 @@ function boot() {
       shopPage.setActive(mode === "shop");
       menuPage.setActive(mode === "menu");
       tutorialRef.current?.arm();
+      // The shop opening is what starts the campfire and the menu what silences
+      // the field, so the screen is the soundscape's trigger as well as its source.
+      syncSoundscape();
     },
     elements: {
       menuScreen, prologueScreen, battleScreen, shopScreen, victoryScreen, overlay, startLabel,
@@ -193,12 +244,12 @@ function boot() {
     state.bossWarningTimer = 0;
   }
 
-  function announceBanner({ titleText, subtitleText, duration, tone }) {
+  function announceBanner({ titleText, subtitleText, duration, cue }) {
     bossWarningTitleElement.textContent = titleText;
     bossWarningSubtitleElement.textContent = subtitleText;
     bossWarningElement.hidden = false;
     state.bossWarningTimer = duration;
-    if (tone) playTone(tone.frequency, tone.duration, tone.type, tone.volume);
+    if (cue) playSound(cue);
   }
   function announceBoss() {
     const [first] = state.bosses;
@@ -219,7 +270,8 @@ function boot() {
       }),
       subtitleText,
       duration: 5.5,
-      tone: { frequency: 190, duration: 0.5, type: "sawtooth", volume: 0.045 },
+      // TODO(sound): a real boss horn; the row is documented in soundBorrowed.
+      cue: soundBorrowed.bossWarning,
     });
   }
 
@@ -240,7 +292,7 @@ function boot() {
     circleIntersectsObstacle: collision.circleIntersectsObstacle,
     moveEntitySafely: collision.moveEntitySafely,
     getChariotCollisionDamage: () => calculateChariotCollisionDamage(campaign.equipment),
-    playTone, updateHud, hasLineOfSight: collision.hasLineOfSight,
+    playSound, updateHud, hasLineOfSight: collision.hasLineOfSight,
     fireEnemy: defer(() => projectileRef.current, "fireEnemyShot"),
     damagePlayer, damageCompanion, damageAlly,
   });
@@ -265,19 +317,19 @@ function boot() {
     circleIntersectsObstacle: collision.circleIntersectsObstacle,
     rectHitsAnyObstacle, rectTerrain,
     damageEnemy, fireAllyArrow: defer(() => projectileRef.current, "fireAllyArrow"),
-    addMeleeEffect, burst,
+    addMeleeEffect, burst, playSound,
   });
   alliesRef.current = allies;
 
   const projectiles = createProjectileSystem({
-    state, player, world, campaign, collision, burst, dust, playTone, damageEnemy,
+    state, player, world, campaign, collision, burst, dust, playSound, damageEnemy,
     damagePlayer, damageCompanion, damageAlly,
   });
   projectileRef.current = projectiles;
 
   const combat = createCombatSystem({
     state, player, campaign, collision, projectiles,
-    damageEnemy, addMeleeEffect, burst, playTone, updateHud,
+    damageEnemy, addMeleeEffect, burst, playSound, updateHud,
     announceBanner,
     onDefeat: () => {
       // A battle lost keeps none of its takings: the purse rolls back to what the
@@ -303,7 +355,7 @@ function boot() {
       // pale wood of the cut underneath it.
       burst(obstacle.x, obstacle.y, "#93a468");
       burst(obstacle.x, obstacle.y + 6, "#6f5436");
-      playTone(110, 0.24, "triangle", 0.05);
+      playSound(soundCues.treeFell);
       return;
     }
     if (obstacle && isFellable(obstacle)) obstacle.hitAt = state.elapsed;
@@ -339,7 +391,7 @@ function boot() {
   const stageManager = createStageManager({
     campaign, state, player, world, view, camera, shopScreen: shopPage, seedSource, ringSource,
     circleIntersectsObstacle: collision.circleIntersectsObstacle,
-    updateHud, setMode, spawnBoss, spawnBossSquad, announceBoss, resizeCanvas, playTone, hideBanner,
+    updateHud, setMode, spawnBoss, spawnBossSquad, announceBoss, resizeCanvas, playSound, hideBanner,
     spawnFriendlyAllies: allies.spawnFriendlyFormations,
     lockVictory: (summary) => victoryLock.lock(summary),
   });
@@ -400,6 +452,8 @@ function boot() {
     // the chariot coasts to a stop instead of the field freezing mid-stride.
     const frozen = state.tutorial?.frozen === true;
     readControls(delta, frozen);
+    updateFootsteps();
+    syncSoundscape();
     if (state.mode !== "running") return;
     tutorial.update(delta);
     if (state.tutorial?.frozen) {
@@ -458,7 +512,7 @@ function boot() {
           campaign.totalGold += drop.value;
         }
         drop.collected = true;
-        playTone(drop.type === "gold" ? 680 : 520, 0.1, "sine", 0.018);
+        playSound(drop.type === "gold" ? soundCues.coinPickup : soundCues.meatPickup);
       }
     }
     state.drops = state.drops.filter((drop) => !drop.collected && drop.life > 0);
@@ -480,7 +534,7 @@ function boot() {
     const nextWave = Math.floor(state.score / campaignRules.waveScoreStep) + 1;
     if (nextWave !== state.wave) {
       state.wave = nextWave;
-      playTone(520, 0.14, "sine", 0.025);
+      playSound(soundCues.waveUp);
     }
     updateHud();
     updateCamera({ player, world, view, camera, focus: state.cameraFocus }, delta);
@@ -520,6 +574,10 @@ function boot() {
     // The card is canvas UI, so "click the button" and "press Enter" are the same
     // call as far as the controls are concerned.
     confirmTutorial: () => tutorial.confirm(),
+    // The HUD's mute switch is the player's own: `state.sound` is what the player
+    // sees, and the player applies it immediately so the shop's campfire and the
+    // menu's ambience stop on the same tap.
+    onSoundToggle: (enabled) => audio.setEnabled(enabled),
     elements: {
       startButton, menuStartButton, prologueStartButton, prologueTutorialButton,
       overlayButton, victoryReturnButton, soundButton, soundIcon,

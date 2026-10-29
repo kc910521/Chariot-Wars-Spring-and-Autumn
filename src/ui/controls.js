@@ -3,7 +3,7 @@ import { translate } from "../i18n/index.js";
 export function bindControls({
   state, keys, startRun, startTutorial, beginMission, restartStage, setMode,
   resizeCanvas, resizeShop = () => {}, resizeMenu = () => {}, battleScreen, touchInput, endRun,
-  confirmTutorial = () => {}, elements,
+  confirmTutorial = () => {}, onSoundToggle = () => {}, elements,
 }) {
   const {
     startButton, menuStartButton, prologueStartButton, prologueTutorialButton,
@@ -81,6 +81,9 @@ export function bindControls({
     state.sound = !state.sound;
     soundIcon.textContent = state.sound ? "♫" : "♪";
     refreshSoundLabel();
+    // The player watches `state.sound` on its own, but the menu and the shop have
+    // no battle frame to notice the change on, so the toggle tells it directly.
+    onSoundToggle(state.sound);
   });
 
   function updateTouchLayout() {

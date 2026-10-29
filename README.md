@@ -75,6 +75,32 @@ python3 -m http.server 8000     # 备选：使用系统自带 Python
 
 冲撞步卒或弓手会将其撞倒，片刻后重新起身；重甲步卒可被撞倒，但不会受到车轮冲撞伤害，仍可被武器击伤。高速冲阵会以醒目的金色冲击特效刮伤敌军，并受到密集步卒反击。敌军刀剑与戈的近战攻击有不同的挥击特效，也会伤害车体；步卒会在攻击距离保持稳定，不再贴身前后抖动。战场上有轻薄、缓慢飘移的云影，画在最后一层（树冠、车身、血条都在它们之下），只靠透明度存在：整场之上飘过，从不遮挡任何东西。战马数量由购置决定，最多四匹，战马可见地随战车行进。敌方弓手、投石兵和弓车会在视线畅通时发射带抛物线的箭矢或石弹；墙木会遮挡低空弹道。战场上有浅滩、沙地和草地，分别会显著、中度和轻微减慢所有单位。步卒编队会护住后排远程单位，只在战车未进入阵型范围时保持阵线；战车一旦驶入阵型范围，整条阵线会一起压上来，追出有限的距离后收兵回位，不会无休止地追击，也不会被逐个引走。第 4、6、8… 战局会出现象兵、狮王馭者或投石车首领，首领战仍会持续刷新普通敌军；击败首领后前往撤离点。每一局还会在开战前抽定一个终局战局（第 10–13 之一），那一战必定是首领战：两头象兵、两头狮王馭者与四辆投石车同时结阵而来，且当战局标签改读「终局」，战绩栏的血条统计的是整支车队，而非某一位首领。八名首领全部倒下才开启撤离点；走到撤离点不再是开店，而是以凯旋卡结束这一局。受伤单位会在地面留下有限数量的血迹。战车遭受弩箭、战车冲撞或高速撞上障碍会损伤车体；耐久耗尽后下车继续作战。敌军会掉落铜钱、银锭或金饼，接触拾取；达成目标后，未拾取的战利也会在凯旋时收归军府。
 
+## 声音
+
+音效不是代码里合成出来的方波，而是 `src/assets/sound/` 下的真实素材，按**文件名**约定驱动：
+
+```text
+src/assets/sound/player/footstep_1.wav     # <cue>_<n>：同一个 cue 的多个版本，播放时轮转
+src/assets/sound/player/wave_up.wav        # <cue>：只有一条
+src/assets/sound/player/chariot_moving_loop.wav   # <cue>_loop：循环，直到被要求停下
+```
+
+`player/`、`units/`、`weapon/`、`ambient/` 只是给人看的分组，引擎只认文件名。新增一个版本丢进任意分组即可自动加入对应的 cue；新增一个**事件**才需要在 `src/data/sounds.js` 的 `soundCues` 里加一行。三层分工：
+
+- `src/data/sounds.js` 是唯一写着文件名的地方：`soundFiles`（31 个文件）、`soundCues`（26 个 cue 的语义名）、`soundMix`（每个 cue 的音量 / 同时发声上限 / 最小间隔）、`soundBorrowed`（还没有专属素材、暂时借用的事件，每行都带 `TODO(sound)`）、`soundDeathCues`（按 `visual.kind` 选死亡音）、`soundPurchaseCues`（按购买类型）、`soundscapes` 与 `resolveSoundscape()`（菜单 / 战局 / 首领战 / 夜营各响什么）、`soundCadence`（脚步每走 26px 一声）。
+- `src/assets/audio.js` 是播放决策，对外只有六个方法：`play(cue)`、`setState({ mode, boss, moving })`、`stop(lane?)`、`setEnabled(flag)`、`unlock()`、`inspect()`。它负责轮转换版本、限流、声道上限与循环声道（`ambience` / `motion` / `fire`）的交叉淡入淡出，并且**不消耗 `campaign.random()`**——所以加一个音效不会改变任何一场播种战局的走向。`inspect()` 只给试听页和测试用，返回每条声道的 `{ lane, cue, kind, paused, volume, at }`；`paused` 是浏览器真正有没有在放，这一条播放器自己看不出来，而一首被自动播放策略拦下的背景乐和一首正常播放的背景乐听起来都是「安静」。
+- `src/platform/audio.js` 是唯一提到 Web Audio 与 `<audio>` 的文件，负责解码缓存、上下文解锁（浏览器只允许在用户手势里启动音频）以及「这台机器根本没有解码器」时的静默降级；小游戏端只需在同一层实现这些方法。手势到达时被拦下的氛围声用 `resumeStream()` **原地续播**（位置、音量都保留），而不是停掉重开——重开会把 30 秒的背景乐每次都从 0:00 开始。`game.js` 因此保留整个会话的 `pointerdown` / `keydown` 监听：进入战局这种没有手势的换屏会让浏览器拒播，而下一次按键或点击才是把它接回来的时机。
+
+只有两条播放通道：短音效与两个短循环（战车滚动、篝火）走 `AudioBuffer`；两个 30 秒的战场氛围走 `<audio loop>` 流式播放，因为解码进内存每个要占约 11.5MB（`AudioBuffer` 是 32 位浮点），而流式播放几乎为 0。
+
+素材由 `node scripts/transcode-audio.mjs` 统一成 **22.05kHz / 16bit / 单声道 PCM WAV**：`decodeAudioData` 不需要任何编解码器（Chrome、Firefox、Safari、小游戏一致），PCM 没有编码器补白所以循环无接缝，单声道让解码内存减半。脚本还做两件事：把双声道**平均**下行混音（`afconvert -c 1` 只保留左声道，`wave_up` 左右差 3.3dB，直接丢掉右声道会变薄），以及把所有音效的峰值归一到 **-3 dBFS**（源素材从 0 dBFS 到 -27 dBFS 不等，不归一的话撤退点提示几乎听不见）、给 `_loop` 文件两端各加 8ms 淡入淡出（否则循环接缝会「咔」一声）。原始文件归档在 `assets/audio-source/`（已 gitignore），可以随时 `--force` 重转。整体体积 13.6MiB → 1.59MiB，加上两个氛围 mp3 共 **2.96MiB**；唯一超过 5 秒的 `player/victory_sounds.wav`（20.04 秒 96kHz，11.5MB）已删除，凯旋音暂时借用商店升级音，记在 `soundBorrowed.victory`。
+
+`ambient/` 是唯一不进这条管线的一组（两个 30 秒 mp3 直接流式播），所以也是唯一没人量过的一组——而一首空响的 mp3 结构完全合法。`node scripts/transcode-audio.mjs --levels` 就是补这个盲点：只读不写，把每个上架文件（含 `ambient/`）解码后打峰值与 RMS，比整组中位数还低 12dB 以上的点名。它现在的输出就是那个悬而未决的缺陷：`default_map_background_loop.mp3` 的 RMS 是 **-58 dBFS**（整组中位数 -26 dBFS，首领战那首 -25 dBFS），且 120Hz 以下没有任何能量——菜单与战局的氛围因此一直是静音，而这不是音量能修的，需要换回原导出文件。
+
+试听页：`node scripts/serve.mjs` 后打开 <http://localhost:8000/scripts/audio-lab.html>，逐条 cue 与逐个文件都能直接播（含混音与限流），挑替身不必靠猜。页首的声道表每 500ms 刷一次，`paused` 行标红；「菜单 / 战场 / 首领 / 营地」四个按钮按真实声道起停背景乐，和游戏里走同一条路径，所以「为什么听不到氛围」在那里一眼就有答案（是被拦了，还是文件本身就是空的）。迁移到别的引擎时用 `node scripts/export-audio-manifest.mjs --out audio.json` 导出同一份注册表（cue、文件、时长、音量、限流、仍借用的事件），不用再手写一份清单。
+
+小游戏分包时把 `src/assets/sound/ambient/`（1.4MiB）放进子包，主包只剩 1.6MiB 音效，仍在 4MB 门槛内。
+
 ## 项目结构
 
 ```text
@@ -82,7 +108,11 @@ h5game/
 ├── index.html
 ├── README.md
 ├── scripts/
+│   ├── audio-lab.html           # Audition page: every cue and every drop, played through the real player
+│   ├── audio-lab.js             # ... its wiring (open it via scripts/serve.mjs)
 │   ├── dom-stub.mjs              # The one browser global the gameplay modules read at import time, so the tests can load them
+│   ├── export-audio-manifest.mjs # The sound registry as JSON, for a port to another engine
+│   ├── transcode-audio.mjs       # The asset pipeline: 22.05 kHz / 16-bit / mono PCM, peak-normalised, loop edges sealed
 │   ├── perf-test.mjs             # Frame-budget benchmark for the per-frame loops
 │   ├── smoke-test.mjs            # Boots main.js against a stub DOM: menu → prologue → battle → shop (hire a line) → defeat → the last stage → victory card → resting menu → the tiger drill
 │   └── unit-test.mjs             # Rules, collision, ballistics, bow aim, blood, RNG, naming, shop geometry, hired formations, the last stage, the post-victory rest and the tiger drill
@@ -106,6 +136,7 @@ h5game/
 │   │   ├── formations.js         # Formation patterns, unit/boss stats, shared chariot morale and banner aura
 │   │   ├── names.js              # Frozen clan/given name tables (weights + story keys)
 │   │   ├── rules.js              # Balance constants for stats, projectiles, impact effects and campaign pacing
+│   │   ├── sounds.js             # The sound registry: files, cues, mix, death/purchase tables, soundscapes
 │   │   └── wilds.js              # Wild animals (the tiger): one row each, with `species` and `loot`
 │   ├── game/
 │   │   ├── game.js               # Composition root: wires systems and owns the frame loop
@@ -143,6 +174,7 @@ h5game/
 │   │   ├── tutorial-overlay.js   # The drill's canvas card: layout, hit test and paint
 │   │   └── renderer.js           # Canvas rendering for terrain, units, and effects
 │   ├── platform/
+│   │   ├── audio.js              # Host seam: the only file that names Web Audio / <audio>; decode cache, unlock, graceful silence
 │   │   ├── launch.js             # Host seam: `launchQuery()` reads `?seed=`, `?reset=1` and `?rings=` (小游戏 reads wx launch options)
 │   │   └── storage.js            # Storage facade over `window.localStorage`: JSON payloads, a cache, never throws at the game
 │   ├── assets/
@@ -152,7 +184,8 @@ h5game/
 │   │   ├── i18n/
 │   │   │   ├── zh-CN.json        # Simplified Chinese copy (one flat key per message)
 │   │   │   └── en.json           # English copy, key-for-key with zh-CN where translated
-│   │   └── audio.js              # Centralized sound playback
+│   │   ├── sound/                # The drops, named <cue>[_<n>][_loop].wav (pipeline: scripts/transcode-audio.mjs)
+│   │   └── audio.js              # The sound player: cues in, sound out (play/setState/stop/setEnabled/unlock)
 │   └── ui/
 │       ├── elements.js           # DOM element registry
 │       ├── controls.js           # Keyboard, touch, and screen event bindings
@@ -171,7 +204,7 @@ h5game/
 │       ├── shop-layout.js        # Pure geometry: rows, radar axes, rig fit, camp seats
 │       ├── theme.js              # The shop's palette, radii and the two font stacks
 │       └── widgets.js            # Canvas primitives: panel, text, wrap, button, fit, hit test
-└── assets/                       # Reserved for imported art, music, and sound effects
+└── assets/                       # Archived audio masters (assets/audio-source/, git-ignored)
 ```
 
 界面支持简体中文和英文，默认使用简体中文。文案按语言放在 `src/assets/i18n/zh-CN.json` 与 `src/assets/i18n/en.json`，每个文件是一张扁平 key 表；`src/i18n/locales.js` 只保留语言注册表与查找/回退规则（当前语言 → 默认语言 → key 本身），`src/i18n/index.js` 在启动时通过 ES 模块的 JSON 导入把这两份资源注册进去，并负责翻译、插值、静态 DOM 更新及语言偏好保存；语言切换不会重置战局。序章是这套规则的边界案例：姓名的两段汉字来自 `src/assets/clan/` 的数据表，任何语言下都原样显示，只有句式和名字由来走翻译 key（`prologue.*` 与 `namingStory.clan.reason.*` / `namingStory.given.reason.*`），并通过插值把姓名嵌进句子；切换语言只重绘同一张序章卡片，不会重新抽名。新增或修改界面文案时，需同时补齐两种语言，并使用稳定的翻译 key，避免在游戏规则或绘制逻辑中散落展示文字。公共纯逻辑仅在确有复用时抽取到职责明确的 `src/utils/` 模块。
@@ -183,6 +216,8 @@ find src scripts \( -name '*.js' -o -name '*.mjs' \) -print0 | xargs -0 -n1 node
 node scripts/unit-test.mjs                       # 规则、碰撞、弹道、血迹、相机、随机数、姓名抽取、商店几何、募兵、终局抽签与休战
 node scripts/smoke-test.mjs                      # 用 stub DOM 启动 main.js，跑战斗帧直到凯旋卡与休战后的菜单（含商店募兵与战场布阵）
 node scripts/perf-test.mjs                       # 逐帧性能预算：敌军 AI、随从齐射、下车随从、弹道
+node scripts/transcode-audio.mjs                 # 换过素材才需要：22.05kHz / 16bit / 单声道 + 峰值 -3dBFS + 循环收边
+node scripts/transcode-audio.mjs --levels         # 只读审计：逐个量峰值 / RMS（含 ambient/），低出整组中位数 12dB 以上的点名
 H5_SEED=7 node scripts/smoke-test.mjs            # 换一个随机种子复跑同一套冒烟检查
 ```
 

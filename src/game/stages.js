@@ -4,6 +4,7 @@ import {
 } from "../data/equipment.js";
 import { formationPresets } from "../data/formations.js";
 import { campaignRules } from "../data/rules.js";
+import { soundBorrowed, soundCues } from "../data/sounds.js";
 import { createRandomSeed, createSeededRandom } from "../utils/random.js";
 import { createBattlefield } from "./map.js";
 import { CHARIOT_CONTROL_CONFIG } from "./player.js";
@@ -20,7 +21,7 @@ export function pickFinalStage(random) {
 export function createStageManager({
   campaign, state, player, world, view, camera, shopScreen = null, seedSource = () => null,
   circleIntersectsObstacle, updateHud, setMode, spawnBoss, spawnBossSquad, announceBoss,
-  spawnFriendlyAllies = () => [], resizeCanvas, playTone, hideBanner, lockVictory = () => {},
+  spawnFriendlyAllies = () => [], resizeCanvas, playSound, hideBanner, lockVictory = () => {},
   ringSource = () => null,
 }) {
   // The 回 ratios for the whole run: the authored table in src/data/rings.js,
@@ -252,7 +253,8 @@ export function createStageManager({
     state.extractionPoint = chooseExtractionPoint();
     state.spawnTimer = Infinity;
     updateHud();
-    playTone(620, 0.2, "sine", 0.03);
+    // The extraction point appearing is the one "go there" cue of a battle.
+    playSound(soundCues.retreatPoint);
   }
 
   // The shop page is drawn from the campaign every frame it is open, so opening
@@ -288,7 +290,8 @@ export function createStageManager({
       score: state.score,
     });
     setMode("victory");
-    playTone(660, 0.3, "sine", 0.035);
+    // TODO(sound): a dedicated victory jingle; see soundBorrowed in data/sounds.js.
+    playSound(soundBorrowed.victory);
   }
 
   function rollForNextBattle() {

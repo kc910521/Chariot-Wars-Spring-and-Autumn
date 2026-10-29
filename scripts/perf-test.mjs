@@ -71,7 +71,7 @@ const enemies = createEnemies({
   circleIntersectsObstacle: collision.circleIntersectsObstacle,
   moveEntitySafely: collision.moveEntitySafely,
   getChariotCollisionDamage: () => 1,
-  playTone: noop,
+  playSound: noop,
   updateHud: noop,
   hasLineOfSight: collision.hasLineOfSight,
   fireEnemy: noop,
@@ -110,7 +110,7 @@ const combat = createCombatSystem({
   damageEnemy: noop,
   addMeleeEffect: noop,
   burst: noop,
-  playTone: noop,
+  playSound: noop,
   updateHud: noop,
   announceBanner: noop,
   onDefeat: noop,
@@ -127,7 +127,7 @@ campaign.roster = [
 
 const projectiles = createProjectileSystem({
   state, player, world, campaign, collision,
-  burst: noop, dust: noop, playTone: noop,
+  burst: noop, dust: noop, playSound: noop,
   damageEnemy: noop, damagePlayer: noop, damageCompanion: noop,
 });
 

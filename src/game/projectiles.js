@@ -1,5 +1,6 @@
 import { calculateArrowDamage, getPlayerArrowCount } from "../data/equipment.js";
 import { projectileRules } from "../data/rules.js";
+import { soundBorrowed, soundCues } from "../data/sounds.js";
 
 // Every projectile leaves the bow/hand at z = 8, so the arc has to be solved
 // from that height to know when it really touches the ground.
@@ -62,6 +63,7 @@ export function solveBallisticElevation(distance, speed, gravity = 420, launchHe
 export function updateProjectiles({
   state, world, player, delta, circleIntersectsObstacle,
   damageEnemy, damagePlayer, damageCompanion, damageAlly = () => {}, burst, dust = () => {},
+  playSound = () => {},
 }) {
   // Every way a shot can stop looks the same from the outside: an effect at the
   // impact point. Stones raise a dust cloud, arrows keep their small tinted puff.
@@ -95,6 +97,7 @@ export function updateProjectiles({
       if (projectile.z <= 0) {
         projectile.life = 0;
         spawnImpact(projectile, "#d1b77d");
+        playSound(projectile.kind === "stone" ? soundCues.stoneGround : soundCues.arrowGround);
         if (projectile.kind === "arrow") {
           state.groundArrows.push({
             x: projectile.x,
@@ -118,6 +121,7 @@ export function updateProjectiles({
       if (projectile.z < 22 && circleIntersectsObstacle(projectile.x, projectile.y, projectile.radius)) {
         projectile.life = 0;
         spawnImpact(projectile, "#a8a88a");
+        playSound(projectile.kind === "stone" ? soundCues.stoneGround : soundCues.arrowHit);
         break;
       }
 
@@ -139,6 +143,11 @@ export function updateProjectiles({
           if (target === player) damagePlayer(projectile.damage, projectile.x, projectile.y, true);
           else if (target.friendly) damageAlly(target, projectile.damage, projectile.x, projectile.y);
           else damageCompanion(target, projectile.damage, projectile.x, projectile.y);
+          // The player has his own cue for being hit (damagePlayer), so only a
+          // companion or an ally adds the impact on top.
+          if (target !== player) {
+            playSound(projectile.kind === "stone" ? soundBorrowed.stoneBodyHit : soundCues.arrowHit);
+          }
         }
       } else {
         const target = state.enemies.find((enemy) => !enemy.destroyed
@@ -147,6 +156,7 @@ export function updateProjectiles({
         if (target) {
           projectile.life = 0;
           damageEnemy(target, projectile.damage);
+          playSound(projectile.kind === "stone" ? soundBorrowed.stoneBodyHit : soundCues.arrowHit);
         }
       }
     }
@@ -158,14 +168,14 @@ export function updateProjectiles({
 // crew/companion arrows, enemy shots, and the per-frame integration. Callers
 // only say *what* should be fired; trajectory and balance live here.
 export function createProjectileSystem({
-  state, player, world, campaign, collision, burst, dust, playTone,
+  state, player, world, campaign, collision, burst, dust, playSound,
   damageEnemy, damagePlayer, damageCompanion, damageAlly = () => {},
 }) {
   // `aimX`/`aimY` mark a tapped shot: the fan turns onto that bearing and the
   // arc is solved for the distance instead of using the fixed elevation, so the
   // arrows come down on the target's ring rather than ~200px past it. Without an
   // aim point the fixed high arc stands, and that is the long shot.
-  function firePlayerVolley({ aimX = null, aimY = null, tone = null } = {}) {
+  function firePlayerVolley({ aimX = null, aimY = null } = {}) {
     const arrowCount = getPlayerArrowCount(campaign.equipment);
     const rules = projectileRules.playerVolley;
     const damage = calculateArrowDamage(campaign.equipment, campaign.horseCount);
@@ -194,7 +204,7 @@ export function createProjectileSystem({
         kind: "arrow",
       }));
     }
-    playTone(tone ?? rules.chargedTone, 0.09, "triangle", 0.018);
+    playSound(soundCues.chariotArrow);
   }
 
   function fireAllyArrow({
@@ -216,7 +226,10 @@ export function createProjectileSystem({
       damage,
       kind: "arrow",
     }));
-    playTone(390, 0.06, "sine", 0.01);
+    // One bow sound for the crew, the dismounted companions and the hired line:
+    // they all loose the same arrow, and `maxVoices` keeps a fan of them from
+    // stacking into a single louder shot.
+    playSound(soundCues.archerShoot);
   }
 
   function fireEnemyShot(enemy, angle, target = player) {
@@ -242,7 +255,9 @@ export function createProjectileSystem({
     }));
     enemy.shotCooldown = enemy.fireInterval
       ?? (isBossCatapult ? rules.catapultCooldown : rules.cooldownBase + campaign.random() * rules.cooldownJitter);
-    playTone(250, 0.11, "triangle", 0.012);
+    // A catapult throws a stone and an archer looses an arrow, so the shot tells
+    // the player what is in the air before it lands.
+    playSound(kind === "stone" ? soundCues.catapultShoot : soundCues.archerShoot);
   }
 
   function update(delta) {
@@ -258,6 +273,7 @@ export function createProjectileSystem({
       damageAlly,
       burst,
       dust,
+      playSound,
     });
   }
 

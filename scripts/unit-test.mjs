@@ -2,7 +2,7 @@
 // dependency. Usage: node scripts/unit-test.mjs
 import "./dom-stub.mjs";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 
 import {
   calculateArrowDamage, calculateChariotCollisionDamage, calculateChariotKit, calculateChariotStats,
@@ -73,6 +73,11 @@ import { setLocale, translate } from "../src/i18n/index.js";
 import { defaultLocale, hasTranslation, registerLocale, supportedLocales, translator } from "../src/i18n/locales.js";
 import { createStorage, localStorageDriver } from "../src/platform/storage.js";
 import { launchQuery } from "../src/platform/launch.js";
+import {
+  describeSoundFile, resolveSoundscape, soundBorrowed, soundCues, soundDeathCues, soundFiles, soundLimits,
+  soundMix, soundPurchaseCues, soundStreams, soundChannels,
+} from "../src/data/sounds.js";
+import { buildMixTable, createAudio, indexSoundFiles } from "../src/assets/audio.js";
 import { pickFinalStage } from "../src/game/stages.js";
 import {
   VICTORY_LOCK_KEY, VICTORY_LOCK_MINUTES, VICTORY_LOCK_MS, createVictoryLock, parseVictoryRecord,
@@ -86,6 +91,14 @@ function test(name, run) {
   run();
   passed += 1;
   console.log(`  ok   ${name}`);
+}
+
+// A few contracts can only be checked once a promise has settled - the sound
+// player answers with the decode it started - so those are collected here and
+// awaited in order at the very end, next to the sync ones' output.
+const asyncTests = [];
+function asyncTest(name, run) {
+  asyncTests.push({ name, run });
 }
 
 console.log("[unit] data rules");
@@ -1661,7 +1674,7 @@ function createTestProjectiles({ state, player, dust = () => {}, burst = () => {
     },
     burst,
     dust,
-    playTone: () => {},
+    playSound: () => {},
     damageEnemy: extras.damageEnemy ?? (() => {}),
     damagePlayer: extras.damagePlayer ?? (() => {}),
     damageCompanion: extras.damageCompanion ?? (() => {}),
@@ -1799,7 +1812,7 @@ test("dust particles carry their own lifetime and a palette that reads on grass"
     circleIntersectsObstacle: () => false,
     moveEntitySafely: () => {},
     getChariotCollisionDamage: () => 5,
-    playTone: () => {},
+    playSound: () => {},
     updateHud: () => {},
     hasLineOfSight: () => true,
     fireEnemy: () => {},
@@ -1993,7 +2006,7 @@ function crewRig({ roster = [], enemies = [], mode = "chariot" } = {}) {
     damageEnemy: (enemy, amount) => melee.push({ enemy, amount }),
     addMeleeEffect: () => {},
     burst: () => {},
-    playTone: () => {},
+    playSound: () => {},
     updateHud: () => {},
     announceBanner: () => {},
     onDefeat: () => {},
@@ -2106,11 +2119,13 @@ console.log("[unit] bow");
 // The chariot's bow is a two-stage control: press, draw, release. These tests
 // drive the real combat system through that sequence and read what the
 // projectile system was asked to do, instead of trusting the HUD.
-function bowRig({ mode = "chariot", enemies = [], lineOfSight = () => true } = {}) {
+function bowRig({ mode = "chariot", enemies = [], lineOfSight = () => true, random = () => 0.5 } = {}) {
   const volleys = [];
   const melee = [];
+  const sounds = [];
   const state = {
-    enemies, bullets: [], footCompanions: [], groundArrows: [], fireHold: 0, fireHeld: false,
+    enemies, bullets: [], footCompanions: [], groundArrows: [], bloodStains: [],
+    fireHold: 0, fireHeld: false,
   };
   const player = {
     mode, x: 100, y: 100, angle: 0, radius: 17, speed: 0, health: 40, maxHealth: 40,
@@ -2119,19 +2134,37 @@ function bowRig({ mode = "chariot", enemies = [], lineOfSight = () => true } = {
   const combat = createCombatSystem({
     state,
     player,
-    campaign: { roster: [], equipment: emptyEquipment(), horseCount: 1, random: () => 0.5 },
+    campaign: { roster: [], equipment: emptyEquipment(), horseCount: 1, random },
     collision: { hasLineOfSight: lineOfSight, moveEntitySafely: () => true },
     projectiles: { firePlayerVolley: (options = {}) => volleys.push(options) },
     damageEnemy: (enemy, amount) => melee.push({ enemy, amount }),
     addMeleeEffect: () => {},
     burst: () => {},
-    playTone: () => {},
+    playSound: (cue) => sounds.push(cue),
     updateHud: () => {},
     announceBanner: () => {},
     onDefeat: () => {},
   });
-  return { combat, state, player, volleys, melee };
+  return { combat, state, player, volleys, melee, sounds };
 }
+
+test("taking damage plays the cue for what was actually hit", () => {
+  // The chariot's crash is its own hull coming apart, and it runs 2.97s - longer
+  // than the 1.05s of invulnerability that follows any hit. A champion on foot has
+  // no hull, so the same cue there is wrong twice over; the body gets one short
+  // impact instead, thin for an arrow and blunt for a blade.
+  const mounted = bowRig({ random: () => 1 });
+  mounted.combat.damagePlayer(5, 400, 100, true);
+  assert.deepEqual(mounted.sounds, [soundCues.chariotCrash]);
+
+  const shotOnFoot = bowRig({ mode: "foot" });
+  shotOnFoot.combat.damagePlayer(5, 400, 100, true);
+  assert.deepEqual(shotOnFoot.sounds, [soundCues.arrowHit], "an on-foot arrow played the chariot's crash");
+
+  const bladeOnFoot = bowRig({ mode: "foot" });
+  bladeOnFoot.combat.damagePlayer(5, 140, 100, false);
+  assert.deepEqual(bladeOnFoot.sounds, [soundCues.hitByMelee], "an on-foot blade played the chariot's crash");
+});
 
 const tap = (combat) => {
   combat.updatePlayerFire(1 / 60, true);
@@ -2172,9 +2205,28 @@ test("a tap looses an aimed volley at the nearest enemy ahead", () => {
   assert.equal(rig.volleys.length, 1);
   assert.equal(rig.volleys[0].aimX, 205);
   assert.equal(rig.volleys[0].aimY, 96);
-  assert.equal(rig.volleys[0].tone, projectileRules.playerVolley.tapTone);
+  // A tap and a drawn shot loose the same volley and share one cue; the tap is
+  // told apart by its aim point and its shorter reload, not by its sound.
   assert.equal(rig.player.cooldown, projectileRules.playerVolley.tapCooldown);
   assert.equal(rig.state.fireHold, 0, "the draw has to reset on release");
+});
+
+test("a foot swing sounds different when it lands", () => {
+  // The swing and the impact were two different tones before; they are two
+  // different cues now, and a whiff has to stay audible without sounding like a
+  // connect.
+  const hit = bowRig({
+    mode: "foot",
+    enemies: [{ x: 130, y: 100, radius: 16, health: 5, destroyed: false }],
+  });
+  hit.combat.firePlayer();
+  assert.deepEqual(hit.melee.map((blow) => blow.amount), [1]);
+  assert.deepEqual(hit.sounds, [soundCues.hitByMelee]);
+
+  const whiff = bowRig({ mode: "foot", enemies: [] });
+  whiff.combat.firePlayer();
+  assert.deepEqual(whiff.sounds, [soundCues.chariotMelee]);
+  assert.deepEqual(whiff.melee, []);
 });
 
 test("a tap with an empty cone still shoots, just unassisted", () => {
@@ -2319,7 +2371,7 @@ function formationRig({ sight = { on: true }, seed = 11, obstacles = [], terrain
       entity.y = clamp(entity.y + dy, 0, world.height);
     },
     getChariotCollisionDamage: () => 5,
-    playTone: () => {},
+    playSound: () => {},
     updateHud: () => {},
     hasLineOfSight: () => sight.on,
     fireEnemy: () => {},
@@ -5471,6 +5523,409 @@ test("index.html puts the drill beside 出征 on the story card", () => {
   // target as well as at an extraction point.
   assert.ok(html.includes('id="extraction-guide-label"'), "the guide arrow has no caption element");
 });
+
+console.log("[unit] sound");
+
+test("a drop's file name is the routing key the engine reads", () => {
+  assert.deepEqual(describeSoundFile("player/chariot_arrow_shoot_2.wav"), {
+    file: "player/chariot_arrow_shoot_2.wav",
+    folder: "player",
+    cue: "chariot_arrow_shoot",
+    variant: 2,
+    loop: false,
+  });
+  assert.equal(describeSoundFile("player/footstep_1.wav").cue, "footstep");
+  assert.equal(describeSoundFile("player/chariot_moving_loop.wav").cue, "chariot_moving");
+  assert.equal(describeSoundFile("player/chariot_moving_loop.wav").loop, true);
+  assert.equal(describeSoundFile("weapon/stone_hit_to_ground.wav").cue, "stone_hit_to_ground");
+  // A stray drop still routes somewhere sensible instead of colliding with "".
+  assert.equal(describeSoundFile("units/Dragon Roar.wav").cue, "Dragon Roar");
+});
+
+test("every cue names a file, and every file is named by a cue", () => {
+  const banks = indexSoundFiles();
+  const byCue = [...banks.values()].map((bank) => bank.cue).sort();
+  const declared = Object.values(soundCues).sort();
+  assert.deepEqual(byCue, declared, "soundCues and soundFiles disagree");
+  for (const bank of banks.values()) {
+    const loops = bank.files.filter((file) => describeSoundFile(file).loop);
+    assert.ok(loops.length === 0 || loops.length === bank.files.length, `cue ${bank.cue} mixes loops and one-shots`);
+  }
+});
+
+test("a cue's takes are numbered from one and share one folder", () => {
+  for (const bank of indexSoundFiles().values()) {
+    const takes = bank.files.map((file) => describeSoundFile(file));
+    assert.equal(new Set(takes.map((take) => take.folder)).size, 1, `cue ${bank.cue} spans two folders`);
+    const numbered = takes.map((take) => take.variant).filter((variant) => variant > 0).sort((a, b) => a - b);
+    if (numbered.length > 0) {
+      assert.deepEqual(numbered, numbered.map((_, index) => index + 1), `cue ${bank.cue} skips a take number`);
+    }
+  }
+});
+
+test("every file the registry lists is on disk", () => {
+  // The suite also runs where the (multi-megabyte) assets were never checked out,
+  // so a missing directory is not a broken registry - a missing file among present
+  // ones is.
+  try {
+    readdirSync(new URL("../src/assets/sound", import.meta.url));
+  } catch {
+    console.log("  note: src/assets/sound is not checked out, file existence not asserted");
+    return;
+  }
+  const missing = [];
+  for (const file of soundFiles) {
+    try {
+      readFileSync(new URL(`../src/assets/sound/${file}`, import.meta.url));
+    } catch {
+      missing.push(file);
+    }
+  }
+  assert.deepEqual(missing, [], "the registry lists files that do not exist");
+});
+
+test("every borrowed cue is marked TODO and points at a real cue", () => {
+  const source = readFileSync(new URL("../src/data/sounds.js", import.meta.url), "utf8");
+  const block = source.slice(source.indexOf("export const soundBorrowed"), source.indexOf("export const soundMix"));
+  const rows = Object.keys(soundBorrowed);
+  assert.ok(rows.length > 0, "soundBorrowed is empty");
+  for (const row of rows) {
+    assert.ok(block.includes(`  ${row}:`), `soundBorrowed.${row} is not in the source block`);
+  }
+  // One TODO per stand-in, so a real drop cannot be added without the row being
+  // revisited: the count is the contract, not the wording.
+  const todos = block.match(/TODO\(sound\)/g) ?? [];
+  assert.ok(todos.length >= rows.length, `${rows.length} borrowed cues carry only ${todos.length} TODOs`);
+  const cues = new Set(Object.values(soundCues));
+  for (const [row, cue] of Object.entries(soundBorrowed)) {
+    assert.ok(cues.has(cue), `soundBorrowed.${row} points at "${cue}", which no file plays`);
+  }
+});
+
+test("the mix covers every cue it mentions and never silences one", () => {
+  const cueKeys = new Set(Object.keys(soundCues));
+  for (const [key, row] of Object.entries(soundMix)) {
+    assert.ok(cueKeys.has(key), `soundMix.${key} is not a cue in soundCues`);
+    assert.ok(row.gain > 0 && row.gain <= 1, `soundMix.${key}.gain is outside 0..1`);
+    if (row.maxVoices !== undefined) assert.ok(row.maxVoices >= 1);
+    if (row.minInterval !== undefined) assert.ok(row.minInterval >= 0);
+  }
+  // The engine keys its balance by cue id, so the table has to survive the swap.
+  const table = buildMixTable();
+  for (const [key, cue] of Object.entries(soundCues)) {
+    if (soundMix[key]) assert.equal(table.get(cue), soundMix[key]);
+  }
+  assert.ok(soundLimits.voices >= 8, "the voice ceiling is too low for a battle");
+});
+
+test("every silhouette in the unit tables has a death sound", () => {
+  const kinds = new Set();
+  for (const table of [enemyStats, bossTypes, wildAnimalStats]) {
+    for (const row of Object.values(table)) {
+      if (row?.visual?.kind) kinds.add(row.visual.kind);
+    }
+  }
+  assert.ok(kinds.size >= 5, "the unit tables lost their silhouettes");
+  for (const kind of kinds) {
+    assert.ok(soundDeathCues[kind], `no death cue for the "${kind}" silhouette`);
+    assert.ok(Object.values(soundCues).includes(soundDeathCues[kind]), `death cue for "${kind}" is not a file`);
+  }
+});
+
+test("every purchase the shop can make has a cue", () => {
+  for (const type of ["equipment", "horse", "personnel", "formation"]) {
+    assert.ok(soundPurchaseCues[type], `no purchase cue for "${type}"`);
+    assert.ok(Object.values(soundCues).includes(soundPurchaseCues[type]));
+  }
+});
+
+test("the soundscape follows the screen, the champion and the wheels", () => {
+  assert.deepEqual(resolveSoundscape({ mode: "menu" }), { name: "menu", layers: { ambience: soundCues.fieldAmbience } });
+  assert.equal(resolveSoundscape({ mode: "prologue" }).name, "menu");
+  assert.equal(resolveSoundscape({ mode: "running" }).name, "battle");
+  assert.deepEqual(resolveSoundscape({ mode: "running", boss: true }).layers, { ambience: soundCues.bossAmbience });
+  assert.equal(resolveSoundscape({ mode: "paused" }).name, "battle", "a pause keeps the field it paused");
+  assert.deepEqual(resolveSoundscape({ mode: "shop" }).layers, { fire: soundCues.campfire });
+  // The roll is a layer, not a screen: it appears with the wheels and never on a
+  // screen that has no field under it.
+  assert.equal(resolveSoundscape({ mode: "running", moving: true }).layers.motion, soundCues.chariotRolling);
+  assert.equal(resolveSoundscape({ mode: "shop", moving: true }).layers.motion, undefined);
+  assert.equal(resolveSoundscape({ mode: "menu", moving: true }).layers.motion, undefined);
+});
+
+test("the ambient beds are the only streamed files, and they are the long ones", () => {
+  for (const file of soundStreams) {
+    assert.ok(soundFiles.includes(file), `${file} is streamed but not registered`);
+    assert.ok(describeSoundFile(file).loop, `${file} is streamed but is not a loop`);
+    assert.ok(file.endsWith(".mp3"), `${file} would need a codec as PCM`);
+  }
+});
+
+test("no gameplay module names a file or reaches for the old tone stub", () => {
+  const offenders = [];
+  const cueKeys = new Set(Object.keys(soundCues));
+  const borrowedKeys = new Set(Object.keys(soundBorrowed));
+  for (const folder of ["game", "ui", "render", "i18n", "utils"]) {
+    for (const entry of readdirSync(new URL(`../src/${folder}`, import.meta.url), { recursive: true })) {
+      if (!entry.endsWith(".js")) continue;
+      const source = readFileSync(new URL(`../src/${folder}/${entry}`, import.meta.url), "utf8");
+      if (/playTone/.test(source)) offenders.push(`${folder}/${entry} calls playTone`);
+      if (/["'`][\w/-]+\.(wav|mp3)["'`]/.test(source)) offenders.push(`${folder}/${entry} names an audio file`);
+      // A cue nobody registered is silence at runtime, so the reference itself has
+      // to be checked: `soundCues.chariotArrows` would be `undefined` forever.
+      for (const [, key] of source.matchAll(/soundCues\.(\w+)/g)) {
+        if (!cueKeys.has(key)) offenders.push(`${folder}/${entry} reads soundCues.${key}, which does not exist`);
+      }
+      for (const [, key] of source.matchAll(/soundBorrowed\.(\w+)/g)) {
+        if (!borrowedKeys.has(key)) offenders.push(`${folder}/${entry} reads soundBorrowed.${key}, which does not exist`);
+      }
+    }
+  }
+  assert.deepEqual(offenders, [], "the cue registry is not the only place a sound is named");
+});
+
+// A device that records instead of playing: these tests are about the player's
+// decisions (which take, how often, which lane), not about the browser's mixer.
+function fakeDevice() {
+  const calls = { decoded: [], buffers: [], streams: [], stopped: [], resumed: [] };
+  const device = {
+    calls,
+    time: 0,
+    available: true,
+    hasStreams: true,
+    now: () => device.time,
+    unlock() { calls.unlocked = (calls.unlocked ?? 0) + 1; },
+    decode(url) {
+      calls.decoded.push(url);
+      return Promise.resolve({ url, duration: 1 });
+    },
+    startBuffer(buffer, options = {}) {
+      const voice = { buffer, ...options };
+      calls.buffers.push(voice);
+      return voice;
+    },
+    stopVoice(voice, fade) { calls.stopped.push({ voice, fade }); },
+    setVoiceGain() {},
+    // A stream opens paused, which is how the autoplay policy leaves a bed that was
+    // started outside a gesture. Only `resumeStream` starts it, so a test can tell
+    // "nobody resumed it" from "it was never opened at all".
+    startStream(url, options = {}) {
+      const element = { paused: true, currentTime: 0, volume: 0 };
+      const stream = { url, ...options, element };
+      calls.streams.push(stream);
+      return stream;
+    },
+    stopStream(stream, fade) {
+      calls.stopped.push({ stream, fade });
+      stream.element.paused = true;
+    },
+    resumeStream(stream) {
+      calls.resumed.push(stream);
+      stream.element.paused = false;
+      return true;
+    },
+    streamState(stream) {
+      return {
+        paused: stream.element.paused, at: stream.element.currentTime, volume: stream.element.volume,
+      };
+    },
+    setStreamGain(stream, gain, ramp) {
+      stream.gain = gain;
+      stream.ramp = ramp;
+      // A ramp ends on its target; the steps in between are the browser's business.
+      stream.element.volume = gain;
+    },
+  };
+  return device;
+}
+
+const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+const takeName = (url) => decodeURIComponent(url).split("/sound/")[1];
+
+asyncTest("the takes of a cue are played in turn, never drawn from the battle's seed", async () => {
+  const device = fakeDevice();
+  const audio = createAudio({ sound: true }, { device });
+  for (let shot = 0; shot < 3; shot += 1) {
+    device.time += 1;
+    // eslint-disable-next-line no-await-in-loop -- the order of the takes is the point
+    await audio.play(soundCues.chariotArrow);
+  }
+  assert.deepEqual(device.calls.decoded.map(takeName), [
+    "player/chariot_arrow_shoot_1.wav",
+    "player/chariot_arrow_shoot_2.wav",
+    "player/chariot_arrow_shoot_1.wav",
+  ]);
+  assert.equal(device.calls.buffers.length, 3);
+  assert.equal(device.calls.buffers[0].gain, soundMix.chariotArrow.gain);
+});
+
+asyncTest("a cue is rate limited and voice limited, so a volley stays legible", async () => {
+  const device = fakeDevice();
+  const audio = createAudio({ sound: true }, { device });
+  const cue = soundCues.footstep;
+  const { minInterval, maxVoices } = soundMix.footstep;
+
+  await audio.play(cue);
+  assert.equal(device.calls.buffers.length, 1);
+  device.time += minInterval / 2;
+  assert.equal(await audio.play(cue), null, "a repeat inside the interval slipped through");
+  device.time += minInterval;
+  await audio.play(cue);
+  assert.equal(device.calls.buffers.length, 2);
+  device.time += minInterval;
+  assert.equal(await audio.play(cue), null, `more than ${maxVoices} takes overlapped`);
+  // Past the takes' own length the slots free themselves: no timer, no leak.
+  device.time += 2;
+  await audio.play(cue);
+  assert.equal(device.calls.buffers.length, 3);
+});
+
+asyncTest("muting is silence, and unmuting restarts the lane that is already up", async () => {
+  const state = { sound: true };
+  const device = fakeDevice();
+  const audio = createAudio(state, { device });
+  audio.setState({ mode: "shop" });
+  await settle();
+  assert.deepEqual(audio.lanes(), ["fire"]);
+  assert.equal(device.calls.buffers[0].loop, true, "the campfire has to loop");
+
+  state.sound = false;
+  audio.setState({ mode: "shop" });
+  await settle();
+  assert.deepEqual(audio.lanes(), [], "a mute left a loop playing");
+  assert.equal(await audio.play(soundCues.coinPickup), null);
+  const decodedBefore = device.calls.decoded.length;
+  await audio.play(soundCues.coinPickup);
+  assert.equal(device.calls.decoded.length, decodedBefore, "a muted cue still fetched its file");
+
+  state.sound = true;
+  audio.setState({ mode: "shop" });
+  await settle();
+  assert.deepEqual(audio.lanes(), ["fire"]);
+});
+
+asyncTest("a screen change crossfades its own lane and leaves the others alone", async () => {
+  const device = fakeDevice();
+  const audio = createAudio({ sound: true }, { device });
+  audio.setState({ mode: "running", moving: true });
+  await settle();
+  assert.deepEqual(audio.lanes().sort(), ["ambience", "motion"]);
+  const streamsBefore = device.calls.streams.length;
+  const stoppedBefore = device.calls.stopped.length;
+
+  // The boss swap changes the ambience bed only: the wheels are still rolling, so
+  // their lane must not be cut.
+  audio.setState({ mode: "running", boss: true, moving: true });
+  await settle();
+  assert.equal(device.calls.streams.length, streamsBefore + 1);
+  assert.equal(takeName(device.calls.streams.at(-1).url), "ambient/boss_fight_map_background_loop.mp3");
+  assert.equal(device.calls.streams.at(-1).gain, soundMix.bossAmbience.gain);
+  const stopped = device.calls.stopped.slice(stoppedBefore);
+  assert.equal(stopped.length, 1, "the swap cut more than the bed it replaced");
+  assert.ok(stopped[0].stream, "the bed that was replaced was not the stream");
+  assert.equal(stopped[0].fade, soundChannels.ambience.fadeSeconds);
+
+  audio.stop();
+  assert.deepEqual(audio.lanes(), []);
+});
+
+asyncTest("the warm-up starts on unlock, once, and only where a decoder exists", async () => {
+  const device = fakeDevice();
+  const audio = createAudio({ sound: true }, { device });
+  // A bed opened before the first gesture is paused by the autoplay policy; unlock
+  // is what has to hand it back, in place, so a 30s bed does not restart at 0:00.
+  audio.setState({ mode: "running" });
+  await settle();
+  assert.equal(device.calls.streams.length, 1);
+  const bed = device.calls.streams.at(-1);
+  bed.element.currentTime = 7;
+
+  audio.unlock();
+  await settle();
+  assert.equal(device.calls.unlocked, 1);
+  assert.deepEqual(device.calls.resumed, [bed], "the ambience was never resumed on unlock");
+  assert.equal(device.calls.streams.length, 1, "unlock rebuilt the element instead of resuming it");
+  assert.equal(bed.element.currentTime, 7, "unlock restarted the bed from the beginning");
+  const decoded = device.calls.decoded.length;
+  assert.equal(decoded, soundFiles.length - soundStreams.length, "not every one-shot was warmed");
+  audio.unlock();
+  await settle();
+  assert.equal(device.calls.decoded.length, decoded, "a second unlock decoded everything again");
+  assert.equal(device.calls.resumed.length, 1, "a second unlock resumed a bed that was already playing");
+
+  // A host without a decoder must not queue a single fetch.
+  const silent = fakeDevice();
+  silent.available = false;
+  const quiet = createAudio({ sound: true }, { device: silent });
+  quiet.unlock();
+  await settle();
+  assert.deepEqual(silent.calls.decoded, []);
+});
+
+asyncTest("the next event hands back a bed the autoplay policy refused", async () => {
+  const device = fakeDevice();
+  const audio = createAudio({ sound: true }, { device });
+  // A screen change with no gesture behind it: the element opens and stays paused,
+  // which is what Safari does and never retries on its own.
+  audio.setState({ mode: "running" });
+  await settle();
+  const bed = device.calls.streams.at(-1);
+  assert.deepEqual(device.calls.resumed, []);
+
+  // In a real session the first gesture is usually a shot rather than the unlock
+  // handler, so an ordinary cue has to be enough to bring the music back.
+  await audio.play(soundCues.chariotArrow);
+  assert.deepEqual(device.calls.resumed, [bed], "a refused bed stayed refused after an event");
+  assert.equal(device.calls.streams.length, 1, "the bed was restarted instead of resumed");
+  // And a bed that is already playing must not be poked on every shot.
+  await audio.play(soundCues.chariotArrow);
+  assert.equal(device.calls.resumed.length, 1);
+});
+
+asyncTest("inspect tells a refused bed apart from a playing one", async () => {
+  const device = fakeDevice();
+  const audio = createAudio({ sound: true }, { device });
+  audio.setState({ mode: "running", moving: true });
+  await settle();
+
+  const lanes = audio.inspect();
+  assert.deepEqual(lanes.map((entry) => entry.lane).sort(), ["ambience", "motion"]);
+  const bed = lanes.find((entry) => entry.lane === "ambience");
+  assert.equal(bed.kind, "stream");
+  assert.equal(bed.cue, soundCues.fieldAmbience);
+  // The whole point of this call: a refused bed is silent, and only this says so.
+  assert.equal(bed.paused, true, "a refused bed read as playing");
+  const wheels = lanes.find((entry) => entry.lane === "motion");
+  assert.equal(wheels.kind, "buffer");
+  assert.equal(wheels.paused, false);
+  assert.equal(wheels.at, null, "a decoded loop has no playback position to report");
+
+  audio.unlock();
+  assert.equal(audio.inspect().find((entry) => entry.lane === "ambience").paused, false);
+  audio.stop();
+  assert.deepEqual(audio.inspect(), [], "a stop left a lane behind");
+});
+
+asyncTest("a stop is silence until the next scene is announced, even the same one", async () => {
+  const device = fakeDevice();
+  const audio = createAudio({ sound: true }, { device });
+  audio.setState({ mode: "running" });
+  await settle();
+  audio.stop();
+  assert.deepEqual(audio.lanes(), []);
+  // A battle re-announces its scene every frame, so a stop has to forget the scene
+  // key it deduplicates on - otherwise one stop would silence the run for good.
+  audio.setState({ mode: "running" });
+  await settle();
+  assert.deepEqual(audio.lanes(), ["ambience"], "the same screen stayed silent after a stop");
+});
+
+for (const { name, run } of asyncTests) {
+  await run();
+  passed += 1;
+  console.log(`  ok   ${name}`);
+}
 
 console.log(`\n[unit] PASS (${passed} checks)`);
 

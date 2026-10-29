@@ -1,4 +1,5 @@
 import { enemyStats, formationConfig } from "../../data/formations.js";
+import { soundBorrowed, soundCues } from "../../data/sounds.js";
 import { clamp } from "../../utils/math.js";
 import { addBloodStain } from "../blood.js";
 import { formationExtent, formationGroundExtent, isInsideFormation, layoutSlots, tickFormationAura } from "./formations.js";
@@ -53,7 +54,7 @@ export function createAllies({
   state, player, world, campaign,
   moveEntitySafely, hasLineOfSight, circleIntersectsObstacle,
   rectHitsAnyObstacle, rectTerrain,
-  damageEnemy, fireAllyArrow, addMeleeEffect, burst,
+  damageEnemy, fireAllyArrow, addMeleeEffect, burst, playSound = () => {},
 }) {
   const { engage, chariot: chariotConfig } = formationConfig;
 
@@ -289,6 +290,9 @@ export function createAllies({
     if (ally.health === 0) {
       ally.destroyed = true;
       burst(ally.x, ally.y, formationConfig.visual.deathBurst);
+      // A hired vehicle goes down like a chariot, a man like a man. Both are
+      // borrowed cues until the line has deaths of its own.
+      playSound(ally.vehicle ? soundBorrowed.chariotDied : soundBorrowed.friendlyDied);
     }
   }
 

@@ -13,7 +13,7 @@ import { createShop } from "./shop.js";
 // aspect ratio makes it) and knows nothing about a device; the host owns the one
 // browser-shaped concern - pixels.
 export function createShopScreen({
-  canvas, campaign, equipmentShop, onNextBattle = () => {}, liveRegion = null,
+  canvas, campaign, equipmentShop, onNextBattle = () => {}, liveRegion = null, playSound = () => {},
 }) {
   // The page's own logical space, shared with the painter: the host rewrites
   // `height` on every measure and the layout maths reads it back.
@@ -29,6 +29,7 @@ export function createShopScreen({
     view,
     now: () => pageRef.current?.now() ?? 0,
     onNotice: (message) => pageRef.current?.announce(message),
+    playSound,
   });
 
   const page = createCanvasPage({
