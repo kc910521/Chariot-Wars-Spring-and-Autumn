@@ -82,7 +82,7 @@ export function text(context, value, x, y, options = {}) {
 // The pager label and the price buttons are both drawn at a fixed size into a
 // rect that a phone may shrink, so the caller asks for the size instead of
 // guessing one.
-export function fitTextSize(context, value, maxWidth, options = {}) {
+function fitTextSize(context, value, maxWidth, options = {}) {
   const { size = 16, min = 9, weight = "normal", family } = options;
   const content = String(value);
   let candidate = size;
@@ -117,34 +117,7 @@ export function drawButton(context, rect, label, options = {}) {
   });
 }
 
-export function drawBar(context, rect, ratio, options = {}) {
-  const {
-    track = "rgba(20, 16, 12, 0.72)",
-    fill = COLORS.health,
-    radius = rect.height / 2,
-  } = options;
-  panel(context, rect.x, rect.y, rect.width, rect.height, { fill: track, stroke: COLORS.line, radius });
-  const clamped = Math.max(0, Math.min(1, ratio));
-  if (clamped <= 0) return;
-  const width = Math.max(radius * 2, rect.width * clamped);
-  roundRectPath(context, rect.x, rect.y, width, rect.height, radius);
-  context.fillStyle = fill;
-  context.fill();
-}
-
 export function contains(rect, x, y) {
   return x >= rect.x && x <= rect.x + rect.width && y >= rect.y && y <= rect.y + rect.height;
 }
 
-// Dashed separator, used between shop rows.
-export function divider(context, x, y, width, color = COLORS.line) {
-  context.save();
-  context.strokeStyle = color;
-  context.lineWidth = 1;
-  context.setLineDash([4, 5]);
-  context.beginPath();
-  context.moveTo(x, y);
-  context.lineTo(x + width, y);
-  context.stroke();
-  context.restore();
-}

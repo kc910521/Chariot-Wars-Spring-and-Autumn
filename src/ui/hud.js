@@ -29,7 +29,7 @@ export function createHud({
       scoreElement, waveElement, goldElement, modeElement, hullLabelElement, hullValueElement,
       hullHealthElement, objectiveCountElement, objectiveProgressElement, objectiveLabelElement,
       extractionGuideElement, extractionArrowElement, extractionDistanceElement, guideLabelElement,
-      touchPadElement, touchHintElement, touchControlsElement,
+      touchPadElement, touchHintElement,
     } = elements;
     const onFoot = player.mode === "foot";
     const locale = getLocale();
@@ -44,7 +44,6 @@ export function createHud({
     modeElement.classList.toggle("on-foot", onFoot);
     hullLabelElement.textContent = translate(onFoot ? "battle.footHealth" : "battle.hull");
     if (lastFootMode !== onFoot || lastLocale !== locale) {
-      touchControlsElement.classList.toggle("foot-phase", onFoot);
       touchPadElement.setAttribute("aria-label", translate(onFoot ? "battle.touchFootDirection" : "battle.touchDirection"));
       touchHintElement.textContent = translate(onFoot ? "battle.touchHintFoot" : "battle.touchHint");
       lastFootMode = onFoot;

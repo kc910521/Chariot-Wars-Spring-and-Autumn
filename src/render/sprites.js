@@ -7,11 +7,9 @@
 // Extending the look: add a branch here, or an overlay in the tables below, and
 // every consumer (battlefield, shop, camp) picks it up in the same commit.
 
-export const CHARIOT_RIG_BASE_SCALE = 1.2;
-
-// Where the chassis pieces sit in the rig's local space. The box above and the
-// painter below read the same constants, so a moved wheel cannot silently escape
-// the fit-to-box the shop scales into.
+// Where the chassis pieces sit in the rig's local space: the painter below reads
+// these constants, and the shop's fit-to-box scales the whole group, so a moved
+// wheel cannot silently escape the preview's box.
 const WHEEL_X = -5;
 const WHEEL_Y = 13;
 const WHEEL_RADIUS = 9;

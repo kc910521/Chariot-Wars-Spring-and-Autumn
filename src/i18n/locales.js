@@ -69,12 +69,3 @@ export function hasTranslation(locale, key) {
   const table = resources.get(locale);
   return Boolean(table && key in table);
 }
-
-/** All keys present in any registered table — useful for completeness tests. */
-export function allKeys() {
-  const keys = new Set();
-  for (const table of resources.values()) {
-    for (const key of Object.keys(table)) keys.add(key);
-  }
-  return [...keys];
-}

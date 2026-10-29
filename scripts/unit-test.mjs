@@ -19,13 +19,13 @@ import { createCollisionSystem } from "../src/game/collision.js";
 import { createCombatSystem } from "../src/game/combat.js";
 import { cloudKinds, elementRules, groundVisual, obstacleKinds, terrainKinds } from "../src/data/elements.js";
 import {
-  clearsSight, cloudDrift, elementBoundingRadius, elementCullMargin, elementGap, elementIntersects,
+  clearsSight, cloudDrift, elementBoundingRadius, elementCullMargin, elementIntersects,
   elementSpeedAt, fellTree, isFellable, obstacleShape, rectHitsAnyObstacle, rectTerrain,
 } from "../src/game/elements.js";
 import { createBattlefield } from "../src/game/map.js";
 import { bandsFromShares, createRingLayout, resolveRingHalves, ringLayoutFromShares } from "../src/game/rings.js";
 import { parseRingShares, ringRules } from "../src/data/rings.js";
-import { isPathClear } from "../src/game/reachability.js";
+import { buildWalkMap } from "../src/game/reachability.js";
 import { createTutorial } from "../src/game/tutorial.js";
 import {
   LINE_DISTANCES, TUTORIAL_LAYOUT, createTutorialMapCheck, findLineGround, lineGroundExtent, planTigerGround,
@@ -60,7 +60,7 @@ import { clamp, shortestAngleDifference } from "../src/utils/math.js";
 import { createRandomSeed, createSeededRandom, parseSeed } from "../src/utils/random.js";
 import { updateCamera } from "../src/render/camera.js";
 import {
-  campSeats, crewBanner, projectRigBox, radarGeometry, radarPoint, radarPolygon, rigPreview,
+  campSeats, radarGeometry, radarPoint, radarPolygon, rigPreview,
   roleFigure, rowsPerPageFor, statKeys, statLabelKeys,
 } from "../src/ui/shop-layout.js";
 import { drawCamp, drawRig } from "../src/ui/shop-scene.js";
@@ -1322,8 +1322,6 @@ test("spacing helpers measure between silhouettes, not between anchors", () => {
   const wall = { type: "wall", x: 100, y: 0, width: 60, height: 28 };
   assert.equal(elementBoundingRadius(tree), 40);
   assert.equal(elementBoundingRadius(wall), Math.hypot(60, 28) / 2, "a rect's reach is its half-diagonal");
-  assert.equal(elementGap(tree, { type: "tree", x: 100, y: 0, radius: 10 }), 50);
-  assert.ok(elementGap(tree, wall) < elementGap(tree, { type: "tree", x: 100, y: 0, radius: 0 }));
   assert.equal(elementCullMargin(tree), 48, "a centred element needs slack past its radius");
   assert.equal(elementCullMargin(wall), 60, "a rect is anchored on its corner, so its own extent is the margin");
 });
@@ -3325,7 +3323,6 @@ test("the camp fire wears the colours the battlefield paints", () => {
   // classic way a shop screen stops matching the game behind it.
   assert.equal(roleFigure().robeColor, spritePalette.playerRobe);
   assert.equal(roleFigure("archer").robeColor, spritePalette.allyRobe);
-  assert.equal(crewBanner, spritePalette.playerBanner);
   const renderer = readFileSync(new URL("../src/render/renderer.js", import.meta.url), "utf8");
   for (const colour of [spritePalette.playerRobe, spritePalette.playerBanner, spritePalette.allyRobe]) {
     assert.equal(renderer.includes(colour), false, `renderer.js still hard-codes the team colour ${colour}`);
@@ -4662,25 +4659,30 @@ const reachFrom = { x: 150, y: 450 };
 const reachTo = { x: 1050, y: 450 };
 const wallAt = (x, y, width, height) => ({ type: "wall", x, y, width, height });
 
+// The generator's own question, asked the way it asks it: build the fill once
+// from the start with the goal always walkable, then read the goal's cell.
+const pathIsClear = ({ from, to, world, obstacles, radius, cell }) =>
+  buildWalkMap({ from, goal: to, world, obstacles, radius, cell }).reachable(to);
+
 test("an empty field is a clear path and needs no grid", () => {
-  assert.equal(isPathClear({ from: reachFrom, to: reachTo, world: reachWorld, obstacles: [], radius: 17 }), true);
+  assert.equal(pathIsClear({ from: reachFrom, to: reachTo, world: reachWorld, obstacles: [], radius: 17 }), true);
 });
 
 test("a palisade across the field separates the two points", () => {
   const closed = [wallAt(560, 0, 80, reachWorld.height)];
-  assert.equal(isPathClear({ from: reachFrom, to: reachTo, world: reachWorld, obstacles: closed, radius: 17 }), false,
+  assert.equal(pathIsClear({ from: reachFrom, to: reachTo, world: reachWorld, obstacles: closed, radius: 17 }), false,
     "a wall across the whole field still read as walkable");
 });
 
 test("a gap in the same wall opens the path again", () => {
   const gapped = [wallAt(560, 0, 80, 300), wallAt(560, 600, 80, 300)];
-  assert.equal(isPathClear({ from: reachFrom, to: reachTo, world: reachWorld, obstacles: gapped, radius: 17 }), true,
+  assert.equal(pathIsClear({ from: reachFrom, to: reachTo, world: reachWorld, obstacles: gapped, radius: 17 }), true,
     "the flood fill did not find the gap");
 });
 
 test("one tree in an open field is walked around, not through", () => {
   const obstacles = [{ type: "tree", x: 600, y: 450, radius: 30 }];
-  assert.equal(isPathClear({ from: reachFrom, to: reachTo, world: reachWorld, obstacles, radius: 17 }), true);
+  assert.equal(pathIsClear({ from: reachFrom, to: reachTo, world: reachWorld, obstacles, radius: 17 }), true);
 });
 
 console.log("[unit] the tiger drill's ground");

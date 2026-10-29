@@ -12,7 +12,7 @@ import { elementIntersects } from "./elements.js";
 // the route, only its existence. A cell is walkable when the body fits at its
 // centre, which is deliberately conservative - a false "blocked" costs one
 // re-roll, while a false "clear" strands an objective behind a wall.
-export const REACHABILITY_CELL = 60;
+const REACHABILITY_CELL = 60;
 
 // The fill on its own, so a caller with more than one question ("can the chariot
 // stand here, and here, and here?") pays for the grid once instead of once per
@@ -84,8 +84,4 @@ export function buildWalkMap({ from, world, obstacles, radius, cell = REACHABILI
   };
 }
 
-export function isPathClear({ from, to, world, obstacles, radius, cell = REACHABILITY_CELL }) {
-  const map = buildWalkMap({ from, goal: to, world, obstacles, radius, cell });
-  return map.reachable(to);
-}
 

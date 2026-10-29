@@ -31,7 +31,7 @@ export function obstacleShape(element) {
   return element.radius === undefined ? "rect" : "circle";
 }
 
-export function obstacleRow(element) {
+function obstacleRow(element) {
   return obstacleKinds[element.type] ?? null;
 }
 
@@ -60,11 +60,6 @@ export function elementBoundingRadius(element) {
   return obstacleShape(element) === "circle"
     ? element.radius
     : Math.hypot(element.width, element.height) / 2;
-}
-
-export function elementGap(first, second) {
-  return distanceBetween(first.x, first.y, second.x, second.y)
-    - elementBoundingRadius(first) - elementBoundingRadius(second);
 }
 
 // --- felling -----------------------------------------------------------------
@@ -170,7 +165,7 @@ function rectHitsOrientedRect(element, cx, cy, halfWidth, halfHeight, angle, mar
   return true;
 }
 
-export function rectHitsObstacle(cx, cy, halfWidth, halfHeight, angle, obstacle, margin = 0) {
+function rectHitsObstacle(cx, cy, halfWidth, halfHeight, angle, obstacle, margin = 0) {
   if (obstacleShape(obstacle) === "circle") {
     return circleHitsOrientedRect(obstacle.x, obstacle.y, obstacle.radius + margin,
       cx, cy, halfWidth, halfHeight, angle);

@@ -12,7 +12,7 @@
 import { clamp } from "../utils/math.js";
 import { chariotRigBox, spritePalette } from "../render/sprites.js";
 
-export const CATEGORY_IDS = ["equipment", "horse", "personnel"];
+const CATEGORY_IDS = ["equipment", "horse", "personnel"];
 
 export const statKeys = ["firepower", "protection", "mobility", "stability", "capacity"];
 
@@ -27,13 +27,13 @@ export const statLabelKeys = {
 // Three rows is what a phone-height ledger fits comfortably; a 2.4:1 screen is
 // too short for that and drops to two, so the button never has to shrink below
 // its thumb size.
-export const MAX_ROWS_PER_PAGE = 3;
+const MAX_ROWS_PER_PAGE = 3;
 
 // A purchase button is a thumb target, not a label: 164x40 is what both
 // `shop.buy` ("购置 · 400 两") and `shop.shortGold` ("军资不足 · 400 两") need at
 // the sizes drawn here, and 40px is the smallest height that still lands under a
 // fingertip whose contact patch is ~9mm.
-export const BUY_SIZE = Object.freeze({ width: 164, height: 40 });
+const BUY_SIZE = Object.freeze({ width: 164, height: 40 });
 
 const metrics = Object.freeze({
   outer: 12,
@@ -380,7 +380,7 @@ export function radarGeometry(rect, { narrow = false } = {}) {
   };
 }
 
-export function radarAngle(index, count = statKeys.length) {
+function radarAngle(index, count = statKeys.length) {
   return (-90 + index * 360 / count) * Math.PI / 180;
 }
 
@@ -501,6 +501,3 @@ export function roleFigure(role) {
   };
 }
 
-// The player's own seat is the only figure that carries the chariot's banner
-// colour, so the near edge of the ring reads as "you" even when the crew is full.
-export const crewBanner = spritePalette.playerBanner;

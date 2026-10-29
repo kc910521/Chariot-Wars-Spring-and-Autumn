@@ -25,7 +25,7 @@ export const TUTORIAL_LAYOUT = {
 
 // Ground clearance for the tiger's spot, beyond the body that stands on it: it is
 // a body that turns and lunges, so it needs a little air on every side.
-export const TUTORIAL_TIGER_CLEARANCE = 26;
+const TUTORIAL_TIGER_CLEARANCE = 26;
 
 // How far the line is asked to stand, most preferred first. The top of the ladder
 // is deliberate: 900 and 820 are outside the 960x592 view, so the pan that
@@ -38,7 +38,7 @@ export const LINE_DISTANCES = [900, 820, 740, 660, 580, 500, 420];
 // the right of the chariot): the preferred direction first, then outwards, and
 // the far side last. Fixed order and no random numbers - the same battlefield and
 // the same standing place always give the same line.
-export const LINE_BEARING_STEPS = [
+const LINE_BEARING_STEPS = [
   0, 0.35, -0.35, 0.7, -0.7, 1.05, -1.05, 1.4, -1.4, 1.75, -1.75, Math.PI,
 ];
 

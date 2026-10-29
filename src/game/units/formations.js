@@ -27,7 +27,7 @@ const GUARD_BRACE_RANGE = 200;
 // span the whole idle envelope (leash 38 + brace 10) or a unit legitimately pokes
 // out of its own border; the extra over that is deliberate empty ground, not a
 // leash: a line that wakes at its border looks like it owns that apron.
-export const FORMATION_MARGIN = 80;
+const FORMATION_MARGIN = 80;
 
 // Ground clearance: the ranks have to stand on clear, uniform footing, so the box
 // tested at spawn time is the slots themselves plus a margin for the bodies
@@ -36,7 +36,7 @@ export const FORMATION_MARGIN = 80;
 // FORMATION_MARGIN: a wall inside the apron may be walked against once the line
 // is awake (enemies never collide with obstacles, so that is a visual overlap),
 // while narrowing the ground a line may spawn on is a real spawn failure.
-export const FORMATION_GROUND_MARGIN = 26;
+const FORMATION_GROUND_MARGIN = 26;
 
 function slotExtent(pattern, margin) {
   return {
@@ -74,13 +74,6 @@ function clampToAnchor(unit, x, y, span) {
   const distance = Math.hypot(dx, dy);
   if (distance === 0 || distance <= span) return { x, y };
   return { x: unit.homeX + (dx / distance) * span, y: unit.homeY + (dy / distance) * span };
-}
-
-// Clamps a point of interest to the unit's own envelope: chasing a remembered
-// sighting must not drag one infantry out of the line it belongs to.
-export function leashPoint(player, unit, x, y) {
-  if (unit.formationId === undefined) return { x, y };
-  return clampToAnchor(unit, x, y, leashRadius(player, unit));
 }
 
 // How far past its leash a unit will walk to check a sighting it lost. Looking
