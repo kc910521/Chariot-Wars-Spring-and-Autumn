@@ -21,7 +21,7 @@ import { createRenderer } from "../render/renderer.js";
 import { createHud } from "../ui/hud.js";
 import { bindControls } from "../ui/controls.js";
 import { createScreens } from "../ui/screens.js";
-import { createShopScene } from "../ui/shop-scene.js";
+import { createShopScreen } from "../ui/shop-screen.js";
 import { createStageManager } from "./stages.js";
 import { createVictoryLock } from "./victory-lock.js";
 import { createPlayerIdentity } from "./identity.js";
@@ -58,14 +58,11 @@ function boot() {
   applyTranslations();
   elements.localeSelect.value = getLocale();
   const {
-    canvas, menuScreen, prologueScreen, battleScreen, shopScreen, menuStartButton, nextBattleButton,
+    canvas, menuScreen, prologueScreen, battleScreen, shopScreen, menuStartButton,
     prologueNameElement, prologueBirthElement, prologueNameLineElement, prologueClanElement,
     prologueGivenElement, prologueAmbitionElement, prologueFinalElement,
     prologueStartButton, prologueTutorialButton,
-    shopItemsElement, shopStatsElement, shopGoldElement, shopScoreElement, shopKillsElement,
-    shopStageElement, shopLocationElement, shopMessageElement, scoreElement,
-    shopRigCanvas, shopCampCanvas, shopRigCaptionElement, shopCampCaptionElement,
-    shopInfoElement,
+    shopCanvas, shopLiveElement, scoreElement,
     waveElement, goldElement, modeElement, hullLabelElement, hullValueElement, hullHealthElement,
     overlay, overlayEyebrow, overlayTitle, overlayCopy, overlayButton, startButton,
     startLabel, objectiveCountElement, objectiveProgressElement, objectiveLabelElement,
@@ -90,20 +87,17 @@ function boot() {
   const victoryLock = createVictoryLock();
   if (launchQuery().reset === "1") victoryLock.reset();
   const playTone = createAudio(state).playTone;
-  // The dossier's two canvases: the live team preview and the camp fire. They
-  // only animate while the shop screen is up, so they never compete with the
-  // battle loop for a frame.
-  const shopScene = createShopScene({ rigCanvas: shopRigCanvas, campCanvas: shopCampCanvas });
-  const equipmentShop = createEquipmentShop({
+  // The shop page: one canvas, and the campaign's own purchase rules. The page
+  // paints itself while it is open (its own frame clock, never the battle's) and
+  // is handed the footer's "next battle" as a callback, because the stage manager
+  // that owns that transition is built further down.
+  const equipmentShop = createEquipmentShop({ campaign });
+  const shopPage = createShopScreen({
+    canvas: shopCanvas,
     campaign,
-    container: shopItemsElement,
-    statsContainer: shopStatsElement,
-    scene: shopScene,
-    rigCaptionElement: shopRigCaptionElement,
-    campCaptionElement: shopCampCaptionElement,
-    infoElement: shopInfoElement,
-    goldElement: shopGoldElement,
-    messageElement: shopMessageElement,
+    equipmentShop,
+    liveRegion: shopLiveElement,
+    onNextBattle: () => rollForNextBattle(),
   });
   const updateHud = createHud({
     state,
@@ -157,10 +151,10 @@ function boot() {
     campaign,
     draw,
     victoryLock,
-    // The shop's preview runs on its own clock and must start and stop with the
+    // The shop page runs on its own clock and must start and stop with the
     // screen, not with the battle loop.
     onModeChange: (mode) => {
-      shopScene.setActive(mode === "shop");
+      shopPage.setActive(mode === "shop");
       tutorialRef.current?.arm();
     },
     elements: {
@@ -334,11 +328,7 @@ function boot() {
   }
 
   const stageManager = createStageManager({
-    campaign, state, player, world, view, camera, equipmentShop, seedSource, ringSource,
-    elements: {
-      shopGoldElement, shopScoreElement, shopKillsElement,
-      shopStageElement, shopLocationElement, shopMessageElement,
-    },
+    campaign, state, player, world, view, camera, shopScreen: shopPage, seedSource, ringSource,
     circleIntersectsObstacle: collision.circleIntersectsObstacle,
     updateHud, setMode, spawnBoss, spawnBossSquad, announceBoss, resizeCanvas, playTone, hideBanner,
     spawnFriendlyAllies: allies.spawnFriendlyFormations,
@@ -507,10 +497,12 @@ function boot() {
     startRun,
     startTutorial,
     beginMission,
-    rollForNextBattle,
     restartStage,
     setMode,
     resizeCanvas,
+    // The shop page sizes its own canvas from the element's box, so it needs the
+    // same resize the battlefield gets - it is just never the battlefield's clock.
+    resizeShop: () => shopPage.resize(),
     battleScreen,
     touchInput,
     endRun,
@@ -518,7 +510,7 @@ function boot() {
     // call as far as the controls are concerned.
     confirmTutorial: () => tutorial.confirm(),
     elements: {
-      startButton, menuStartButton, prologueStartButton, prologueTutorialButton, nextBattleButton,
+      startButton, menuStartButton, prologueStartButton, prologueTutorialButton,
       overlayButton, victoryReturnButton, soundButton, soundIcon,
       touchJoystickElement, touchJoystickKnob,
     },
@@ -536,8 +528,10 @@ function boot() {
     setLocale(elements.localeSelect.value);
     applyTranslations();
     controls.refreshLocale();
-    equipmentShop.render();
-    if (state.mode === "shop") stageManager.refreshShop();
+    // The shop draws every label from the translator on each frame, so a language
+    // switch only has to get the page repainted - and it is only on screen, and so
+    // only painting, while the shop is open.
+    stageManager.refreshShop();
     // The prologue keeps the name it was shown with; only the story around it
     // is re-translated. updateHud() runs after applyTranslations() so the
     // objective label never flashes a raw {name} placeholder.
@@ -559,7 +553,7 @@ function boot() {
   // on the last stage's champion squad, and `victoryLock` so a test can rewind a
   // record instead of waiting out the rest.
   globalThis.__h5game = {
-    state, player, campaign, world, view, camera, combat, stageManager, equipmentShop, shopScene,
+    state, player, campaign, world, view, camera, combat, stageManager, equipmentShop, shopPage,
     damageEnemy, victoryLock, tutorial, tutorialOverlay,
   };
 

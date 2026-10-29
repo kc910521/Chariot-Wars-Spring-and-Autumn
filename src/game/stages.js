@@ -4,7 +4,6 @@ import {
 } from "../data/equipment.js";
 import { formationPresets } from "../data/formations.js";
 import { campaignRules } from "../data/rules.js";
-import { translate } from "../i18n/index.js";
 import { createRandomSeed, createSeededRandom } from "../utils/random.js";
 import { createBattlefield } from "./map.js";
 import { CHARIOT_CONTROL_CONFIG } from "./player.js";
@@ -19,8 +18,8 @@ export function pickFinalStage(random) {
 }
 
 export function createStageManager({
-  campaign, state, player, world, view, camera, equipmentShop, seedSource = () => null,
-  elements, circleIntersectsObstacle, updateHud, setMode, spawnBoss, spawnBossSquad, announceBoss,
+  campaign, state, player, world, view, camera, shopScreen = null, seedSource = () => null,
+  circleIntersectsObstacle, updateHud, setMode, spawnBoss, spawnBossSquad, announceBoss,
   spawnFriendlyAllies = () => [], resizeCanvas, playTone, hideBanner, lockVictory = () => {},
   ringSource = () => null,
 }) {
@@ -30,10 +29,6 @@ export function createStageManager({
   // itself is per world, so every battle of a run refines the same bands. An
   // unusable override falls back to the authored table instead of failing to boot.
   const ringLayout = ringLayoutFromShares(world, ringSource());
-  const {
-    shopGoldElement, shopScoreElement, shopKillsElement,
-    shopStageElement, shopLocationElement, shopMessageElement,
-  } = elements;
 
   // A new run starts from nothing; the prologue rolls the name between this and
   // the first battle, so the reset is its own step rather than a flag on
@@ -260,17 +255,12 @@ export function createStageManager({
     playTone(620, 0.2, "sine", 0.03);
   }
 
+  // The shop page is drawn from the campaign every frame it is open, so opening
+  // it needs no DOM to fill: the one thing worth asking for is a repaint, which
+  // matters when the shop is already up (a locale switch) and the frame loop of
+  // the battle beneath it is not running.
   function refreshShop() {
-    shopGoldElement.textContent = String(campaign.totalGold);
-    shopScoreElement.textContent = String(state.score);
-    shopKillsElement.textContent = String(state.kills);
-    shopStageElement.textContent = String(campaign.stage);
-    shopLocationElement.textContent = translate("shop.location", {
-      battlefield: translate(battlefields[campaign.battlefieldIndex].nameKey),
-      terrain: translate(battlefields[campaign.battlefieldIndex].terrainKey),
-    });
-    shopMessageElement.textContent = translate("shop.message");
-    equipmentShop.render();
+    shopScreen?.refresh();
   }
 
   function enterShop() {

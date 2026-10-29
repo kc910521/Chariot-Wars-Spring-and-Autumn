@@ -1,11 +1,12 @@
 import { translate } from "../i18n/index.js";
 
 export function bindControls({
-  state, keys, startRun, startTutorial, beginMission, rollForNextBattle, restartStage, setMode,
-  resizeCanvas, battleScreen, touchInput, endRun, confirmTutorial = () => {}, elements,
+  state, keys, startRun, startTutorial, beginMission, restartStage, setMode,
+  resizeCanvas, resizeShop = () => {}, battleScreen, touchInput, endRun,
+  confirmTutorial = () => {}, elements,
 }) {
   const {
-    startButton, menuStartButton, prologueStartButton, prologueTutorialButton, nextBattleButton,
+    startButton, menuStartButton, prologueStartButton, prologueTutorialButton,
     overlayButton, victoryReturnButton, soundButton, soundIcon,
     touchJoystickElement, touchJoystickKnob,
   } = elements;
@@ -64,7 +65,6 @@ export function bindControls({
   prologueStartButton.addEventListener("click", () => beginMission());
   // The drill opens from the same story card, with the same freshly rolled run.
   prologueTutorialButton.addEventListener("click", () => startTutorial());
-  nextBattleButton.addEventListener("click", rollForNextBattle);
   // The victory card's only button: the run is over, so the campaign goes back to
   // nothing and the menu (now locked) shows what the next wait is for.
   victoryReturnButton.addEventListener("click", () => endRun());
@@ -135,7 +135,11 @@ export function bindControls({
   window.addEventListener("resize", () => {
     updateTouchLayout();
     releaseJoystick();
+    // Both canvases are measured from their own box: the battlefield's only while
+    // it is on screen, the shop page's whatever the mode (it is a no-op unless the
+    // page is open and drops its cached size either way).
     if (!battleScreen.hidden) resizeCanvas();
+    resizeShop();
   });
   updateTouchLayout();
 

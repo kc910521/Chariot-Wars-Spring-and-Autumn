@@ -67,43 +67,9 @@
         </div>
       </section>
 
-      <section class="screen shop-screen" id="shop-screen" hidden>
-        <div class="shop-heading">
-          <div>
-            <p class="eyebrow"><span class="status-dot"></span><span data-i18n="shop.eyebrow">此役已毕</span></p>
-            <h2 data-i18n="shop.title">凯旋整备</h2>
-            <p class="shop-subtitle" id="shop-location"></p>
-          </div>
-          <div class="treasury shop-treasury"><span data-i18n="shop.treasury">军资</span><strong id="shop-gold">0</strong><span data-i18n="shop.currency">两</span></div>
-        </div>
-        <div class="shop-layout">
-          <aside class="shop-dossier" data-i18n-aria-label="shop.dossier.label" aria-label="战车与随从">
-            <div class="dossier-rig">
-              <canvas id="shop-rig" class="shop-rig-canvas" data-i18n-aria-label="shop.rig.aria" aria-label="当前战车队形预览"></canvas>
-              <p class="dossier-caption" id="shop-rig-caption"></p>
-            </div>
-            <h3 class="section-title dossier-title"><span data-i18n="shop.stats.title">战车属性</span> <span data-i18n="shop.stats.hint">五维雷达 · 悬停或聚焦购置项预览变化</span></h3>
-            <div class="shop-stats" id="shop-stats" aria-live="polite"></div>
-            <div class="dossier-camp">
-              <canvas id="shop-camp" class="shop-camp-canvas" data-i18n-aria-label="shop.camp.aria" aria-label="随从围火夜话"></canvas>
-              <p class="dossier-caption" id="shop-camp-caption"></p>
-            </div>
-          </aside>
-          <div class="shop-body">
-            <div class="shop-summary">
-              <span><span data-i18n="shop.score">本役战功</span> <strong id="shop-score">0</strong></span>
-              <span><span data-i18n="shop.kills">讨伐敌军</span> <strong id="shop-kills">0</strong></span>
-              <span><span data-i18n="shop.stage">当前战局</span> <strong id="shop-stage">1</strong></span>
-            </div>
-            <p class="shop-info" id="shop-info" aria-live="polite"><strong class="shop-info-label" data-i18n="shop.collision.label">冲撞伤害：</strong><span class="shop-info-text" data-i18n="shop.collision.description">基础为 1 点；每级轴与轮辋升级额外增加 2 点。需要高速正面冲撞；重甲步卒仍免疫冲撞伤害。机动和战马影响速度与转向，不直接增加伤害。</span></p>
-            <h3 class="section-title shop-equipment-title"><span data-i18n="shop.items.title">整装备战</span> <span data-i18n="shop.items.hint">悬停或点击项目，说明显示在上方信息栏</span></h3>
-            <div class="shop-items" id="shop-items"></div>
-            <div class="shop-bottom">
-              <p id="shop-message" aria-live="polite" data-i18n="shop.message">军资可在此换取更强的战车与随行将士。</p>
-              <button class="primary-action" id="next-battle" type="button"><span data-i18n="shop.next">整备完成 · 开始下一战</span><span aria-hidden="true">→</span></button>
-            </div>
-          </div>
-        </div>
+      <section class="screen shop-screen" id="shop-screen" hidden data-i18n-aria-label="shop.dossier.label" aria-label="战车与随从">
+        <canvas id="shop-canvas" class="shop-canvas" data-i18n-aria-label="shop.aria" aria-label="整备：左侧为战车属性、车马与营地，右侧为购买清单。"></canvas>
+        <p class="sr-only" id="shop-live" role="status" aria-live="polite"></p>
       </section>
 
       <section class="game-layout screen" id="battle-screen" data-i18n-aria-label="battle.label" aria-label="春秋战国-车之战" hidden>

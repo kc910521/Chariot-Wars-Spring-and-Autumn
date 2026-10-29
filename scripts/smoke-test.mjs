@@ -838,150 +838,225 @@ const select = query("#locale-select");
 select.dispatch("change");
 runFrames(60);
 
-// The shop dossier. Entering the shop re-renders the ledger and starts the
-// preview's own clock; a hovered purchase must never outlive the render that
-// follows it (a stale preview would show a team the player never bought).
+// ---- the shop page ----------------------------------------------------------
+// The shop is one canvas page: its own clock, its own pointer router, and every
+// rect it registers comes back with the frame. The harness therefore drives it
+// the way a finger does - a press and a release at the centre of a registered
+// rect - and reads the frame back to see what the player would be looking at.
 game.stageManager.enterShop();
 runFrames(45);
-const shopFrame = game.shopScene.lastFrame();
-check("entering the shop shows the dossier", query("#shop-screen").hidden === false, `mode=${game.state.mode}`);
-check("the shop keeps the run's name", game.campaign.identity === identity);
-check("the shop preview drew the chariot", Boolean(shopFrame.rig), "no rig frame");
-check("the shop preview drew the camp fire", Boolean(shopFrame.camp), "no camp frame");
-check("the preview rig is fitted to its canvas", shopFrame.rig?.scale > 0, `scale=${shopFrame.rig?.scale}`);
-check("the shop opens on the owned team, not a preview", shopFrame.rig?.isPreview === false,
-  `isPreview=${shopFrame.rig?.isPreview}`);
+const shopPage = game.shopPage;
+const shopCanvas = query("#shop-canvas");
+const shopFrame = () => shopPage.lastFrame();
 
-game.shopScene.preview({ horseCount: game.campaign.horseCount + 1, crew: game.campaign.roster });
-check("a hovered purchase previews before it is bought", game.shopScene.lastFrame().rig?.isPreview === true,
-  "preview did not take");
-game.equipmentShop.render();
-check("re-rendering the ledger clears the hover preview", game.shopScene.lastFrame().rig?.isPreview === false,
-  "stale preview survived the render");
-check("the shop rig follows the owned team", game.shopScene.lastFrame().rig?.horseCount === game.campaign.horseCount,
-  `drew ${game.shopScene.lastFrame().rig?.horseCount} horses, owns ${game.campaign.horseCount}`);
-
-// The ledger's cards are titles, effect lines and prices; the long descriptions
-// live in the one info panel under the summary, which follows the pointer and
-// keeps a click. `#shop-items` holds [tabs, equipment, horses, crew].
-const shopInfo = query("#shop-info");
-const ruleLine = `${translate("shop.collision.label")}${translate("shop.collision.description")}`;
-const weaponRackLine = translate("shop.info.label", { name: translate("equipment.weaponRack.name") })
-  + translate("equipment.weaponRack.description");
-const ledger = query("#shop-items").children;
-check("the shop opens on the standing collision rule",
-  shopInfo.textContent === ruleLine && !shopInfo.classList.contains("is-item"),
-  `panel="${shopInfo.textContent}"`);
-check("shop cards keep their description out of the card",
-  ledger[1].children.every((card) => card.children[1].children.length === 2),
-  `${ledger[1].children[0].children[1].children.length} blocks in the first card`);
-
-// A tap is not a hover: on a phone `pointerenter` arrives a frame before
-// `pointerup`, and a panel repainted there changed its height and pulled the
-// ledger up - the 购置 button slid out from under the finger and the tap fell
-// through to the card behind it. Only a mouse may repaint the panel on entry.
-ledger[1].children[0].dispatch("pointerenter", { pointerType: "touch" });
-check("a touch entering a card leaves the panel alone",
-  shopInfo.textContent === ruleLine, `panel="${shopInfo.textContent}"`);
-ledger[1].children[0].dispatch("pointerleave", { pointerType: "touch" });
-
-// A buy button that cannot be pressed has to say why: a dimmed "购置" reads as a
-// broken button, "军资不足" reads as the next goal. Gold is forced here so both
-// label states are checked whatever drops this run happened to collect.
-const upgrade = equipment.find((item) => game.campaign.equipment[item.id] < item.levels.length);
-if (upgrade) {
-  const price = upgrade.levels[game.campaign.equipment[upgrade.id]].price;
-  const cardIndex = equipment.indexOf(upgrade);
-  const buyButton = () => query("#shop-items").children[1].children[cardIndex].children[2];
-  const savedGold = game.campaign.totalGold;
-  game.campaign.totalGold = 0;
-  game.equipmentShop.render();
-  check("an unaffordable purchase names the price instead of a dim 购置",
-    buyButton().textContent === translate("shop.shortGold", { price }) && buyButton().disabled === true,
-    `label="${buyButton().textContent}" disabled=${buyButton().disabled}`);
-  game.campaign.totalGold = 99999;
-  game.equipmentShop.render();
-  check("an affordable purchase goes back to the buy label",
-    buyButton().textContent === translate("shop.buy", { price }) && buyButton().disabled === false,
-    `label="${buyButton().textContent}"`);
-  game.campaign.totalGold = savedGold;
-  game.equipmentShop.render();
+// View units to client pixels: the same conversion the router runs in reverse,
+// so a rect taken from the frame always lands on the target that registered it.
+function shopPoint(rect) {
+  const box = shopCanvas.getBoundingClientRect();
+  return {
+    pointerId: 1,
+    clientX: box.left + ((rect.x + rect.width / 2) * box.width) / shopPage.view.width,
+    clientY: box.top + ((rect.y + rect.height / 2) * box.height) / shopPage.view.height,
+  };
 }
 
-const weaponRackCard = ledger[1].children[0];
-weaponRackCard.dispatch("pointerenter");
-check("hovering a card puts its description in the panel",
-  shopInfo.textContent === weaponRackLine && shopInfo.classList.contains("is-item"),
-  `panel="${shopInfo.textContent}"`);
-weaponRackCard.dispatch("pointerleave");
-check("leaving the card restores the standing rule", shopInfo.textContent === ruleLine,
-  `panel="${shopInfo.textContent}"`);
+function pressRect(rect) {
+  shopCanvas.dispatch("pointerdown", shopPoint(rect));
+  runFrames(1);
+}
 
-weaponRackCard.dispatch("click");
-check("clicking a card pins its description", shopInfo.textContent === weaponRackLine,
-  `panel="${shopInfo.textContent}"`);
-game.equipmentShop.render();
-check("a pinned description survives the purchase re-render",
-  shopInfo.textContent === weaponRackLine && shopInfo.classList.contains("is-item"),
-  `panel="${shopInfo.textContent}"`);
+function releaseRect(rect) {
+  shopCanvas.dispatch("pointerup", shopPoint(rect));
+  runFrames(1);
+}
 
-ledger[0].children[1].dispatch("click");
-check("switching tabs drops the pick back to the standing rule", shopInfo.textContent === ruleLine,
-  `panel="${shopInfo.textContent}"`);
-ledger[1].children[0].children[2].dispatch("click");
-check("a buy click leaves that item's description in the panel", shopInfo.textContent === weaponRackLine,
-  `panel="${shopInfo.textContent}"`);
+function tapRect(rect) {
+  pressRect(rect);
+  releaseRect(rect);
+}
 
-// The hired line is the crew page's last card: a 1000-coin line, capped at two,
-// previewed as a tent at the camp fire. It is not a roster member, so it must
-// not touch the crew-slot summary above it.
-const crewCard = () => {
-  const panel = query("#shop-items").children[3];
-  return panel.children[panel.children.length - 1];
-};
-const crewTitle = () => crewCard().children[1].children[0].textContent;
-const hireButton = () => crewCard().children[2];
+const rowById = (id) => shopFrame().rows.find((row) => row.id === id) ?? null;
+const tabById = (id) => shopFrame().tabs.find((tab) => tab.id === id) ?? null;
+const campTents = () => shopFrame().dossier.camp?.formations ?? -1;
+
+// The catalogue is sliced per screen, so a row can live on a later page: turn the
+// pager until it is on this one, which is what a player would do.
+function revealRow(id) {
+  for (let guard = 0; guard < 8; guard += 1) {
+    const row = rowById(id);
+    if (row) return row;
+    const frame = shopFrame();
+    if (frame.page >= frame.pageCount - 1) return null;
+    tapRect(frame.pager.next);
+  }
+  return null;
+}
+
+check("entering the shop shows the page", query("#shop-screen").hidden === false, `mode=${game.state.mode}`);
+check("the shop keeps the run's name", game.campaign.identity === identity);
+const opening = shopFrame();
+check("the shop painted a dossier and a ledger",
+  opening !== null && opening.view.width === 960 && opening.dossier.rect.width > 0 && opening.rows.length > 0,
+  `rows=${opening?.rows.length} view=${JSON.stringify(opening?.view)}`);
+check("the dossier drew the team inside its box",
+  opening.dossier.rig.width > 0 && opening.dossier.rig.height > 0
+    && opening.dossier.rig.x >= opening.dossier.rect.x && opening.dossier.rig.y >= opening.dossier.rect.y,
+  `rig=${JSON.stringify(opening.dossier.rig)}`);
+check("the shop opens on the equipment ledger",
+  opening.category === "equipment" && opening.tabs[0].id === "equipment", `category=${opening.category}`);
+check("the shop opens on the standing collision rule",
+  opening.info.label === translate("shop.collision.label")
+    && opening.info.text === translate("shop.collision.description"),
+  `label="${opening.info.label}"`);
+check("nothing is previewed until a row is pressed",
+  JSON.stringify(opening.radar.preview) === JSON.stringify(opening.radar.current),
+  "the wheel opened on a purchase");
+
+// A press previews, a release on the same rect pins: the wheel has to move under
+// the finger and come back with it, because a preview that outlives the press is
+// a team the player never bought.
+const upgrade = equipment.find((item) => game.campaign.equipment[item.id] < item.levels.length) ?? equipment[0];
+const upgradeRow = revealRow(upgrade.id);
+check("the ledger lists the chassis upgrades", Boolean(upgradeRow), `no row for ${upgrade.id}`);
+
+pressRect(upgradeRow.rect);
+const pressedFrame = shopFrame();
+check("pressing a row previews it on the wheel",
+  pressedFrame.pressedId === upgrade.id && pressedFrame.info.id === upgrade.id
+    && JSON.stringify(pressedFrame.radar.preview) !== JSON.stringify(pressedFrame.radar.current),
+  `pressed=${pressedFrame.pressedId} info=${pressedFrame.info.id}`);
+
+// Sliding off the row is a scroll, not a purchase: the router drops the press and
+// the preview goes with it.
+shopCanvas.dispatch("pointermove", { ...shopPoint(upgradeRow.rect), pointerId: 1, clientY: 0 });
+runFrames(1);
+check("sliding off a row cancels the press and the preview",
+  shopFrame().pressedId === null
+    && JSON.stringify(shopFrame().radar.preview) === JSON.stringify(shopFrame().radar.current),
+  `pressed=${shopFrame().pressedId}`);
+
+// A cancel is a cancel, not a pin: the same row has to be pressed and released
+// again before it keeps its description.
+pressRect(upgradeRow.rect);
+releaseRect(upgradeRow.rect);
+const releasedFrame = shopFrame();
+check("a tapped row keeps its description but not its preview",
+  releasedFrame.pressedId === null && releasedFrame.pinnedId === upgrade.id
+    && releasedFrame.info.id === upgrade.id
+    && JSON.stringify(releasedFrame.radar.preview) === JSON.stringify(releasedFrame.radar.current),
+  `pinned=${releasedFrame.pinnedId} pressed=${releasedFrame.pressedId}`);
+
+// A buy button that cannot be pressed has to say why: a dimmed 购置 reads as a
+// broken button, 军资不足 reads as the next goal. Gold is forced here so both label
+// states are checked whatever drops this run happened to collect.
+const savedGold = game.campaign.totalGold;
+const upgradePrice = rowById(upgrade.id).price;
+game.campaign.totalGold = 0;
+runFrames(1);
+check("an unaffordable purchase names the price instead of a dim 购置",
+  rowById(upgrade.id)?.label === translate("shop.shortGold", { price: upgradePrice })
+    && rowById(upgrade.id)?.disabled === true && rowById(upgrade.id)?.reason === "gold",
+  `label="${rowById(upgrade.id)?.label}" reason=${rowById(upgrade.id)?.reason}`);
+game.campaign.totalGold = 99999;
+runFrames(1);
+check("an affordable purchase goes back to the buy label",
+  rowById(upgrade.id)?.label === translate("shop.buy", { price: upgradePrice })
+    && rowById(upgrade.id)?.disabled === false,
+  `label="${rowById(upgrade.id)?.label}"`);
+
+// The purchase itself: one tap on the button spends the gold, raises the level and
+// is announced - the canvas is opaque to a screen reader, so the live region has to
+// carry the same sentence the notice strip draws.
+const levelBefore = game.campaign.equipment[upgrade.id];
+tapRect(rowById(upgrade.id).buyRect);
+check("a tap on the buy button spends the gold and raises the level",
+  game.campaign.equipment[upgrade.id] === levelBefore + 1
+    && game.campaign.totalGold === 99999 - upgradePrice,
+  `level=${game.campaign.equipment[upgrade.id]} gold=${game.campaign.totalGold}`);
+const boughtLine = translate("shop.purchaseSuccess", { item: translate(upgrade.nameKey) });
+check("the purchase is announced in the live region",
+  query("#shop-live").textContent === boughtLine, `live="${query("#shop-live").textContent}"`);
+check("the notice strip says what the live region announced",
+  shopFrame().notice === boughtLine && shopFrame().noticeTone === "ok", `notice="${shopFrame().notice}"`);
+
+// A refused row must not spend anything either: the tap still reaches the button,
+// which reports the reason instead of buying.
+game.campaign.totalGold = 0;
+runFrames(1);
+tapRect(rowById(upgrade.id).buyRect);
+check("a refused purchase spends nothing and says why",
+  game.campaign.totalGold === 0 && shopFrame().notice === translate("shop.error.gold")
+    && shopFrame().noticeTone === "error",
+  `notice="${shopFrame().notice}" gold=${game.campaign.totalGold}`);
+game.campaign.totalGold = savedGold;
+runFrames(1);
+
+// The crew page: the same ledger, but the dossier's chart slot paints the night
+// camp, and the last row is the hired line - a fixed price, capped at two, and
+// legible at the fire before it is paid for.
+tapRect(tabById("personnel").rect);
+check("switching tabs paints the night camp",
+  shopFrame().category === "personnel" && shopFrame().dossier.slot === "camp"
+    && Boolean(shopFrame().dossier.camp),
+  `category=${shopFrame().category} slot=${shopFrame().dossier.slot}`);
+check("a new tab drops the pinned description",
+  shopFrame().pinnedId === null && shopFrame().info.label === translate("shop.collision.label"),
+  `pinned=${shopFrame().pinnedId} label="${shopFrame().info.label}"`);
+check("the fire seats the player and the living crew",
+  shopFrame().dossier.camp.seats === 1 + game.campaign.roster.filter((member) => member.alive !== false).length,
+  `seats=${shopFrame().dossier.camp.seats}`);
+
+const hireRow = revealRow("formation");
+check("the crew page sells the hired formation, count and cap included",
+  Boolean(hireRow) && hireRow.title.includes(translate("formation.friendly")) && hireRow.title.includes("0/2"),
+  `title="${hireRow?.title}"`);
+
 const savedForHire = game.campaign.totalGold;
 game.campaign.totalGold = 5000;
-game.equipmentShop.render();
-check("the crew page sells the hired formation, count and cap included",
-  crewTitle().includes(translate("formation.friendly")) && crewTitle().includes("0/2"),
-  `title="${crewTitle()}"`);
-check("the hire opens on its buy price", hireButton().textContent === translate("shop.hireFormation", { price: 1000 })
-  && hireButton().disabled === false, `label="${hireButton().textContent}"`);
+runFrames(1);
+check("the hire opens on its buy price",
+  rowById("formation")?.label === translate("shop.hireFormation", { price: 1000 })
+    && rowById("formation")?.disabled === false, `label="${rowById("formation")?.label}"`);
+check("the camp opens without a hired tent", campTents() === 0, `tents=${campTents()}`);
 
-crewCard().dispatch("pointerenter");
-check("hovering the hire previews a tent at the fire", game.shopScene.lastFrame().camp?.formations === 1,
-  `formations=${game.shopScene.lastFrame().camp?.formations}`);
-crewCard().dispatch("pointerleave");
-check("leaving the hire card takes the tent back", game.shopScene.lastFrame().camp?.formations === 0,
-  `formations=${game.shopScene.lastFrame().camp?.formations}`);
+pressRect(rowById("formation").rect);
+check("pressing the hire pitches a tent at the fire", campTents() === 1, `tents=${campTents()}`);
+releaseRect(rowById("formation").rect);
+check("releasing the hire takes the tent back", campTents() === 0, `tents=${campTents()}`);
 
-hireButton().dispatch("click");
+tapRect(rowById("formation").buyRect);
 check("buying the hire charges the price and keeps the line",
   game.campaign.friendlyFormations === 1 && game.campaign.totalGold === 4000,
   `hires=${game.campaign.friendlyFormations} gold=${game.campaign.totalGold}`);
-check("the bought line is camped at the fire", game.shopScene.lastFrame().camp?.formations === 1,
-  `formations=${game.shopScene.lastFrame().camp?.formations}`);
-check("the card now counts the line", crewTitle().includes("1/2"), `title="${crewTitle()}"`);
+check("the bought line is camped at the fire", campTents() === 1, `tents=${campTents()}`);
+check("the row now counts the line", rowById("formation")?.title.includes("1/2"),
+  `title="${rowById("formation")?.title}"`);
 
-crewCard().dispatch("pointerenter");
-check("a second hire previews a second tent", game.shopScene.lastFrame().camp?.formations === 2,
-  `formations=${game.shopScene.lastFrame().camp?.formations}`);
-crewCard().dispatch("pointerleave");
-hireButton().dispatch("click");
+pressRect(rowById("formation").rect);
+check("a second hire previews a second tent", campTents() === 2, `tents=${campTents()}`);
+releaseRect(rowById("formation").rect);
+tapRect(rowById("formation").buyRect);
 check("a second line can be hired", game.campaign.friendlyFormations === 2,
   `hires=${game.campaign.friendlyFormations}`);
 check("the cap disables the button and says why",
-  hireButton().disabled === true && hireButton().textContent === translate("shop.formationCap"),
-  `label="${hireButton().textContent}" disabled=${hireButton().disabled}`);
+  rowById("formation")?.disabled === true && rowById("formation")?.label === translate("shop.formationCap"),
+  `label="${rowById("formation")?.label}" disabled=${rowById("formation")?.disabled}`);
 
 // Leave the run as the rest of the script found it: the formation is a purchase
 // test, and a hired line on the later battlefields would change those battles.
 game.campaign.friendlyFormations = 0;
 game.campaign.totalGold = savedForHire;
-game.equipmentShop.render();
-check("the ledger reopens without a hire", crewTitle().includes("0/2"), `title="${crewTitle()}"`);
+runFrames(1);
+check("the ledger reopens without a hire", rowById("formation")?.title.includes("0/2"),
+  `title="${rowById("formation")?.title}"`);
+
+// The footer's button is the one action the page delegates to the stage manager:
+// it has to leave the shop for a fresh battlefield, not just repaint the page.
+const stageBeforeNext = game.campaign.stage;
+tapRect(shopFrame().next);
+check("the footer's next battle leaves the shop for the next stage",
+  game.state.mode === "running" && game.campaign.stage === stageBeforeNext + 1,
+  `mode=${game.state.mode} stage=${game.campaign.stage}`);
 
 // The purchase has to reach the field: one line, seven bodies, its chariot, and
 // all of it close to the player's start rather than at a random map bearing.
@@ -1350,7 +1425,10 @@ check("the cleared drill opens the shop instead of the victory card",
   game.state.mode === "shop", `mode=${game.state.mode}`);
 check("the drill was stage 1 and did not advance the run",
   game.campaign.stage === 1, `stage=${game.campaign.stage}`);
-query("#next-battle").dispatch("click");
+// The footer's button is canvas now, so the drill leaves the shop the same way a
+// finger would: a press and a release on the rect the last frame registered.
+runFrames(1);
+tapRect(shopFrame().next);
 runFrames(2);
 check("the shop after a drill leads into the campaign's stage 1",
   game.state.mode === "running" && game.state.battleMode === "campaign"

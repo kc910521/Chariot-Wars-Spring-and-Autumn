@@ -469,82 +469,41 @@ h1 span {
   }
 }
 
+/* The shop is one page on one canvas: the dossier on the left, the ledger on the
+   right (ui/shop.js, ui/shop-layout.js). The element's own box is the page's
+   shape, so the stylesheet only hands the canvas the viewport's height - the
+   layout maths decides whether the team stacks over the chart or sits beside it. */
 .shop-screen {
-  min-height: min(760px, calc(100vh - 128px));
-  padding: clamp(28px, 5vw, 60px) clamp(16px, 8vw, 100px);
   border-bottom: 1px solid var(--line);
   background: radial-gradient(ellipse at 75% 15%, rgba(168, 68, 50, 0.11), transparent 42%);
 }
 
-/* The shop reads as a dossier beside a ledger: the left column always shows the
-   money in the team, the team itself and the five stats, while the right column
-   scrolls through purchases. Both columns are data-driven (see ui/shop.js), so a
-   new category or a new stat grows them without new layout rules. */
-.shop-layout {
-  display: grid;
-  grid-template-columns: minmax(260px, 340px) minmax(0, 1fr);
-  align-items: start;
-  gap: clamp(18px, 3vw, 34px);
+.shop-canvas {
+  /* A short window still gets a usable page: the ledger's rows have a floor and
+     the next-battle button sits under them, so the page crops rather than
+     squeezing five rows into a strip. */
+  height: max(540px, calc(100vh - 128px));
+  /* A drag across a row must read as a scroll, never as a purchase. */
+  touch-action: manipulation;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
-.shop-dossier {
-  position: sticky;
-  top: 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  padding: 14px;
-  border: 1px solid var(--line);
-  background:
-    radial-gradient(ellipse at 50% 8%, rgba(210, 173, 104, 0.09), transparent 62%),
-    rgba(30, 23, 17, 0.72);
+/* A canvas is opaque to a screen reader, so the sentence a sighted player reads
+   in the shop's notice strip is mirrored into a live region as well as drawn. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  border: 0;
+  clip-path: inset(50%);
 }
 
-.dossier-rig,
-.dossier-camp {
-  position: relative;
-  margin: 0;
-}
-
-.shop-rig-canvas,
-.shop-camp-canvas {
-  display: block;
-  width: 100%;
-  border: 1px solid rgba(211, 185, 139, 0.14);
-  background: #1a1510;
-}
-
-.shop-rig-canvas {
-  height: 196px;
-}
-
-.shop-camp-canvas {
-  height: 128px;
-}
-
-.dossier-caption {
-  margin: 6px 0 0;
-  color: #a69478;
-  font-family: "DM Mono", monospace;
-  font-size: 9px;
-  letter-spacing: 0.06em;
-  text-align: center;
-}
-
-.dossier-title {
-  flex-wrap: wrap;
-  gap: 4px 10px;
-  margin: 4px 0 0;
-  font-size: 15px;
-}
-
-.shop-body {
-  min-width: 0;
-}
-
-.shop-heading,
-.shop-summary,
-.shop-bottom,
+/* The battle's own treasury strip, under the result badges. */
 .treasury,
 .hull-caption {
   display: flex;
@@ -552,348 +511,7 @@ h1 span {
   justify-content: space-between;
 }
 
-.shop-heading h2 {
-  margin: 10px 0 5px;
-  font-family: "Noto Serif SC", "Songti SC", serif;
-  font-size: clamp(32px, 5vw, 48px);
-}
-
-.shop-subtitle {
-  margin: 0;
-  color: #a69478;
-  font-size: 12px;
-}
-
 .treasury {
-  gap: 9px;
-  color: #b79b66;
-  font-family: "Noto Serif SC", "Songti SC", serif;
-  font-size: 13px;
-}
-
-.treasury strong {
-  color: #e0c07a;
-  font-family: "DM Mono", monospace;
-  font-size: 24px;
-}
-
-.shop-treasury {
-  padding: 12px 16px;
-  border: 1px solid rgba(210, 173, 104, 0.3);
-  background: rgba(39, 28, 20, 0.55);
-}
-
-.shop-summary {
-  justify-content: flex-start;
-  gap: clamp(15px, 4vw, 46px);
-  margin: 26px 0 34px;
-  padding: 14px 0;
-  border-top: 1px solid var(--line);
-  border-bottom: 1px solid var(--line);
-  color: #a69478;
-  font-size: 11px;
-}
-
-.shop-summary strong {
-  margin-left: 8px;
-  color: #eee2c9;
-  font-family: "DM Mono", monospace;
-  font-weight: 500;
-}
-
-.section-title {
-  display: flex;
-  align-items: baseline;
-  gap: 14px;
-  margin: 0 0 14px;
-  font-family: "Noto Serif SC", "Songti SC", serif;
-  font-size: 19px;
-}
-
-.section-title span {
-  color: #8e7b60;
-  font-family: "DM Sans", sans-serif;
-  font-size: 10px;
-  font-weight: 400;
-}
-
-.shop-stats {
-  display: grid;
-  min-height: 250px;
-  place-items: center;
-  margin: 0;
-  border: 1px solid var(--line);
-  background:
-    radial-gradient(ellipse at center, rgba(210, 173, 104, 0.08), transparent 68%),
-    rgba(39, 28, 20, 0.35);
-}
-
-.shop-radar {
-  width: min(100%, 340px);
-  height: auto;
-  overflow: visible;
-}
-
-.radar-grid {
-  fill: rgba(210, 173, 104, 0.025);
-  stroke: rgba(211, 185, 139, 0.24);
-  stroke-width: 1;
-}
-
-.radar-axis {
-  stroke: rgba(211, 185, 139, 0.24);
-  stroke-width: 1;
-}
-
-.radar-current {
-  fill: rgba(210, 173, 104, 0.22);
-  stroke: #d2ad68;
-  stroke-width: 2.5;
-  stroke-linejoin: round;
-}
-
-.radar-preview {
-  fill: transparent;
-  stroke: transparent;
-  stroke-width: 2;
-  stroke-dasharray: 5 4;
-  stroke-linejoin: round;
-  transition: fill 180ms ease, stroke 180ms ease;
-}
-
-.radar-preview.is-preview {
-  fill: rgba(123, 184, 141, 0.16);
-  stroke: #8ec88c;
-}
-
-.radar-label {
-  fill: #c8b99d;
-  font-family: "Noto Serif SC", "Songti SC", serif;
-  transition: fill 180ms ease;
-}
-
-/* No font-size here: `radar.js` writes it as an attribute so the chart can be
-   drawn at different sizes (dossier vs. narrow strip) without extra rules. */
-.radar-value {
-  fill: #eee2c9;
-  font-family: "DM Mono", monospace;
-}
-
-.radar-label.is-up,
-.radar-label.is-up .radar-value {
-  fill: #8ec88c;
-}
-
-.radar-label.is-down,
-.radar-label.is-down .radar-value {
-  fill: #d47a68;
-}
-
-/* The shop's one description surface. Cards are titles and prices; the long copy
-   lands here, so the panel reserves room for the longest rule (two lines at
-   11px/1.65 plus its padding) and the ledger below never shifts as the pointer
-   moves from card to card. Longer text grows the panel instead of clipping. */
-.shop-info {
-  min-height: 62px;
-  margin: -14px 0 26px;
-  padding: 11px 14px;
-  border-left: 2px solid rgba(210, 173, 104, 0.58);
-  background: rgba(39, 28, 20, 0.4);
-  color: #a69478;
-  font-size: 11px;
-  line-height: 1.65;
-  transition: border-color 160ms ease, background 160ms ease;
-}
-
-/* An item's description instead of the standing rule: same panel, accented so
-   the switch is visible without a second element appearing. */
-.shop-info.is-item {
-  border-left-color: rgba(210, 173, 104, 0.9);
-  background: rgba(210, 173, 104, 0.08);
-}
-
-.shop-info strong {
-  color: #d2ad68;
-  font-weight: 600;
-}
-
-.shop-equipment-title {
-  margin-top: 0;
-}
-
-.shop-items {
-  border: 1px solid var(--line);
-  background: rgba(39, 28, 20, 0.3);
-}
-
-.shop-tabs {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  padding: 8px 8px 0;
-  border-bottom: 1px solid var(--line);
-}
-
-.shop-tab {
-  display: inline-flex;
-  min-height: 40px;
-  align-items: center;
-  gap: 8px;
-  padding: 0 18px;
-  border: 1px solid transparent;
-  border-bottom: 0;
-  background: transparent;
-  color: #a69478;
-  cursor: pointer;
-  font-family: "Noto Serif SC", "Songti SC", serif;
-  font-size: 13px;
-}
-
-.shop-tab-mark {
-  color: rgba(210, 173, 104, 0.7);
-  font-family: "DM Mono", monospace;
-  font-size: 12px;
-}
-
-.shop-tab:hover,
-.shop-tab:focus-visible {
-  color: #eee2c9;
-}
-
-.shop-tab[aria-selected="true"] {
-  border-color: var(--line);
-  background: rgba(210, 173, 104, 0.08);
-  color: #e0c07a;
-}
-
-.shop-tab-panel {
-  display: grid;
-  height: clamp(220px, 48vh, 430px);
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  align-content: start;
-  /* `auto` rows are sized from each card's *unwrapped* max-content height, which
-     is the card's 104px floor. As soon as the three rows needed more than this
-     fixed height - a narrow two-column ledger, or English copy that always wraps
-     - the rows stayed at 104px and the cards were stretched back down to it, so
-     the wrapped effect line and the price spilled out of the card (measured 78px
-     at 1200x700). The card below is later in the DOM, so it painted over the
-     spill and the hit test landed on its `h4`: the price looked doubled up and
-     could not be clicked at all (0/5 buttons at 1280x720 and 1200x700). Rows
-     that are as tall as their content keep every card whole, and the panel does
-     what its fixed height promises: it scrolls. */
-  grid-auto-rows: max-content;
-  gap: 10px;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  padding: 14px;
-  scrollbar-color: rgba(210, 173, 104, 0.55) rgba(15, 11, 8, 0.45);
-  scrollbar-gutter: stable;
-  scrollbar-width: thin;
-}
-
-.shop-tab-panel[hidden] {
-  display: none;
-}
-
-.shop-tab-panel::-webkit-scrollbar {
-  width: 9px;
-}
-
-.shop-tab-panel::-webkit-scrollbar-track {
-  background: rgba(15, 11, 8, 0.45);
-}
-
-.shop-tab-panel::-webkit-scrollbar-thumb {
-  border: 2px solid rgba(15, 11, 8, 0.45);
-  border-radius: 8px;
-  background: rgba(210, 173, 104, 0.55);
-}
-
-.shop-item {
-  display: grid;
-  min-height: 104px;
-  grid-template-columns: 42px minmax(0, 1fr);
-  gap: 4px 13px;
-  padding: 15px;
-  border: 1px solid var(--line);
-  background: rgba(39, 28, 20, 0.55);
-  transition: border-color 160ms ease, background 160ms ease;
-}
-
-/* Hovering a card re-targets the dossier, so the card itself has to look like
-   the thing that is being previewed. */
-.shop-item:hover,
-.shop-item:focus-within {
-  border-color: rgba(210, 173, 104, 0.52);
-  background: rgba(50, 36, 25, 0.66);
-}
-
-.shop-item-icon {
-  display: grid;
-  width: 40px;
-  height: 40px;
-  grid-row: span 2;
-  place-items: center;
-  border: 1px solid rgba(210, 173, 104, 0.3);
-  color: #d2ad68;
-  font-family: "Noto Serif SC", "Songti SC", serif;
-  font-size: 18px;
-}
-
-.shop-item h4 {
-  margin: 0;
-  font-family: "Noto Serif SC", "Songti SC", serif;
-  font-size: 14px;
-}
-
-.shop-item-effect {
-  color: #c28b5f;
-  font-family: "DM Mono", monospace;
-  font-size: 9px;
-}
-
-.shop-slot-count {
-  grid-column: 1 / -1;
-  margin: 5px 0 0;
-  color: #d2ad68;
-  font-family: "DM Mono", monospace;
-  font-size: 10px;
-}
-
-.shop-buy {
-  grid-column: 2;
-  justify-self: start;
-  padding: 6px 10px;
-  border: 1px solid rgba(210, 173, 104, 0.27);
-  background: rgba(169, 68, 50, 0.24);
-  color: #e5d1ae;
-  cursor: pointer;
-  font-family: "DM Mono", monospace;
-  font-size: 9px;
-}
-
-.shop-buy:disabled {
-  border-color: rgba(211, 185, 139, 0.1);
-  background: rgba(255, 255, 255, 0.02);
-  color: #796b57;
-  cursor: not-allowed;
-}
-
-.shop-bottom {
-  gap: 16px;
-  margin-top: 24px;
-}
-
-.shop-bottom p {
-  color: #a69478;
-  font-size: 11px;
-}
-
-.shop-bottom .primary-action {
-  flex: 0 0 245px;
-}
-
-.treasury:not(.shop-treasury) {
   justify-content: flex-start;
   gap: 7px;
   margin-top: -3px;
@@ -904,7 +522,7 @@ h1 span {
   font-size: 11px;
 }
 
-.treasury:not(.shop-treasury) strong {
+.treasury strong {
   color: #e0c07a;
   font-family: "DM Mono", monospace;
   font-size: 16px;
@@ -1295,7 +913,7 @@ canvas {
   }
 
   .stats,
-  .treasury:not(.shop-treasury),
+  .treasury,
   .mode-block,
   .hull-block,
   .objective-block,
@@ -1423,38 +1041,6 @@ canvas {
   .menu-features article {
     min-height: 82px;
   }
-
-  .shop-screen {
-    min-height: calc(100vh - 128px);
-    padding: 32px 8px;
-  }
-
-  .shop-items {
-    grid-template-columns: 1fr;
-  }
-
-  .shop-tab-panel {
-    height: clamp(200px, 42vh, 340px);
-    grid-template-columns: 1fr;
-  }
-
-  .shop-stats {
-    min-height: 290px;
-  }
-
-  .shop-tab {
-    flex: 1;
-    padding: 0 8px;
-  }
-
-  .shop-bottom {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
-  .shop-bottom .primary-action {
-    flex-basis: auto;
-  }
 }
 
 @media (max-width: 560px) {
@@ -1490,32 +1076,6 @@ canvas {
   .menu-footnote {
     font-size: 8px;
     line-height: 1.8;
-  }
-
-  .shop-heading {
-    align-items: flex-start;
-    gap: 10px;
-  }
-
-  .shop-treasury {
-    gap: 5px;
-    padding: 9px;
-  }
-
-  .shop-treasury strong {
-    font-size: 18px;
-  }
-
-  .shop-summary {
-    flex-wrap: wrap;
-    gap: 11px 18px;
-    font-size: 9px;
-  }
-
-  .section-title {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 4px;
   }
 
   .game-layout {
@@ -1697,19 +1257,6 @@ body.battle-focus {
 .battle-focus .stat strong.is-final {
   font-size: 13px;
   letter-spacing: 0.08em;
-}
-
-.battle-focus .treasury:not(.shop-treasury) {
-  display: flex;
-  gap: 5px;
-  margin: 0;
-  padding: 0;
-  border: 0;
-  font-size: 9px;
-}
-
-.battle-focus .treasury:not(.shop-treasury) strong {
-  font-size: 14px;
 }
 
 .battle-focus .stats > :nth-child(2) {
@@ -2088,10 +1635,6 @@ body.battle-focus {
     font-size: 16px;
   }
 
-  .battle-focus .treasury:not(.shop-treasury) {
-    font-size: 9px;
-  }
-
   .battle-hud-details {
     gap: 0;
   }
@@ -2172,10 +1715,6 @@ body.battle-focus {
 .battle-focus.touch-layout .battle-hud .stat-label,
 .battle-focus.touch-layout .battle-hud .hull-caption {
   font-size: 8px;
-}
-
-.battle-focus.touch-layout .battle-hud .treasury:not(.shop-treasury) strong {
-  font-size: 12px;
 }
 
 .battle-focus.touch-layout .battle-hud .hull-track {
@@ -2320,101 +1859,6 @@ body.battle-focus {
   }
 }
 
-/* The dossier becomes a strip above the ledger on small screens: the rig and the
-   radar stay side by side, so whatever a card previews is still on screen while
-   the card is hovered. The camp scene is dropped there - its canvas measures 0
-   and `shop-scene.js` simply stops drawing it. */
-@media (max-width: 980px) {
-  .shop-layout {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 16px;
-  }
-
-  /* Sticky only works as a narrow side column. In one column the dossier is a
-     full-width strip: pinned to the top it measured ~360px tall and floated over
-     the ledger, hiding the info panel and swallowing clicks aimed at the buy
-     buttons (the hit test landed on the rig canvas). Here it is an ordinary block
-     that scrolls with the page, so nothing is ever painted on top of a price. */
-  .shop-dossier {
-    position: static;
-    flex-direction: row;
-    align-items: center;
-    gap: 10px;
-    padding: 10px;
-    border-color: rgba(211, 185, 139, 0.28);
-    background: #1d1712;
-  }
-
-  .dossier-rig {
-    flex: 1 1 40%;
-    min-width: 0;
-  }
-
-  .shop-rig-canvas {
-    height: 128px;
-  }
-
-  .dossier-caption {
-    margin-top: 4px;
-    font-size: 8px;
-  }
-
-  .dossier-title,
-  .dossier-camp {
-    display: none;
-  }
-
-  .shop-stats {
-    min-height: 0;
-    flex: 1 1 56%;
-    border: 0;
-    background: none;
-  }
-
-  /* `width: 100%` plus the 360x330 viewBox made the chart 341px tall in a 393px
-     column, which is what turned the strip into a screen. The height cap scales
-     the drawing down (the labels are already drawn larger for narrow screens, see
-     `readableLabelSize`) and keeps the strip a strip. */
-  .shop-radar {
-    width: 100%;
-    max-height: 132px;
-  }
-}
-
-@media (max-width: 560px) {
-  .shop-rig-canvas {
-    height: 104px;
-  }
-
-  .shop-tab-panel {
-    height: auto;
-    max-height: 62vh;
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  /* Two states, one height. On a phone the standing rule wraps to three lines
-     while an item description fits in two, and a panel that shrank when it
-     switched pulled the ledger (and the finger's target) up by ~14px: the tap
-     landed on the card instead of 购置. The floor covers both states - measured
-     at 390px wide, the rule and every description are 78px in Chinese. */
-  .shop-info {
-    min-height: 78px;
-  }
-
-  /* English wraps that same rule to one more line (measured 95px at 360px), so
-     the floor is raised for the locale instead of under-reserving it. */
-  html[lang="en"] .shop-info {
-    min-height: 95px;
-  }
-
-  /* And the price gets a thumb-sized target: 27px is a miss waiting to happen. */
-  .shop-buy {
-    min-height: 40px;
-    padding: 9px 14px;
-    font-size: 10px;
-  }
-}
-
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -2484,4 +1928,3 @@ body.battle-focus {
 .fatal-error button:hover {
   background: rgba(255, 226, 196, 0.22);
 }
-
