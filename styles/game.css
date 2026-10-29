@@ -43,10 +43,7 @@ button {
 .brand,
 .topbar-note,
 .page-footer,
-.field-topline,
-.field-footer,
 .stats,
-.control-row,
 .start-button,
 .overlay-button {
   display: flex;
@@ -74,10 +71,6 @@ button {
   font-size: 16px;
 }
 
-.brand-accent {
-  color: #c75a42;
-}
-
 .language-control select {
   min-height: 34px;
   padding: 0 28px 0 10px;
@@ -96,10 +89,7 @@ button {
 .topbar-note,
 .stat-label,
 .eyebrow,
-.field-topline,
-.field-footer,
-.page-footer,
-.mission-hint {
+.page-footer {
   font-family: "DM Mono", monospace;
   letter-spacing: 0.1em;
 }
@@ -139,10 +129,6 @@ button {
   padding: 24px 0 28px;
 }
 
-.mission-panel {
-  padding: 12px 0;
-}
-
 .eyebrow {
   display: flex;
   align-items: center;
@@ -153,8 +139,7 @@ button {
   font-weight: 500;
 }
 
-.status-dot,
-.field-indicator {
+.status-dot {
   width: 7px;
   height: 7px;
   border-radius: 50%;
@@ -533,14 +518,6 @@ h1 span {
   padding: 14px 0 5px;
 }
 
-.mission-copy {
-  max-width: 220px;
-  margin: 20px 0 30px;
-  color: #b4a487;
-  font-size: 12px;
-  line-height: 1.7;
-}
-
 .stats {
   gap: 30px;
   padding: 18px 0;
@@ -630,36 +607,6 @@ h1 span {
   margin: 0 0 2px;
 }
 
-.control-row {
-  justify-content: space-between;
-  color: #b7a88d;
-  font-size: 10px;
-}
-
-.key-group {
-  display: flex;
-  gap: 3px;
-}
-
-kbd {
-  display: inline-grid;
-  min-width: 19px;
-  height: 19px;
-  place-items: center;
-  border: 1px solid rgba(211, 185, 139, 0.24);
-  border-radius: 3px;
-  background: rgba(255, 255, 255, 0.025);
-  color: #e6d6b8;
-  font-family: "DM Mono", monospace;
-  font-size: 9px;
-}
-
-.key-group kbd:only-child {
-  min-width: 43px;
-  padding: 0 5px;
-  font-size: 8px;
-}
-
 .start-button {
   width: 100%;
   min-height: 46px;
@@ -683,14 +630,6 @@ kbd {
   transform: translateY(-1px);
 }
 
-.mission-hint {
-  min-height: 12px;
-  margin: 11px 0 0;
-  color: #9e8c70;
-  font-size: 8px;
-  text-align: center;
-}
-
 .field-frame {
   min-width: 0;
   padding: 12px;
@@ -705,26 +644,6 @@ kbd {
 
 .touch-hint {
   display: none;
-}
-
-.field-topline,
-.field-footer {
-  min-height: 29px;
-  justify-content: space-between;
-  padding: 0 5px;
-  color: #a69478;
-  font-size: 8px;
-}
-
-.field-topline > span:first-child {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.field-indicator {
-  width: 5px;
-  height: 5px;
 }
 
 .canvas-wrap {
@@ -850,32 +769,12 @@ canvas {
   transition: background 160ms ease, transform 160ms ease;
 }
 
-.field-footer {
-  min-height: 33px;
-  padding-top: 4px;
-  font-size: 7px;
-}
-
-.field-footer strong {
-  margin-left: 5px;
-  color: #e6d6b8;
-  font-weight: 400;
-}
-
-.field-footer .threat {
-  color: #d17a4e;
-}
-
 .page-footer {
   height: 51px;
   justify-content: space-between;
   border-top: 1px solid var(--line);
   color: #927f64;
   font-size: 8px;
-}
-
-.copyright {
-  color: #c75a42;
 }
 
 @media (max-width: 850px) {
@@ -889,37 +788,13 @@ canvas {
     padding: 22px 0 28px;
   }
 
-  .mission-panel {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    column-gap: 20px;
-    padding: 0;
-  }
-
-  .mission-panel > .eyebrow,
-  .mission-panel h1,
-  .mission-copy {
-    grid-column: 1;
-  }
-
-  .mission-panel h1 {
-    margin: 9px 0 0;
-    font-size: 50px;
-  }
-
-  .mission-copy {
-    margin: 7px 0 0;
-    font-size: 10px;
-  }
-
   .stats,
   .treasury,
   .mode-block,
   .hull-block,
   .objective-block,
   .controls,
-  .start-button,
-  .mission-hint {
+  .start-button {
     grid-column: 2;
   }
 
@@ -952,8 +827,7 @@ canvas {
   }
 
   .controls,
-  .start-button,
-  .mission-hint {
+  .start-button {
     display: none;
   }
 
@@ -990,22 +864,6 @@ canvas {
   .touch-key:active {
     border-color: var(--lime);
     background: rgba(210, 173, 104, 0.18);
-  }
-
-  .touch-up {
-    grid-area: 1 / 2;
-  }
-
-  .touch-left {
-    grid-area: 2 / 1;
-  }
-
-  .touch-down {
-    grid-area: 2 / 2;
-  }
-
-  .touch-right {
-    grid-area: 2 / 3;
   }
 
   .touch-fire {
@@ -1083,19 +941,6 @@ canvas {
     padding: 18px 0 22px;
   }
 
-  .mission-panel {
-    column-gap: 10px;
-  }
-
-  .mission-panel h1 {
-    font-size: 44px;
-  }
-
-  .mission-copy {
-    max-width: 190px;
-    font-size: 10px;
-  }
-
   .stats {
     gap: 12px;
   }
@@ -1135,20 +980,6 @@ canvas {
     background: var(--cinnabar);
   }
 
-  .field-topline {
-    min-height: 24px;
-    font-size: 7px;
-  }
-
-  .field-footer {
-    min-height: 26px;
-    font-size: 6px;
-  }
-
-  .footer-coordinates {
-    display: none;
-  }
-
   .overlay-card {
     padding: 15px;
   }
@@ -1178,10 +1009,7 @@ body.battle-focus {
 }
 
 .battle-focus .topbar,
-.battle-focus .page-footer,
-.battle-focus .mission-panel,
-.battle-focus .field-topline,
-.battle-focus .field-footer {
+.battle-focus .page-footer {
   display: none;
 }
 
