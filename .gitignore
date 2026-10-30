@@ -4,3 +4,6 @@
 .DS_Store
 # Private migration-skill config (absolute local paths). The skill itself is tracked.
 .agents/skills/*/config/projects.yaml
+# Audio originals archived by scripts/transcode-audio.mjs: the 96 kHz/24-bit and
+# 320 kbps masters kept for a re-transcode. They must never ship in a build.
+assets/audio-source/

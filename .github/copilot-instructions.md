@@ -10,6 +10,17 @@
 - Add `?seed=<number>` to any URL to replay a battle deterministically; the same seed produces the same battlefield, formations, and drops. `?rings=10,40,30,20` replaces the battlefield's four band ratios for one boot (`src/data/rings.js`), so a shape can be tried without editing the table.
 - `.github/workflows/checks.yml` runs the syntax check, unit tests, and smoke test on every push and pull request. Add new automated checks there rather than introducing a package manifest.
 
+## Audio
+
+- Three layers, and no fourth: `src/data/sounds.js` is the only file that names a drop (files, cues, mix, death/purchase tables, soundscapes); `src/assets/audio.js` is the player and owns every decision (take rotation, rate/voice limiting, loop lanes, mute); `src/platform/audio.js` is the only file allowed to touch `AudioContext`, `decodeAudioData` or `new Audio`.
+- A drop's **file name is its routing key**: `<cue>.wav` is a one-shot, `<cue>_<n>.wav` is one take of a cue (played round-robin), `<cue>_loop.wav` loops until stopped. The folder (`player/`, `units/`, `weapon/`, `ambient/`) is for humans only. Adding a take needs no code; adding an *event* needs one row in `soundCues`.
+- Gameplay gets exactly one function, `playSound(cue)` with a cue from `soundCues`; it never passes a file name, a gain or a lane. `announceBanner` takes `{ cue }`, not a tone.
+- Every event without a recording of its own lives in `soundBorrowed` with a `TODO(sound)` comment naming the substitute; the unit test fails if a row loses its TODO or points at a cue no file plays. Replace a stand-in by editing one value.
+- Never pick a take, a delay or an intensity from `campaign.random()`: the seeded battle must be identical with and without sound. The player rotates takes with its own counter on purpose.
+- New or changed assets go through `node scripts/transcode-audio.mjs` (22.05 kHz / 16-bit / mono PCM, peak-normalised to -3 dBFS, loop edges faded), which archives the master to the git-ignored `assets/audio-source/`. `--force` re-transcodes from the masters; the script is idempotent. `--levels` is the read-only audit: it measures peak/RMS of every shipped file (**`ambient/` included**, which the transcode walk skips) and names anything more than 12 dB under the set's median RMS. Run it after touching a bed — a silent cue or an empty bounce is a perfectly valid file, so only a measurement catches it.
+- A music bed that opens before the first gesture has its `play()` refused and stays paused; the fix is `resumeStream()` (resume in place, keep the position and the gain), never stop + start, which restarts a 30s bed at 0:00. Never remove the session's `pointerdown`/`keydown` unlock listeners: a non-gesture screen change can open a bed at any time, and the next tap is what hands it back.
+- Audition changes by ear at `http://localhost:8000/scripts/audio-lab.html` (served by `scripts/serve.mjs`), not by container size; `node scripts/export-audio-manifest.mjs` emits the same registry as JSON for a port.
+
 ## Architecture
 
 - `src/main.js` loads `src/game/game.js`, which is the composition root: it creates state, wires rendering, HUD, controls, screens, stage, shop, collision, combat, and projectile systems together, and starts `src/game/loop.js`.
