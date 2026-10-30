@@ -1,7 +1,7 @@
 import {
   calculateChariotStats, calculateCrewSlots, equipment, horses, personnel,
 } from "../data/equipment.js";
-import { formationConfig } from "../data/formations.js";
+import { formationRules, hireCount, nextTierFor, tierForIndex } from "../data/formations.js";
 import { soundCues, soundPurchaseCues } from "../data/sounds.js";
 import { translate } from "../i18n/index.js";
 import { drawDossier } from "./shop-dossier.js";
@@ -162,38 +162,45 @@ export function createShop({
       action: () => buy("personnel", member.id),
     }));
 
-    // The hired line: a fixed-price formation bought for the run, capped at two.
-    // It is not a roster member - it never takes a crew slot and its dead are not
-    // listed - so it sits at the bottom of the crew page with its own count.
-    const hired = campaign.friendlyFormations ?? 0;
-    const formationFull = hired >= formationConfig.maxHires;
+    // The hired line: a fixed-price rung of the ladder, bought in order and capped
+    // at three. It is not a roster member - it never takes a crew slot and its dead
+    // are not listed - so it sits at the bottom of the crew page with its own count.
+    // The row always shows the rung on sale (`nextTierFor`), so the price, the
+    // body count and the name move up together as the ladder is climbed, and the
+    // last rung is the one that turns the row into 已雇三阵.
+    const hired = hireCount(campaign);
+    const tier = nextTierFor(hired);
+    const formationFull = tier === null;
+    // With the ladder full there is nothing left to sell, so the row keeps
+    // describing the last line the player owns instead of blanking out.
+    const shown = tier ?? tierForIndex(hired - 1);
     rows.push({
       id: "formation",
       title: translate("shop.formationCount", {
-        name: translate(formationConfig.nameKey),
+        name: translate(shown.nameKey),
         count: hired,
-        max: formationConfig.maxHires,
+        max: formationRules.maxHires,
       }),
       effect: translate("shop.formationEffect", {
-        price: formationConfig.price,
-        units: formationConfig.slots.length,
-        heal: formationConfig.aura.heal,
-        interval: formationConfig.aura.interval,
+        price: tier?.price ?? 0,
+        units: tier?.slots.length ?? 0,
+        heal: formationRules.aura.heal,
+        interval: formationRules.aura.interval,
       }),
-      price: formationConfig.price,
+      price: tier?.price ?? 0,
       buy: resolveBuy({
-        price: formationConfig.price,
+        price: tier?.price ?? 0,
         gold,
         maxedKey: formationFull ? "shop.formationCap" : null,
         buyKey: "shop.hireFormation",
       }),
-      info: itemInfo("formation", formationConfig.nameKey, translate("shop.formationDescription")),
+      info: itemInfo("formation", shown.nameKey, translate(shown.descriptionKey)),
       // Pressing grows the camp by one tent; the battlefield is not shown in the
       // shop, so the fire is where a hire has to be legible before it is paid for.
       preview: {
         levels: campaign.equipment,
         horses: campaign.horseCount,
-        campTents: Math.min(formationConfig.maxHires, hired + (formationFull ? 0 : 1)),
+        campTents: Math.min(formationRules.maxHires, hired + (formationFull ? 0 : 1)),
       },
       action: () => buy("formation"),
     });

@@ -1,6 +1,20 @@
 import { calculateCrewSlots, equipment, horses, personnel } from "../data/equipment.js";
-import { formationConfig } from "../data/formations.js";
+import { hireCount, nextTierFor } from "../data/formations.js";
 import { translate } from "../i18n/index.js";
+
+// The clan's gift (see `grantFormation`): the 4th stage's champion leaves a line
+// of hire behind, and the campaign remembers it so the same gift cannot be handed
+// out twice. It is a campaign flag rather than battle state because the reward
+// outlives the battle it was earned in.
+export function grantFormation(campaign) {
+  const owned = hireCount(campaign);
+  const tier = nextTierFor(owned);
+  // Nothing left to give: the ladder is full, so the card is skipped rather than
+  // promising a line that the spawner would clamp away.
+  if (!tier) return null;
+  campaign.friendlyFormations = owned + 1;
+  return { tier, count: owned + 1 };
+}
 
 // Purchases are the campaign's, not the page's. Everything here mutates the
 // campaign and answers with the line the shop should print; where that line is
@@ -57,14 +71,16 @@ export function createEquipmentShop({ campaign }) {
     if (purchaseType === "formation") {
       // A hired line is bought for the run, not for the battle: the count lives
       // on the campaign and each stage spawns that many lines at full strength.
-      if ((campaign.friendlyFormations ?? 0) >= formationConfig.maxHires) {
-        return refusal("shop.error.formationCap");
-      }
-      const { price } = formationConfig;
+      // The ladder is bought in order, so the price and the roster come from the
+      // rung that follows what the player already owns.
+      const owned = hireCount(campaign);
+      const tier = nextTierFor(owned);
+      if (!tier) return refusal("shop.error.formationCap");
+      const { price } = tier;
       if (campaign.totalGold < price) return refusal("shop.error.gold");
       campaign.totalGold -= price;
-      campaign.friendlyFormations = (campaign.friendlyFormations ?? 0) + 1;
-      return purchase(formationConfig.nameKey);
+      campaign.friendlyFormations = owned + 1;
+      return purchase(tier.nameKey);
     }
     throw new Error(`Unknown purchase type: ${purchaseType}`);
   }

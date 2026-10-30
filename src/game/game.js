@@ -313,7 +313,7 @@ function boot() {
   tutorialRef.current = tutorial;
 
   // The hired line fights with the same verbs the enemies do: `damageEnemy` for
-  // its blows, the projectile system's `fireAllyArrow` for its bows, and the
+  // its blows, the projectile system's `fireAllyShot` for its bows, and the
   // enemy spawner's burst/melee effects for feedback. It owns no references to
   // the player's combat module - a hire can never call `damagePlayer`.
   const allies = createAllies({
@@ -322,7 +322,7 @@ function boot() {
     hasLineOfSight: collision.hasLineOfSight,
     circleIntersectsObstacle: collision.circleIntersectsObstacle,
     rectHitsAnyObstacle, rectTerrain,
-    damageEnemy, fireAllyArrow: defer(() => projectileRef.current, "fireAllyArrow"),
+    damageEnemy, fireAllyShot: defer(() => projectileRef.current, "fireAllyShot"),
     addMeleeEffect, burst, playSound,
   });
   alliesRef.current = allies;
@@ -400,6 +400,14 @@ function boot() {
     updateHud, setMode, spawnBoss, spawnBossSquad, announceBoss, resizeCanvas, playSound, hideBanner,
     spawnFriendlyAllies: allies.spawnFriendlyFormations,
     lockVictory: (summary) => victoryLock.lock(summary),
+    // The clan's gift (stages.offerClanGrant). It is parked on the state and the
+    // card is painted straight away: the gift is not a mode, so nothing about the
+    // run changes except that the field waits under the news until it is put away
+    // (src/game/game.js freezes on `state.grant` the way it freezes on a drill card).
+    onGrant: (grant) => {
+      state.grant = grant;
+      screens.showCard();
+    },
   });
   const {
     beginMission, beginTutorial, resetCampaign, resetMission, beginExtraction, enterShop, enterVictory,
@@ -451,18 +459,34 @@ function boot() {
     setMode("menu");
   }
 
+  // The walk to the gate: the same arrival ends the campaign on the last stage and
+  // opens the shop on every other one. A frozen field never gets here, which is why
+  // the clan's gift (raised as this gate opens) cannot be walked through while its
+  // card is up: the news is put away first, and the frame after that finds the
+  // player standing in the circle he was already in and ends the run from there.
+  function checkExtractionArrival() {
+    if (state.phase !== "extract" || !state.extractionPoint) return;
+    const span = distanceBetween(player.x, player.y, state.extractionPoint.x, state.extractionPoint.y);
+    if (span > state.extractionPoint.radius) return;
+    if (state.finalBattle) enterVictory();
+    else enterShop();
+  }
+
   function update(delta) {
     state.elapsed += delta;
     player.swarmDamageCooldown = Math.max(0, player.swarmDamageCooldown - delta);
     // A tutorial card (or a pan) is a real pause: every control reads neutral, so
-    // the chariot coasts to a stop instead of the field freezing mid-stride.
-    const frozen = state.tutorial?.frozen === true;
+    // the chariot coasts to a stop instead of the field freezing mid-stride. The
+    // clan's gift card is the same bargain, and it has to be: it opens over a live
+    // field (the extraction gate is open and the player is still driving for it),
+    // so the field waits for the card rather than letting a stray axe find a reader.
+    const frozen = state.tutorial?.frozen === true || state.grant !== null;
     readControls(delta, frozen);
     updateFootsteps();
     syncSoundscape();
     if (state.mode !== "running") return;
     tutorial.update(delta);
-    if (state.tutorial?.frozen) {
+    if (state.grant !== null || state.tutorial?.frozen) {
       // Nothing moves, nothing is fired and nothing lands while a card is up. The
       // bow's draw state is dropped rather than carried across the pause, and the
       // camera still eases (a pan is a frozen field, not a frozen camera).
@@ -551,13 +575,7 @@ function boot() {
     if (state.phase === "combat" && (state.bossStage ? state.bossDefeated : state.kills >= state.objectiveTarget)) {
       beginExtraction();
     }
-    if (state.phase === "extract" && state.extractionPoint
-      && distanceBetween(player.x, player.y, state.extractionPoint.x, state.extractionPoint.y) <= state.extractionPoint.radius) {
-      // The same walk ends the campaign on the last stage and opens the shop on
-      // every other one.
-      if (state.finalBattle) enterVictory();
-      else enterShop();
-    }
+    checkExtractionArrival();
   }
 
   const controls = bindControls({
@@ -580,6 +598,13 @@ function boot() {
     // The card is canvas UI, so "click the button" and "press Enter" are the same
     // call as far as the controls are concerned.
     confirmTutorial: () => tutorial.confirm(),
+    // The clan's gift card's button: put the news away and give the field back.
+    // The line is already bought (stages.offerClanGrant), so there is nothing to
+    // confirm - which is exactly why the card is not a mode.
+    confirmGrant: () => {
+      state.grant = null;
+      screens.showCard();
+    },
     // The HUD's mute switch is the player's own: `state.sound` is what the player
     // sees, and the player applies it immediately so the shop's campfire and the
     // menu's ambience stop on the same tap.

@@ -19,6 +19,7 @@ export const CARD_ACTIONS = Object.freeze({
   retry: "retry",
   endRun: "endRun",
   tutorial: "tutorial",
+  grant: "grant",
 });
 
 // Which card a mode shows, or null for a mode that shows the field. Pure: the
@@ -81,6 +82,30 @@ export function cardForTutorial(overlay) {
     action: CARD_ACTIONS.tutorial,
     // The drill's beats are the game's long-form copy: they get the wider card.
     width: "wide",
+  };
+}
+
+// The clan's gift, from the end of the 4th stage (`grantFormation`). It is a card
+// rather than a shop row because nothing is being asked of the player: the line is
+// already his, the battle underneath is still running, and the one button only
+// puts the news away. That is also why it cannot be a mode - the field must not
+// lose its frame for a thank-you.
+export function cardForGrant(grant) {
+  if (!grant) return null;
+  return {
+    eyebrowKey: "grant.eyebrow",
+    titleKey: "grant.title",
+    copyKey: "grant.copy",
+    copyParams: { clan: grant.clan ?? "" },
+    lines: [
+      {
+        textKey: "grant.line",
+        params: { formation: translate(grant.nameKey), count: grant.count },
+        tone: "stat",
+      },
+    ],
+    actionKey: "grant.accept",
+    action: CARD_ACTIONS.grant,
   };
 }
 

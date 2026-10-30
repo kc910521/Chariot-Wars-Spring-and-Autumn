@@ -207,10 +207,18 @@ export function createProjectileSystem({
     playSound(soundCues.chariotArrow);
   }
 
-  function fireAllyArrow({
+  // The hired line's shot. A bow is the common case, so the arrow is the default
+  // and the 攻坚砲营's engine only has to name `kind: "stone"` - the arc, the
+  // impact puff and the sound all follow the kind, exactly as they do for the
+  // enemy catapult (`fireEnemyShot`).
+  function fireAllyShot({
     x, y, targetX, targetY, damage, range, originOffset, index = 0, count = 1,
+    kind = "arrow", speed, gravity,
   }) {
     const rules = projectileRules.allyArrow;
+    const shotSpeed = speed ?? (kind === "stone" ? projectileRules.enemyShot.stoneSpeed : rules.speed);
+    const shotGravity = gravity
+      ?? (kind === "stone" ? projectileRules.enemyShot.stoneGravity : rules.gravity);
     const angle = Math.atan2(targetY - y, targetX - x);
     const volleyAngle = angle + (index - (count - 1) / 2) * rules.spread;
     const distance = Math.hypot(targetX - x, targetY - y);
@@ -218,18 +226,18 @@ export function createProjectileSystem({
       x: x + Math.cos(volleyAngle) * originOffset,
       y: y + Math.sin(volleyAngle) * originOffset,
       angle: volleyAngle,
-      speed: rules.speed,
-      elevation: solveBallisticElevation(distance, rules.speed, rules.gravity),
-      gravity: rules.gravity,
+      speed: shotSpeed,
+      elevation: solveBallisticElevation(distance, shotSpeed, shotGravity),
+      gravity: shotGravity,
       range,
       owner: "ally",
       damage,
-      kind: "arrow",
+      kind,
     }));
     // One bow sound for the crew, the dismounted companions and the hired line:
     // they all loose the same arrow, and `maxVoices` keeps a fan of them from
-    // stacking into a single louder shot.
-    playSound(soundCues.archerShoot);
+    // stacking into a single louder shot. A stone lands with the engine's thud.
+    playSound(kind === "stone" ? soundCues.catapultShoot : soundCues.archerShoot);
   }
 
   function fireEnemyShot(enemy, angle, target = player) {
@@ -277,5 +285,5 @@ export function createProjectileSystem({
     });
   }
 
-  return { firePlayerVolley, fireAllyArrow, fireEnemyShot, update };
+  return { firePlayerVolley, fireAllyShot, fireEnemyShot, update };
 }

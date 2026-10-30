@@ -4,7 +4,7 @@ import { CARD_ACTIONS } from "./battle-card.js";
 export function bindControls({
   state, keys, startRun, startTutorial, beginMission, restartStage, setMode,
   resizeCanvas, resizeShop = () => {}, resizeMenu = () => {}, battleScreen, touchInput, endRun,
-  confirmTutorial = () => {}, onSoundToggle = () => {}, onFormationOrder = () => {}, elements,
+  confirmTutorial = () => {}, confirmGrant = () => {}, onSoundToggle = () => {}, onFormationOrder = () => {}, elements,
 }) {
   const {
     startButton, menuStartButton, prologueStartButton, prologueTutorialButton,
@@ -31,8 +31,16 @@ export function bindControls({
     // while it is up: the battle underneath it is frozen, so Enter and Space mean
     // "understood", not "go". Neither key is registered either - a Space that
     // confirmed a card must not also start a bow draw the player cannot see.
+    //
+    // The clan's gift card is the other one, and for the same reason: it opens over
+    // a live field, the field waits for it (game.update), and its one button is
+    // the only thing a key should be able to press.
     if (state.tutorial?.overlay && (key === "Enter" || key === " " || key === "Spacebar")) {
       confirmTutorial();
+      return;
+    }
+    if (state.grant && (key === "Enter" || key === " " || key === "Spacebar")) {
+      confirmGrant();
       return;
     }
     keys.add(key);
@@ -84,6 +92,9 @@ export function bindControls({
     // to nothing and the menu (now locked) shows what the next wait is for.
     [CARD_ACTIONS.endRun]: () => endRun(),
     [CARD_ACTIONS.tutorial]: () => confirmTutorial(),
+    // The clan's gift: the line is already the player's, so this only puts the
+    // card away (the gift is offered as the extraction gate opens, not before).
+    [CARD_ACTIONS.grant]: () => confirmGrant(),
   };
   cardButton.addEventListener("click", () => cardActions[cardButton.dataset.action]?.());
   function refreshSoundLabel() {

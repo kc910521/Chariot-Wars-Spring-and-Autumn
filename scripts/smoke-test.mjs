@@ -7,7 +7,7 @@ import { createHash } from "node:crypto";
 import { writeFileSync } from "node:fs";
 import { campaignRules, effectRules, projectileRules } from "../src/data/rules.js";
 import { equipment } from "../src/data/equipment.js";
-import { formationPresets } from "../src/data/formations.js";
+import { formationPresets, formationRules, formationTiers } from "../src/data/formations.js";
 
 const projectRoot = resolve(import.meta.dirname, "..");
 
@@ -1016,7 +1016,8 @@ game.campaign.totalGold = savedGold;
 runFrames(1);
 
 // The crew page: the same ledger, but the dossier's chart slot paints the night
-// camp, and the last row is the hired line - a fixed price, capped at two, and
+// camp, and the last row is the hire ladder - three rungs, bought in order, each
+// with its own price and its own line of bodies, capped at the top rung and
 // legible at the fire before it is paid for.
 tapRect(tabById("personnel").rect);
 check("switching tabs paints the night camp",
@@ -1030,16 +1031,18 @@ check("the fire seats the player and the living crew",
   shopFrame().dossier.camp.seats === 1 + game.campaign.roster.filter((member) => member.alive !== false).length,
   `seats=${shopFrame().dossier.camp.seats}`);
 
+const [levyRung, horseRung, siegeRung] = formationTiers;
 const hireRow = revealRow("formation");
-check("the crew page sells the hired formation, count and cap included",
-  Boolean(hireRow) && hireRow.title.includes(translate("formation.friendly")) && hireRow.title.includes("0/2"),
+check("the crew page sells the first rung of the ladder, count and cap included",
+  Boolean(hireRow) && hireRow.title.includes(translate(levyRung.nameKey))
+    && hireRow.title.includes(`0/${formationRules.maxHires}`),
   `title="${hireRow?.title}"`);
 
 const savedForHire = game.campaign.totalGold;
-game.campaign.totalGold = 5000;
+game.campaign.totalGold = levyRung.price + horseRung.price + siegeRung.price;
 runFrames(1);
-check("the hire opens on its buy price",
-  rowById("formation")?.label === translate("shop.hireFormation", { price: 1000 })
+check("the hire opens on the first rung's price",
+  rowById("formation")?.label === translate("shop.hireFormation", { price: levyRung.price })
     && rowById("formation")?.disabled === false, `label="${rowById("formation")?.label}"`);
 check("the camp opens without a hired tent", campTents() === 0, `tents=${campTents()}`);
 
@@ -1049,19 +1052,37 @@ releaseRect(rowById("formation").rect);
 check("releasing the hire takes the tent back", campTents() === 0, `tents=${campTents()}`);
 
 tapRect(rowById("formation").buyRect);
-check("buying the hire charges the price and keeps the line",
-  game.campaign.friendlyFormations === 1 && game.campaign.totalGold === 4000,
+check("buying the first rung charges its price and keeps the line",
+  game.campaign.friendlyFormations === 1
+    && game.campaign.totalGold === horseRung.price + siegeRung.price,
   `hires=${game.campaign.friendlyFormations} gold=${game.campaign.totalGold}`);
 check("the bought line is camped at the fire", campTents() === 1, `tents=${campTents()}`);
-check("the row now counts the line", rowById("formation")?.title.includes("1/2"),
-  `title="${rowById("formation")?.title}"`);
+check("the row moves up to the second rung, name and price together",
+  rowById("formation")?.title.includes(translate(horseRung.nameKey))
+    && rowById("formation")?.title.includes(`1/${formationRules.maxHires}`)
+    && rowById("formation")?.label === translate("shop.hireFormation", { price: horseRung.price }),
+  `title="${rowById("formation")?.title}" label="${rowById("formation")?.label}"`);
 
 pressRect(rowById("formation").rect);
-check("a second hire previews a second tent", campTents() === 2, `tents=${campTents()}`);
+check("the second rung previews a second tent", campTents() === 2, `tents=${campTents()}`);
 releaseRect(rowById("formation").rect);
 tapRect(rowById("formation").buyRect);
-check("a second line can be hired", game.campaign.friendlyFormations === 2,
-  `hires=${game.campaign.friendlyFormations}`);
+check("the second rung can be hired at its own price",
+  game.campaign.friendlyFormations === 2 && game.campaign.totalGold === siegeRung.price,
+  `hires=${game.campaign.friendlyFormations} gold=${game.campaign.totalGold}`);
+check("the row is selling the siege camp now",
+  rowById("formation")?.title.includes(translate(siegeRung.nameKey))
+    && rowById("formation")?.label === translate("shop.hireFormation", { price: siegeRung.price }),
+  `title="${rowById("formation")?.title}" label="${rowById("formation")?.label}"`);
+
+pressRect(rowById("formation").rect);
+check("the siege camp previews a third tent", campTents() === formationRules.maxHires,
+  `tents=${campTents()}`);
+releaseRect(rowById("formation").rect);
+tapRect(rowById("formation").buyRect);
+check("the last rung can be bought, and the shelf is bare",
+  game.campaign.friendlyFormations === formationRules.maxHires && game.campaign.totalGold === 0,
+  `hires=${game.campaign.friendlyFormations} gold=${game.campaign.totalGold}`);
 check("the cap disables the button and says why",
   rowById("formation")?.disabled === true && rowById("formation")?.label === translate("shop.formationCap"),
   `label="${rowById("formation")?.label}" disabled=${rowById("formation")?.disabled}`);
@@ -1071,7 +1092,9 @@ check("the cap disables the button and says why",
 game.campaign.friendlyFormations = 0;
 game.campaign.totalGold = savedForHire;
 runFrames(1);
-check("the ledger reopens without a hire", rowById("formation")?.title.includes("0/2"),
+check("the ledger reopens at the first rung without a hire",
+  rowById("formation")?.title.includes(translate(levyRung.nameKey))
+    && rowById("formation")?.title.includes(`0/${formationRules.maxHires}`),
   `title="${rowById("formation")?.title}"`);
 
 // The footer's button is the one action the page delegates to the stage manager:
@@ -1082,19 +1105,23 @@ check("the footer's next battle leaves the shop for the next stage",
   game.state.mode === "running" && game.campaign.stage === stageBeforeNext + 1,
   `mode=${game.state.mode} stage=${game.campaign.stage}`);
 
-// The purchase has to reach the field: one line, seven bodies, its chariot, and
-// all of it close to the player's start rather than at a random map bearing.
+// The purchase has to reach the field: one line, eleven bodies, three bows and no
+// vehicle on this rung, and all of it close to the player's start rather than at a
+// random map bearing.
 game.campaign.friendlyFormations = 1;
 game.stageManager.restartStage();
 const hiredLine = game.state.allyFormations ?? [];
 const hiredBodies = game.state.allies ?? [];
 check("a hired line takes the field in the next battle",
-  hiredLine.length === 1 && hiredBodies.length === 7,
+  hiredLine.length === 1 && hiredBodies.length === levyRung.slots.length,
   `lines=${hiredLine.length} bodies=${hiredBodies.length}`);
-check("the hired line brings its chariot and both archers",
-  hiredBodies.filter((ally) => ally.vehicle).length === 1
-    && hiredBodies.filter((ally) => ally.ranged).length === 2,
+check("the first rung is infantry and bows, with no engine among them",
+  hiredBodies.filter((ally) => ally.vehicle).length === 0
+    && hiredBodies.filter((ally) => ally.ranged).length === 3,
   `vehicles=${hiredBodies.filter((ally) => ally.vehicle).length} ranged=${hiredBodies.filter((ally) => ally.ranged).length}`);
+check("the line's rung is the rung that was bought",
+  hiredLine[0]?.tier === 0 && hiredLine[0]?.nameKey === levyRung.nameKey,
+  `tier=${hiredLine[0]?.tier} name=${hiredLine[0]?.nameKey}`);
 check("the hired line spawns beside the chariot, not across the map",
   hiredBodies.every((ally) => Math.hypot(ally.x - game.player.x, ally.y - game.player.y) < 420),
   "a hire spawned out of supporting distance");
@@ -1108,8 +1135,26 @@ runFrames(30, () => {
 });
 check("the hired line holds its ground with finite geometry", !hireGeometryGap,
   `non-finite ${hireGeometryGap}`);
-check("the hired line is still seven bodies after a second of battle",
-  (game.state.allies ?? []).length === 7, `bodies=${(game.state.allies ?? []).length}`);
+check("the hired line is still whole after a second of battle",
+  (game.state.allies ?? []).length === levyRung.slots.length,
+  `bodies=${(game.state.allies ?? []).length}`);
+
+// The second rung on the same field: the ladder is bought in order, so two hires
+// are the levy and 马砲铁阵 - the rung with the chariots, and the captured engine
+// does not appear until the siege camp is owned.
+game.campaign.friendlyFormations = 2;
+game.stageManager.restartStage();
+const twoRungs = game.state.allyFormations ?? [];
+const twoRungBodies = game.state.allies ?? [];
+check("two hires field both rungs, each with its own roster",
+  twoRungs.length === 2 && twoRungBodies.length === levyRung.slots.length + horseRung.slots.length
+    && twoRungs.map((line) => line.tier).join() === "0,1",
+  `lines=${twoRungs.length} bodies=${twoRungBodies.length} tiers=${twoRungs.map((line) => line.tier).join()}`);
+check("the second rung is the one that brings chariots",
+  twoRungBodies.filter((ally) => ally.vehicle).length === 2
+    && twoRungBodies.every((ally) => ally.visual.kind !== "catapult"),
+  `vehicles=${twoRungBodies.filter((ally) => ally.vehicle).length}`
+    + ` engines=${twoRungBodies.filter((ally) => ally.visual.kind === "catapult").length}`);
 
 // ---- 出击 / 结阵 --------------------------------------------------------------
 //
@@ -1291,13 +1336,65 @@ runFrames(2);
 check("the extraction opens on the last stage", game.state.phase === "extract",
   `phase=${game.state.phase}`);
 const extraction = game.state.extractionPoint;
-const victoryScore = game.state.score;
-const goldBeforeVictory = game.campaign.totalGold;
+
+// ---- the clan's gift ---------------------------------------------------------
+//
+// This is the stage the gift is tied to (`campaignRules.clanGrantStage`), so the
+// card over the field is the clan's news first and the run's own victory card
+// after it. The line is already the player's by the time he reads it - the shop
+// would otherwise be the only place a line ever arrived from - and the gift is
+// remembered on the campaign so a second battle on this stage cannot hand out a
+// second one.
+check("the battle is the one the gift is tied to",
+  game.campaign.stage === campaignRules.clanGrantStage, `stage=${game.campaign.stage}`);
+const gift = game.state.grant;
+check("clearing that stage hands out the next rung of the ladder, unasked",
+  gift !== null && game.campaign.formationGrant === true && game.campaign.friendlyFormations === gift?.count,
+  `grant=${JSON.stringify(gift)} hires=${game.campaign.friendlyFormations}`);
+check("the gift is the rung that follows what the run owns",
+  gift?.count === 1 && gift?.nameKey === formationTiers[0].nameKey,
+  `count=${gift?.count} name=${gift?.nameKey}`);
+check("the gift names the player's own clan",
+  gift?.clan === game.campaign.identity.clan, `clan=${gift?.clan}`);
+check("the gift card takes the field, over the running battle",
+  !query("#battle-card").classList.contains("hidden")
+    && query("#card-title").textContent === translate("grant.title")
+    && query("#card-copy").textContent === translate("grant.copy", { clan: gift?.clan }),
+  `title="${query("#card-title").textContent}" copy="${query("#card-copy").textContent}"`);
+check("the gift card names the rung and the count it leaves",
+  query("#card-lines").children[0]?.textContent === translate("grant.line", {
+    formation: translate(gift?.nameKey), count: gift?.count,
+  }),
+  `line="${query("#card-lines").children[0]?.textContent}"`);
+
+// The card holds the field, gate included: the news is read with the player's
+// hands off the controls, so standing in the circle while it is up is not the end
+// of the run - and putting it away, standing in that same circle, is.
 game.player.x = extraction.x;
 game.player.y = extraction.y;
 runFrames(1);
+check("the gift card holds the whole field, gate included",
+  game.state.mode === "running" && game.state.phase === "extract",
+  `mode=${game.state.mode} phase=${game.state.phase}`);
+
+const victoryScore = game.state.score;
+const goldBeforeVictory = game.campaign.totalGold;
+query("#card-button").dispatch("click");
+runFrames(1);
+check("putting the news away hands the field back",
+  game.state.grant === null, `grant=${JSON.stringify(game.state.grant)}`);
 check("reaching the extraction point wins the run instead of opening the shop",
   game.state.mode === "victory", `mode=${game.state.mode}`);
+
+// The victory card was waiting behind the news: the gift is not a mode, so the
+// run's own report was never interrupted.
+check("closing the gift shows the victory card behind it",
+  game.state.grant === null && game.state.mode === "victory"
+    && query("#card-title").textContent === translate("victory.title"),
+  `grant=${game.state.grant} mode=${game.state.mode} title="${query("#card-title").textContent}"`);
+
+// The gift is a run's to keep, so the drill that follows is still a drill: no
+// hired line marches into the player's own training.
 check("the victory card takes the field",
   !query("#battle-card").classList.contains("hidden"),
   `hidden=${query("#battle-card").classList.contains("hidden")}`);
@@ -1373,6 +1470,12 @@ check("a run starts again once the rest is over", game.state.mode === "prologue"
 // uses (confirmed by a click and by Enter), the tiger and the line spawn through
 // the enemy system's scenario entry points, and the clear hands the run into
 // stage 1 through the shop.
+// A drill is the player's own training, so the hire ladder never marches into it:
+// the run's line is bought for the campaign's fields, and the drill's own 演武步阵
+// is the only line it stands. The campaign is given a line here for the check
+// alone and put back, because everything below this section is a diagram of a
+// drill and not of a campaign battle.
+game.campaign.friendlyFormations = 1;
 query("#prologue-tutorial").dispatch("click");
 const drill = () => game.state.tutorial;
 check("the story card's tutorial button opens the drill",
@@ -1387,6 +1490,10 @@ check("the stage tile says DRILL instead of a stage number",
 check("the drill spawns one wild animal and rolls no campaign wave",
   game.state.wilds.length === 1 && game.state.enemies.length === 1 && game.state.formations.length === 0,
   `wilds=${game.state.wilds.length} enemies=${game.state.enemies.length} formations=${game.state.formations.length}`);
+check("a hired line does not march into a drill",
+  (game.state.allies ?? []).length === 0 && (game.state.allyFormations ?? []).length === 0,
+  `hires=${game.campaign.friendlyFormations} allies=${(game.state.allies ?? []).length}`);
+game.campaign.friendlyFormations = 0;
 check("the objective counts the animal and the line it guards",
   game.state.objectiveTarget === formationPresets.tutorialLine.slots.length + 1,
   `objective=${game.state.objectiveTarget}`);

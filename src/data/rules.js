@@ -106,6 +106,10 @@ export const campaignRules = Object.freeze({
   objectiveBase: 8,
   objectiveStep: 2,
   objectiveStageCap: 4,
+  // The stage whose champion pays out the clan's gift: one free rung of the hire
+  // ladder (src/game/equipment.js grantFormation). It sits past the first boss
+  // stage so the player has met the ladder in the shop before being handed a rung.
+  clanGrantStage: 4,
   waveScoreStep: 500,
   enemyLimit: 28,
   spawnIntervalMin: 4.2,

@@ -106,7 +106,7 @@ const combat = createCombatSystem({
   player,
   campaign,
   collision,
-  projectiles: { fireAllyArrow: (options) => shots.push(options) },
+  projectiles: { fireAllyShot: (options) => shots.push(options) },
   damageEnemy: noop,
   addMeleeEffect: noop,
   burst: noop,
@@ -165,7 +165,7 @@ const scenarios = [
 function buildFlight() {
   state.bullets.length = 0;
   for (let index = 0; index < 30; index += 1) {
-    projectiles.fireAllyArrow({
+    projectiles.fireAllyShot({
       x: player.x, y: player.y, targetX: player.x + 300, targetY: player.y, damage: 1, range: 600,
     });
   }

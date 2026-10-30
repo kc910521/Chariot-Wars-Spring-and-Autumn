@@ -93,7 +93,7 @@ export function createCombatSystem({
   function updateCrew(delta) {
     if (player.mode === "foot") return;
     const members = campaign.roster.filter((member) => member.alive !== false);
-    // The volley fan is measured over the archers alone. `fireAllyArrow` turns
+    // The volley fan is measured over the archers alone. `fireAllyShot` turns
     // `index`/`count` into a bearing offset, so counting the halberdiers in either
     // number pushes every archer's arrow off the target it actually aimed at.
     const archers = members.filter((member) => member.role === "archer");
@@ -110,7 +110,7 @@ export function createCombatSystem({
       if (!target) continue;
 
       if (member.role === "archer") {
-        projectiles.fireAllyArrow({
+        projectiles.fireAllyShot({
           x: player.x,
           y: player.y,
           targetX: target.x,
@@ -228,7 +228,7 @@ export function createCombatSystem({
           .sort((first, second) => distanceBetween(companion.x, companion.y, first.x, first.y) - distanceBetween(companion.x, companion.y, second.x, second.y))[0];
         if (!target) continue;
         companion.angle = Math.atan2(target.y - companion.y, target.x - companion.x);
-        projectiles.fireAllyArrow({
+        projectiles.fireAllyShot({
           x: companion.x,
           y: companion.y,
           targetX: target.x,

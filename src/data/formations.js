@@ -110,24 +110,74 @@ export const formationAura = {
   flash: 0.6,
 };
 
-// One hireable friendly line. The shop sells this row (price and cap), the ally
-// system spawns it, and the renderer labels it — so the roster, the shared
-// banner it points at and the chariot's leash all meet here rather than as
-// branches in the battle code. Slots use the enemy pattern frame: local -Y is
-// the front, +X runs along the line, and the line faces away from the player
-// who hired it.
-export const formationConfig = {
-  nameKey: "formation.friendly",
-  price: 1000,
-  maxHires: 2,
-  slots: [
-    ["spear", -92, -56], ["ge", -32, -56], ["heavy", 32, -56], ["spear", 92, -56],
-    ["chariot", 0, 0],
-    ["archer", -44, 56], ["archer", 44, 56],
-  ],
+// The hireable lines, cheapest first. The shop sells the next rung of this
+// ladder (`nextTierFor`), the ally system spawns every bought rung from its own
+// row (`tierForIndex`), and the renderer labels the line with the same name - so
+// the roster, the banner it points at and the chariot's leash still meet here
+// rather than as branches in the battle code. Slots use the enemy pattern frame:
+// local -Y is the front, +X runs along the line, and the line faces away from the
+// player who hired it.
+//
+// The ladder is bought in order and nothing lets the player skip a rung: the
+// first line is 私家募兵, the second 马砲铁阵, the third 攻坚砲营. A hire count
+// that runs past the table falls back to the first rung instead of inventing a
+// line (`tierForIndex`), so a hand-edited save still fields something.
+export const formationTiers = [
+  {
+    // Seven halberdiers, a swordsman and three bows: a rank of hooks in front and
+    // a shooting line behind it. No vehicle, so this rung is bought for bodies
+    // rather than for momentum.
+    nameKey: "formation.friendly",
+    descriptionKey: "shop.formationDescription.friendly",
+    price: 650,
+    slots: [
+      ["ge", -108, -48], ["ge", -72, -48], ["ge", -36, -48], ["ge", 0, -48],
+      ["ge", 36, -48], ["ge", 72, -48], ["ge", 108, -48],
+      ["heavy", 0, 2],
+      ["archer", -54, 56], ["archer", 0, 56], ["archer", 54, 56],
+    ],
+  },
+  {
+    // The first line with vehicles in it: two chariots in the centre, a heavy on
+    // each flank, and a mixed shooting rank (one bow, three slings).
+    nameKey: "formation.horseCannon",
+    descriptionKey: "shop.formationDescription.horseCannon",
+    price: 1150,
+    slots: [
+      ["ge", -96, -56], ["ge", -32, -56], ["ge", 32, -56], ["ge", 96, -56],
+      ["heavy", -84, 0], ["heavy", 84, 0],
+      ["chariot", -30, 0], ["chariot", 30, 0],
+      ["archer", -72, 58], ["slinger", -24, 58], ["slinger", 24, 58], ["slinger", 72, 58],
+    ],
+  },
+  {
+    // The siege rung: five heavies to hold the front, four chariot-archers to
+    // ride round it, and a captured catapult behind them - the champion's own
+    // engine, in the line's colours (see `allyStats` below).
+    nameKey: "formation.siege",
+    descriptionKey: "shop.formationDescription.siege",
+    price: 2550,
+    slots: [
+      ["heavy", -108, -52], ["heavy", -54, -52], ["heavy", 0, -52],
+      ["heavy", 54, -52], ["heavy", 108, -52],
+      ["chariot-archer", -60, 18], ["chariot-archer", -20, 18],
+      ["chariot-archer", 20, 18], ["chariot-archer", 60, 18],
+      ["catapult", 0, 92],
+    ],
+  },
+];
+
+// One row per line for everything a hire has in common: the cap, the paint, the
+// leash, the chariot's morale table and the two legs an order opens up. The rung
+// itself only carries what differs - its name, its price and its bodies - so a
+// fourth line would be a table entry and nothing else.
+export const formationRules = {
+  maxHires: formationTiers.length,
   // Same green as `spritePalette.allyRobe`; data rows keep their own hex so the
-  // simulation never has to import renderer art.
-  visual: { robe: "#398b63", deathBurst: "#6f8f55" },
+  // simulation never has to import renderer art. `bowRobe` is the one exception
+  // the line makes for itself: an archer in a hired rank is tinted so the player
+  // can see which bodies are the bows (- 弓手对齐).
+  visual: { robe: "#398b63", bowRobe: "#b8543a", deathBurst: "#6f8f55" },
   engage: {
     // How far from its own slot a foot ally will step to meet an enemy, and how
     // far past that slot it may be dragged. A hired line guards its ground; it
@@ -153,6 +203,47 @@ export const formationConfig = {
   // left behind when the line was set down runs, because the ground it has to
   // cover was already paid for.
   orders: { marchSpeed: 0.55, returnSpeed: 1.3 },
+};
+
+// The rung a hire index (0-based) fields. Past the table it is the first rung:
+// a count that outlived the ladder - a save from a build that sold three lines
+// differently, a hand-edited campaign - still puts bodies on the field instead of
+// throwing on a missing row.
+export function tierForIndex(index) {
+  const rung = formationTiers[index];
+  return rung ?? formationTiers[0];
+}
+
+// The rung the shop is selling right now: the one that follows the lines already
+// owned. `null` means the ladder is full, which is exactly the shop's cap.
+export function nextTierFor(count) {
+  return formationTiers[count] ?? null;
+}
+
+// How many lines a campaign has, clamped to the ladder. Every caller that reads
+// the count - the shop, the spawner, the camp preview - asks this instead of
+// trusting the field, so a count from anywhere else cannot field a fourth line.
+export function hireCount(campaign) {
+  const stored = Math.round(Number(campaign?.friendlyFormations ?? 0));
+  if (!Number.isFinite(stored) || stored <= 0) return 0;
+  return Math.min(stored, formationRules.maxHires);
+}
+
+// The one ally row that is not a repainted enemy: the 攻坚砲营's catapult. It
+// carries the champion's numbers from `bossTypes` below - 96 damage a stone, 620
+// px of reach, the same lob - because "the boss catapult, but ours" is the whole
+// idea. It lives in its own table so the enemy spawner can never field it.
+export const allyStats = {
+  catapult: {
+    health: 55, radius: 36, speed: 34, damage: 96, range: 620,
+    ranged: true, projectile: "stone", projectileSpeed: 560, projectileRange: 620,
+    fireInterval: 3.1,
+    behaviour: "ranged", sightRange: 620, deathBurst: "#6f8f55",
+    holdsRank: true,
+    // A siege engine does not kite: it stands behind the heavies and lobs.
+    kite: { retreat: 240, minFire: 280 },
+    visual: { kind: "catapult", scale: 1.08, robe: "#398b63", overlays: [] },
+  },
 };
 
 // Everything the simulation and the renderer need to know about a unit type

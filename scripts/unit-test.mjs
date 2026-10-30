@@ -15,6 +15,7 @@ import { selectAimTarget } from "../src/game/aim.js";
 import { createPlayerIdentity, pickWeighted } from "../src/game/identity.js";
 import { battlefields } from "../src/data/battlefields.js";
 import { clanNames, givenNames } from "../src/data/names.js";
+import { createEquipmentShop, grantFormation } from "../src/game/equipment.js";
 import { createCollisionSystem } from "../src/game/collision.js";
 import { createCombatSystem } from "../src/game/combat.js";
 import { cloudKinds, elementRules, groundVisual, obstacleKinds, terrainKinds } from "../src/data/elements.js";
@@ -36,7 +37,10 @@ import { createGroundPainter } from "../src/render/ground.js";
 import { createRenderer } from "../src/render/renderer.js";
 import { chariotRigBox, createSpriteArt, spritePalette } from "../src/render/sprites.js";
 import { CHARIOT_CONTROL_CONFIG, createPlayerController } from "../src/game/player.js";
-import { bossTypes, chariotTactics, enemyStats, formationAura, formationConfig, formationOrders, formationPatterns, formationPresets } from "../src/data/formations.js";
+import {
+  allyStats, bossTypes, chariotTactics, enemyStats, formationAura, formationOrders, formationPatterns,
+  formationPresets, formationRules, formationTiers, hireCount, nextTierFor, tierForIndex,
+} from "../src/data/formations.js";
 import {
   createBallisticProjectile, createProjectileSystem, solveBallisticElevation,
   solveTimeToGround, updateProjectiles,
@@ -68,7 +72,8 @@ import {
 import { drawCamp, drawRig } from "../src/ui/shop-scene.js";
 import { drawRadar } from "../src/ui/shop-dossier.js";
 import { createShopScreen } from "../src/ui/shop-screen.js";
-import { CARD_ACTIONS, cardForMode, cardForTutorial } from "../src/ui/battle-card.js";
+import { createScreens } from "../src/ui/screens.js";
+import { CARD_ACTIONS, cardForGrant, cardForMode, cardForTutorial } from "../src/ui/battle-card.js";
 import { createMenuPage } from "../src/ui/menu-page.js";
 import { computeMenuLayout } from "../src/ui/menu-layout.js";
 import { prologueLines } from "../src/ui/prologue.js";
@@ -1748,7 +1753,7 @@ test("crew arrows land instead of expiring at their range cap", () => {
   const player = { x: 200, y: 2400, radius: 17, mode: "chariot" };
   const projectiles = createTestProjectiles({ state, player });
   const rules = projectileRules.allyArrow;
-  projectiles.fireAllyArrow({
+  projectiles.fireAllyShot({
     x: 1500,
     y: 1500,
     targetX: 1500 + rules.crewRange,
@@ -2005,7 +2010,7 @@ function crewRig({ roster = [], enemies = [], mode = "chariot" } = {}) {
         entity.y += dy;
       },
     },
-    projectiles: { fireAllyArrow: (options) => shots.push(options) },
+    projectiles: { fireAllyShot: (options) => shots.push(options) },
     damageEnemy: (enemy, amount) => melee.push({ enemy, amount }),
     addMeleeEffect: () => {},
     burst: () => {},
@@ -4593,30 +4598,116 @@ function hireRig({ hires = 0 } = {}) {
       enemy.health -= amount;
       if (enemy.health <= 0) enemy.destroyed = true;
     },
-    fireAllyArrow: () => { state.bullets.push({ owner: "ally" }); },
+    fireAllyShot: () => { state.bullets.push({ owner: "ally" }); },
     addMeleeEffect: (x, y, angle, weapon) => { state.meleeEffects.push({ x, y, angle, weapon }); },
     burst: () => {},
   });
   return { state, player, world, campaign, allies, draws: () => draws };
 }
 
-test("the hire is one row: price, cap, roster and aura all read from it", () => {
-  assert.equal(formationConfig.price, 1000);
-  assert.equal(formationConfig.maxHires, 2);
-  assert.equal(formationConfig.slots.length, 7, "the line is not seven bodies");
-  const types = formationConfig.slots.map(([type]) => type);
-  assert.equal(types.filter((type) => type === "chariot").length, 1);
-  assert.equal(types.filter((type) => type === "archer").length, 2);
-  assert.equal(types.filter((type) => type === "spear").length, 2);
-  assert.equal(formationConfig.aura.heal, 3);
-  assert.equal(formationConfig.aura.interval, 3);
+// The ladder is one table: every rung carries what differs (its name, its price
+// and its bodies), and the shared rules - cap, paint, leash, aura, chariot morale,
+// order legs - are read by every rung from `formationRules`.
+test("the ladder is three rungs, bought in order at three prices", () => {
+  assert.equal(formationTiers.length, 3, "the ladder is not three rungs");
+  assert.deepEqual(formationTiers.map((tier) => tier.price), [650, 1150, 2550]);
+  assert.equal(formationRules.maxHires, formationTiers.length,
+    "the cap and the ladder disagree about how many lines there are");
+  // Every rung is a formation: distinct stations, more than a handful of bodies.
+  for (const tier of formationTiers) {
+    assert.ok(tier.slots.length >= 8, `${tier.nameKey} is not a line`);
+    const stations = new Set(tier.slots.map(([, x, y]) => `${x},${y}`));
+    assert.equal(stations.size, tier.slots.length, `${tier.nameKey} stacks two bodies on one station`);
+  }
+  // A count is an index into the ladder: the first hire fields the cheap rank,
+  // the third the siege camp, and a count past the table falls back to the first
+  // rung rather than throwing.
+  assert.equal(tierForIndex(0), formationTiers[0]);
+  assert.equal(tierForIndex(2), formationTiers[2]);
+  assert.equal(tierForIndex(9), formationTiers[0], "a stale save fielded no line at all");
+  assert.equal(nextTierFor(0), formationTiers[0]);
+  assert.equal(nextTierFor(2), formationTiers[2]);
+  assert.equal(nextTierFor(3), null, "the shop was still selling a fourth line");
+  // The cap clamps a count it does not trust, and never goes below zero.
+  assert.equal(hireCount({ friendlyFormations: 2 }), 2);
+  assert.equal(hireCount({ friendlyFormations: 9 }), formationRules.maxHires);
+  assert.equal(hireCount({ friendlyFormations: -3 }), 0);
+  assert.equal(hireCount({}), 0);
+  assert.equal(hireCount(null), 0);
+});
+
+test("the shop walks up the ladder in order, and the top rung is not for sale", () => {
+  const campaign = shopCampaign({ totalGold: 0 });
+  const shop = createEquipmentShop({ campaign });
+  // The first refusal is the wallet's, not the ladder's: a rung is on the shelf
+  // even when nothing can be paid for it.
+  assert.deepEqual(shop.purchaseItem("formation"),
+    { ok: false, message: translate("shop.error.gold") }, "an empty purse bought a line");
+
+  const [first, second, third] = formationTiers;
+  campaign.totalGold = first.price + second.price;
+  for (const tier of [first, second]) {
+    const bought = shop.purchaseItem("formation");
+    assert.equal(bought.ok, true, `${tier.nameKey} was refused with the coin for it`);
+    assert.equal(bought.message,
+      translate("shop.purchaseSuccess", { item: translate(tier.nameKey) }),
+      "the shop read out a rung the player did not buy");
+  }
+  assert.equal(campaign.friendlyFormations, 2, "two purchases did not field two lines");
+  assert.equal(campaign.totalGold, 0);
+  assert.deepEqual(shop.purchaseItem("formation"),
+    { ok: false, message: translate("shop.error.gold") }, "the third rung went cheap");
+
+  // The last rung, and then the shelf is bare: a fourth purchase is the cap's
+  // refusal rather than a fourth line the spawner would clamp away.
+  campaign.totalGold = third.price;
+  assert.equal(shop.purchaseItem("formation").ok, true);
+  assert.equal(campaign.friendlyFormations, formationRules.maxHires);
+  campaign.totalGold = third.price;
+  assert.deepEqual(shop.purchaseItem("formation"),
+    { ok: false, message: translate("shop.error.formationCap") }, "a capped ladder was still sold");
+  assert.equal(campaign.totalGold, third.price, "the refusal spent the coin anyway");
+});
+
+test("the clan's gift is one free rung, and it is never handed out twice", () => {
+  // The gift takes the rung the player would have had to buy next: a run that
+  // never touched the shop is given the first rung, and one that owns two is
+  // given the siege camp.
+  const poor = { totalGold: 0, friendlyFormations: 0 };
+  assert.deepEqual(grantFormation(poor), { tier: formationTiers[0], count: 1 });
+  assert.equal(poor.friendlyFormations, 1, "the gift was announced but not fielded");
+  assert.equal(poor.totalGold, 0);
+
+  const rich = { totalGold: 4000, friendlyFormations: 2 };
+  assert.deepEqual(grantFormation(rich), { tier: formationTiers[2], count: 3 });
+  assert.equal(rich.totalGold, 4000, "the gift cost the campaign its coin");
+
+  // A full ladder has nothing to give, and says so by giving nothing: the caller
+  // paints no card and leaves the flag clear.
+  const full = { totalGold: 0, friendlyFormations: formationRules.maxHires };
+  assert.equal(grantFormation(full), null);
+  assert.equal(full.friendlyFormations, formationRules.maxHires, "a full ladder was pushed past the cap");
+
+  // The stage it is earned on is a stage a run really reaches, and it is past the
+  // first boss so the ladder has been seen in the shop first.
+  assert.ok(campaignRules.clanGrantStage > campaignRules.bossStageMinimum);
+  assert.ok(campaignRules.clanGrantStage >= campaignRules.finalStageMin);
+});
+
+test("every rung shares one rules row: leash, chariot morale and the two legs", () => {
   // The two legs an order opens up are in the row too, and they pull in opposite
   // directions: a marcher keeps step with the chariot (slower), a straggler sent
   // home by a 结阵 runs (faster).
-  assert.ok(formationConfig.orders.marchSpeed < formationConfig.orders.returnSpeed,
+  assert.ok(formationRules.orders.marchSpeed < formationRules.orders.returnSpeed,
     "a march must be slower than a return, or 结阵 would gain nothing");
-  assert.ok(formationConfig.chariot.reengageAt > formationConfig.chariot.fleeAt,
+  assert.ok(formationRules.chariot.reengageAt > formationRules.chariot.fleeAt,
     "the two thresholds must leave a hysteresis band");
+  // A hired line guards the ground it was bought for, and an archer is told to
+  // come home from further than a halberd swings.
+  assert.ok(formationRules.engage.meleeRange > formationRules.engage.leash,
+    "a body that may step further than its leash is never clamped home");
+  assert.ok(formationRules.engage.homeEpsilon < formationRules.engage.leash / 4,
+    "the arrival band is as wide as the leash it is supposed to be inside");
 });
 
 test("a hire with no purchase spawns nothing", () => {
@@ -4625,24 +4716,47 @@ test("a hire with no purchase spawns nothing", () => {
   assert.deepEqual(rig.state.allies, []);
 });
 
-test("each hire spawns the whole line, and the count is capped", () => {
-  const rig = hireRig({ hires: 2 });
+test("each hire spawns its own rung of the ladder, and the count is capped", () => {
+  const rig = hireRig({ hires: 3 });
   const lines = rig.allies.spawnFriendlyFormations();
-  assert.equal(lines.length, 2, "two hires did not spawn two lines");
-  assert.equal(rig.state.allies.length, 14, "a line is not seven bodies");
-  for (const line of lines) {
+  assert.equal(lines.length, 3, "three hires did not spawn three lines");
+  assert.equal(rig.state.allies.length, 33, "the ladder did not field 11 + 12 + 10 bodies");
+  for (const [index, line] of lines.entries()) {
+    const tier = formationTiers[index];
     const members = rig.state.allies.filter((ally) => ally.formationId === line.id);
-    assert.equal(members.length, 7);
-    assert.equal(members.filter((ally) => ally.vehicle).length, 1, "a line without its chariot");
-    assert.equal(members.filter((ally) => ally.ranged).length, 2, "a line without both archers");
+    assert.equal(line.tier, index, "the line forgot which rung it was bought from");
+    assert.equal(line.nameKey, tier.nameKey);
+    assert.equal(members.length, tier.slots.length, `${tier.nameKey} fielded the wrong count`);
+    assert.deepEqual(members.map((ally) => ally.type), tier.slots.map(([type]) => type),
+      `${tier.nameKey} fielded the wrong roster`);
     assert.equal(members.every((ally) => ally.friendly && ally.health === ally.maxHealth), true);
-    assert.equal(members.every((ally) => ally.visual.robe === formationConfig.visual.robe), true,
-      "a hired body kept the enemy palette");
+    // 弓手对齐: every body carries the line's paint, and the bows of every rung
+    // are the one body in the second colour, whatever the roster is made of.
+    for (const ally of members) {
+      const bow = ally.visual.kind === "foot" && ally.projectile === "arrow";
+      assert.equal(ally.visual.robe, bow ? formationRules.visual.bowRobe : formationRules.visual.robe,
+        `${ally.type} was painted the wrong colour`);
+    }
     assert.ok(line.id < 0, "a friendly line reused the enemy id space");
   }
+  // The rungs really are different lines: the cheap rank has no vehicle, the
+  // second is the first with chariots, and only the siege camp drags a catapult.
+  const vehicles = (index) => rig.state.allies
+    .filter((ally) => ally.formationId === lines[index].id && ally.vehicle).length;
+  assert.equal(vehicles(0), 0, "the cheap rank bought a chariot");
+  assert.equal(vehicles(1), 2, "the second rung lost its chariots");
+  assert.equal(vehicles(2), 4, "the siege camp lost its chariot-archers");
+  const catapult = rig.state.allies.find((ally) => ally.type === "catapult");
+  assert.ok(catapult, "the siege camp did not bring the captured catapult");
+  // The champion's own engine, in the line's colours: same numbers, green paint.
+  assert.equal(catapult.damage, allyStats.catapult.damage, "the captured catapult lost the champion's punch");
+  assert.equal(catapult.projectile, "stone");
+  assert.equal(catapult.health, allyStats.catapult.health);
+  assert.equal(catapult.visual.kind, "catapult");
   // The cap is enforced at spawn too, not only by the shop button.
   const capped = hireRig({ hires: 9 });
-  assert.equal(capped.allies.spawnFriendlyFormations().length, formationConfig.maxHires);
+  assert.equal(capped.allies.spawnFriendlyFormations().length, formationRules.maxHires);
+  assert.equal(capped.state.allies.length, 33, "a clamped count spawned something else");
 });
 
 test("spawning a line draws no random numbers and repeats exactly", () => {
@@ -4665,8 +4779,8 @@ test("a chariot flees at 20% and only re-engages above 40%", () => {
     current, health, maxHealth: 14, ...extra,
   });
   // Both sides read the same table; the ally row keeps it by reference.
-  assert.equal(formationConfig.chariot.fleeAt, chariotTactics.fleeAt);
-  assert.equal(formationConfig.chariot.reengageAt, chariotTactics.reengageAt);
+  assert.equal(formationRules.chariot.fleeAt, chariotTactics.fleeAt);
+  assert.equal(formationRules.chariot.reengageAt, chariotTactics.reengageAt);
   assert.equal(at(14, CHARIOT_STATE.HOLD), CHARIOT_STATE.HOLD, "a fresh chariot left its post");
   assert.equal(at(14, CHARIOT_STATE.HOLD, { hasTarget: true }), CHARIOT_STATE.CHASE);
   assert.equal(at(2, CHARIOT_STATE.CHASE), CHARIOT_STATE.FLEE, "a broken chariot did not run");
@@ -4763,7 +4877,7 @@ test("the enemy chariot drives the same morale machine as the hire", () => {
 
 
 test("the aura heals three points every three seconds, only inside the footprint", () => {
-  const extent = formationExtent(formationConfig);
+  const extent = formationExtent(formationTiers[0]);
   const formation = {
     id: 7, x: 0, y: 0, heading: 0, halfWidth: extent.halfWidth, halfHeight: extent.halfHeight,
     auraTimer: 0, auraFlash: 0,
@@ -4785,7 +4899,7 @@ test("the aura heals three points every three seconds, only inside the footprint
   assert.equal(outside.health, 5, "a body outside the border was healed");
   assert.equal(stranger.health, 5, "another line's unit was healed");
   assert.equal(full.health, 14, "the heal overshot the maximum");
-  assert.equal(formation.auraFlash, formationConfig.aura.flash);
+  assert.equal(formation.auraFlash, formationRules.aura.flash);
 
   // The remainder is carried, not rounded up: after the 0.1s overshoot the next
   // beat is 2.9s away, not a fresh 3s.
@@ -4793,7 +4907,7 @@ test("the aura heals three points every three seconds, only inside the footprint
   assert.equal(inside.health, 8);
   tickFormationAura([formation], units, 1.5);
   assert.equal(inside.health, 11, "the timer lost the overshoot from the previous beat");
-  assert.ok(formation.auraFlash <= formationConfig.aura.flash);
+  assert.ok(formation.auraFlash <= formationRules.aura.flash);
 });
 
 test("a full body is not over-healed, and a beat lands on the maximum, not past it", () => {
@@ -4810,7 +4924,7 @@ test("a full body is not over-healed, and a beat lands on the maximum, not past 
 });
 
 test("the aura heals a unit that came home, not one still running", () => {
-  const extent = formationExtent(formationConfig);
+  const extent = formationExtent(formationTiers[0]);
   const formation = {
     id: -1, x: 0, y: 0, heading: 0, halfWidth: extent.halfWidth, halfHeight: extent.halfHeight,
     auraTimer: 0, auraFlash: 0,
@@ -4824,7 +4938,7 @@ test("the aura heals a unit that came home, not one still running", () => {
 
 test("both sides run the same banner beat, and an enemy line heals its own", () => {
   // The ally row points at the shared table instead of keeping a copy.
-  assert.equal(formationConfig.aura, formationAura, "the hire kept a private aura table");
+  assert.equal(formationRules.aura, formationAura, "the hire kept a private aura table");
   const rig = formationRig();
   const formation = spawnFormationAt(rig, 0);
   assert.equal(formation.auraTimer, 0);
@@ -4981,25 +5095,25 @@ test("an enemy line wakes for a hired ally as well as for the player", () => {
   assert.equal(line.alerted, false);
 });
 
-test("a spear answers an enemy at its weapon's reach", () => {
+test("a halberd answers an enemy at its weapon's reach", () => {
   const rig = hireRig({ hires: 1 });
   rig.allies.spawnFriendlyFormations();
-  const spear = rig.state.allies.find((ally) => ally.type === "spear");
+  const spear = rig.state.allies.find((ally) => ally.type === "ge");
   const enemy = {
-    type: "archer", x: spear.x + spear.range - 4, y: spear.y, radius: 12, health: 10, destroyed: false,
+    type: "archer", x: spear.x + spear.range - 4, y: spear.y, radius: 12, health: 30, destroyed: false,
   };
   rig.state.enemies.push(enemy);
   spear.attackCooldown = 0;
   rig.allies.update(1 / 60);
-  assert.equal(enemy.health, 10 - spear.damage, "the spear did not swing at an enemy in reach");
+  assert.equal(enemy.health, 30 - spear.damage, "the halberd did not swing at an enemy in reach");
   assert.equal(rig.state.meleeEffects.length, 1, "the swing drew no effect");
-  assert.ok(spear.attackCooldown > 0, "the spear swung twice in one frame");
+  assert.ok(spear.attackCooldown > 0, "the halberd swung twice in one frame");
 });
 
 test("a line with nobody near it walks back to its slots and stays put", () => {
   const rig = hireRig({ hires: 1 });
   rig.allies.spawnFriendlyFormations();
-  const spear = rig.state.allies.find((ally) => ally.type === "spear");
+  const spear = rig.state.allies.find((ally) => ally.type === "ge");
   const home = { x: spear.homeX, y: spear.homeY };
   spear.x += 60;
   for (let frame = 0; frame < 240; frame += 1) rig.allies.update(1 / 60);
@@ -5008,10 +5122,12 @@ test("a line with nobody near it walks back to its slots and stays put", () => {
 });
 
 test("the chariot really runs from a loose rider and re-joins when mended", () => {
-  const rig = hireRig({ hires: 1 });
+  // The chariots arrive with the second rung, so this rig buys two lines and then
+  // asks the rider for its own - the cheap rank in front has no vehicles at all.
+  const rig = hireRig({ hires: 2 });
   rig.allies.spawnFriendlyFormations();
   const chariot = rig.state.allies.find((ally) => ally.vehicle);
-  const line = rig.state.allyFormations[0];
+  const line = rig.state.allyFormations.find((formation) => formation.id === chariot.formationId);
   // A loose enemy chariot on the line's own ground is the target the FSM exists
   // for; it is not inside any enemy formation, so `isLooseChariot` sees it.
   const rider = {
@@ -5103,14 +5219,19 @@ test("the order button acts on the nearest own line the player stands in", () =>
 });
 
 test("出击 glues the ring to the chariot; 结阵 sets it down and sends the stragglers home", () => {
-  const rig = hireRig({ hires: 1 });
-  const [line] = rig.allies.spawnFriendlyFormations();
-  const spear = rig.state.allies.find((ally) => ally.type === "spear");
+  // The second rung, because it is the one with vehicles in it: the ring's centre
+  // slot is a chariot, and the point of the offset below is that the player's own
+  // hull never lands on top of it.
+  const rig = hireRig({ hires: 2 });
+  const line = rig.allies.spawnFriendlyFormations()[1];
+  const members = rig.state.allies.filter((ally) => ally.formationId === line.id);
+  const halberd = members.find((ally) => ally.type === "ge");
   const order = (action) => issueOrder({
     formations: rig.state.allyFormations, members: rig.state.allies, leader: rig.player, owner: "player", action,
   });
   assert.equal(line.order, formationOrders.HOLD);
   assert.equal(line.owner, "player");
+  assert.equal(line.tier, 1, "the second line is not the second rung");
   rig.player.x = line.x;
   rig.player.y = line.y;
 
@@ -5120,12 +5241,12 @@ test("出击 glues the ring to the chariot; 结阵 sets it down and sends the st
   // One frame settles the ring onto the chariot: it was pitched at a spawn
   // centre, and 出击 attaches it to the leader from this frame on.
   rig.allies.update(1 / 60);
-  const station = { x: spear.homeX, y: spear.homeY };
+  const station = { x: halberd.homeX, y: halberd.homeY };
   rig.player.x += 240;
   rig.player.y -= 90;
   rig.allies.update(1 / 60);
-  assert.ok(Math.abs(spear.homeX - station.x - 240) < 1e-6, "a slot did not travel with the line");
-  assert.ok(Math.abs(spear.homeY - station.y + 90) < 1e-6, "a slot did not travel with the line");
+  assert.ok(Math.abs(halberd.homeX - station.x - 240) < 1e-6, "a slot did not travel with the line");
+  assert.ok(Math.abs(halberd.homeY - station.y + 90) < 1e-6, "a slot did not travel with the line");
   // He stays at the same spot in his own ring, which is what keeps the button
   // under his thumb while the line is out.
   assert.equal(isInsideFormation(line, rig.player.x, rig.player.y), true,
@@ -5143,20 +5264,24 @@ test("出击 glues the ring to the chariot; 结阵 sets it down and sends the st
   assert.ok(Math.hypot(line.x - rig.player.x, line.y - rig.player.y) > rig.player.radius,
     "the ring was centred on the player's own hull");
   assert.equal(isInsideFormation(line, rig.player.x, rig.player.y), true, "he ended up outside his own ring");
-  // Every body that was left behind is walking back, and the line counts them.
-  assert.ok(spear.returning, "a body left behind was not told to come home");
-  assert.equal(line.stragglers, rig.state.allies.length, "the line did not count its stragglers");
+  // Every body that was left behind is walking back, and the line counts them -
+  // its own bodies, not the cheap rank standing on the other side.
+  assert.ok(halberd.returning, "a body left behind was not told to come home");
+  assert.equal(line.stragglers, members.length, "the line did not count its stragglers");
+  assert.equal(rig.state.allyFormations[0].stragglers, 0, "a 结阵 in one line sent the other one home");
 
   // They run rather than re-form on the spot: the flag clears on arrival, and
-  // the count follows it down. Nothing else has to end the state. The spear is
-  // the first to arrive, so the loop waits for the slowest body, not for it.
-  for (let frame = 0; frame < 900 && rig.state.allies.some((ally) => ally.returning); frame += 1) {
+  // the count follows it down. Nothing else has to end the state. The halberd is
+  // the first to arrive, so the loop waits for the slowest body, not for it - and
+  // on this rung the slowest body is a chariot that has to cross its own closed
+  // front rank, which is the jam `separateAllies` gives way for.
+  for (let frame = 0; frame < 900 && members.some((ally) => ally.returning); frame += 1) {
     rig.allies.update(1 / 60);
   }
-  assert.equal(rig.state.allies.every((ally) => ally.returning === false), true,
+  assert.equal(members.every((ally) => ally.returning === false), true,
     "a straggler never reached its station");
-  assert.ok(Math.hypot(spear.x - spear.homeX, spear.y - spear.homeY)
-    <= formationConfig.engage.homeEpsilon + 1, "a body that came home is not standing on its slot");
+  assert.ok(Math.hypot(halberd.x - halberd.homeX, halberd.y - halberd.homeY)
+    <= formationRules.engage.homeEpsilon + 1, "a body that came home is not standing on its slot");
   rig.allies.update(1 / 60);
   assert.equal(line.stragglers, 0, "the line still counts a body that came home");
 });
@@ -5168,9 +5293,13 @@ test("the camp pitches one tent per hire, and a hover stays a preview", () => {
   // shown in the shop: one tent per bought line.
   assert.equal(campFor({ campTents: 1 }).formations, 1, "one hire pitched no tent");
   assert.equal(campFor({ campTents: 2 }).formations, 2, "the second hire pitched no tent");
-  // The camp has two spots, so a tent count from anywhere else cannot invent a
-  // third one - which is what the shop's hover does once the cap is reached.
-  assert.equal(campFor({ campTents: 9 }).formations, 2, "the camp pitched tents there was no room for");
+  // One spot per rung of the ladder, so the third hire is visible at the fire too.
+  assert.equal(campFor({ campTents: formationRules.maxHires }).formations, formationRules.maxHires,
+    "the last rung of the ladder had no tent to stand in");
+  // And no more than that: a tent count from anywhere else cannot invent a fourth
+  // one - which is what the shop's hover does once the cap is reached.
+  assert.equal(campFor({ campTents: 9 }).formations, formationRules.maxHires,
+    "the camp pitched tents there was no room for");
 
   // A recruit preview is one extra body round the fire, and a buried companion is
   // no body at all: the roster is the campaign's, and the camp reads it as such.
@@ -5678,6 +5807,96 @@ test("the drill's beats are the same card, one line per beat", () => {
     bodyKeys: ["tutorial.tactics.infantry", "tutorial.tactics.archers", "tutorial.tactics.chariot"],
   });
   assert.equal(tactics.lines.length, 3, "the three-beat card lost a beat");
+});
+
+test("one card at a time, and the gift is the field's", () => {
+  const el = () => ({
+    hidden: true, textContent: "", dataset: {}, setAttribute() {}, addEventListener() {},
+  });
+  const state = { mode: "running", grant: null, tutorial: null };
+  const painted = [];
+  const screens = createScreens({
+    state,
+    campaign: { totalGold: 120, stage: 4, identity: { fullName: "司马长风" } },
+    draw: () => {},
+    elements: {
+      menuScreen: el(),
+      prologueScreen: el(),
+      battleScreen: el(),
+      shopScreen: el(),
+      startLabel: el(),
+      startButton: el(),
+    },
+    battleCard: { show: (spec) => painted.push(spec) },
+  });
+  const up = () => painted.at(-1);
+
+  // A live field has no card over it.
+  screens.showCard();
+  assert.equal(up(), null, "a running battle was given a card");
+
+  // The gift is raised without a mode change, so it is what a running battle
+  // shows - and the gate underneath it is walked through after it is dismissed.
+  state.grant = { clan: "司马", nameKey: "formation.friendly", count: 1 };
+  screens.showCard();
+  assert.equal(up().action, CARD_ACTIONS.grant, "the news did not take the field");
+
+  // A pause is a mode, and the mode's card wins: a player who tabs away mid-news
+  // is told he paused, and the news is back the moment he resumes.
+  state.mode = "paused";
+  screens.showCard();
+  assert.equal(up().action, CARD_ACTIONS.resume, "the pause card lost to the gift");
+  state.mode = "running";
+  screens.showCard();
+  assert.equal(up().action, CARD_ACTIONS.grant, "the news did not come back on resume");
+
+  // Dismissing the news is what hands the field its own card back - here a
+  // victory, which the game only reaches on a field the gift is not on.
+  state.grant = null;
+  state.mode = "victory";
+  screens.showCard();
+  assert.equal(up().action, CARD_ACTIONS.endRun, "the victory card did not take the field");
+
+  // A drill's beat is the fallback: it is the field's card while the battle keeps
+  // running, and a mode's card is never covered by it.
+  state.mode = "running";
+  state.tutorial = { overlay: { titleKey: "tutorial.brief.title", bodyKeys: ["tutorial.brief.drive"] } };
+  screens.showCard();
+  assert.equal(up().action, CARD_ACTIONS.tutorial);
+  state.mode = "paused";
+  screens.showCard();
+  assert.equal(up().action, CARD_ACTIONS.resume, "a drill's beat covered the pause card");
+});
+
+test("the clan's gift is a card over the field, not a mode", () => {
+  assert.equal(cardForGrant(null), null);
+  assert.equal(cardForGrant(undefined), null, "a battle with no gift still raised a card");
+
+  const card = cardForGrant({ clan: "司马", nameKey: "formation.horseCannon", count: 2 });
+  assert.equal(card.action, CARD_ACTIONS.grant);
+  assert.equal(card.actionKey, "grant.accept");
+  // It is not the pause card: the field underneath must keep its frame, so the
+  // card carries no `mode` and no width of its own.
+  assert.equal(card.mode, undefined);
+  assert.equal(card.width, undefined, "the gift grew a card size of its own");
+  // The one line names the rung in the player's language and says how many lines
+  // he now has, and it is a stat line rather than a paragraph.
+  assert.equal(card.lines.length, 1);
+  assert.equal(card.lines[0].textKey, "grant.line");
+  assert.equal(card.lines[0].tone, "stat");
+  assert.deepEqual(card.lines[0].params,
+    { formation: translate("formation.horseCannon"), count: 2 });
+  assert.deepEqual(card.copyParams, { clan: "司马" });
+  // A gift from a run whose clan name is missing still paints.
+  assert.deepEqual(cardForGrant({ nameKey: "formation.friendly", count: 1 }).copyParams, { clan: "" });
+
+  // Both locales carry the copy the card names, so a locale switch cannot leave
+  // the gift showing a raw key.
+  for (const locale of Object.keys(supportedLocales)) {
+    for (const key of ["grant.eyebrow", "grant.title", "grant.copy", "grant.line", "grant.accept"]) {
+      assert.ok(hasTranslation(locale, key), `${locale} is missing ${key}`);
+    }
+  }
 });
 
 test("a drill battle says so on the stage tile instead of a number", () => {

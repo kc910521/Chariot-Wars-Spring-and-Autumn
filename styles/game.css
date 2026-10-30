@@ -543,6 +543,44 @@ button {
   display: none;
 }
 
+/* The action column and the keys in it, at every width and in both places they
+   are shown: the strip under the field on a narrow window, and the overlay round
+   the field on a touch device (`body.touch-layout`, which is what a phone or a
+   tablet gets). They used to live in the narrow-window block below, which left a
+   wide touchscreen with the two keys side by side - the column has to be a grid
+   before the order key can stand *above* the attack key rather than beside it. */
+.touch-actions {
+  display: grid;
+  gap: 6px;
+  justify-items: center;
+}
+
+.touch-key {
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(211, 185, 139, 0.28);
+  border-radius: 4px;
+  background: rgba(255, 235, 204, 0.045);
+  color: #e6d6b8;
+  cursor: pointer;
+  font-family: "DM Mono", monospace;
+  font-size: 15px;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.touch-key:active {
+  border-color: var(--lime);
+  background: rgba(210, 173, 104, 0.18);
+}
+
+/* 出击/结阵 comes and goes with the ring under the chariot, and `display: grid`
+   above would otherwise beat the user agent's `[hidden] { display: none }`. */
+.touch-order[hidden] {
+  display: none;
+}
+
 .canvas-wrap {
   position: relative;
   overflow: hidden;
@@ -773,26 +811,6 @@ canvas {
     gap: 3px;
   }
 
-  .touch-key {
-    display: grid;
-    place-items: center;
-    border: 1px solid rgba(211, 185, 139, 0.28);
-    border-radius: 4px;
-    background: rgba(255, 235, 204, 0.045);
-    color: #e6d6b8;
-    cursor: pointer;
-    font-family: "DM Mono", monospace;
-    font-size: 15px;
-    touch-action: none;
-    user-select: none;
-    -webkit-user-select: none;
-  }
-
-  .touch-key:active {
-    border-color: var(--lime);
-    background: rgba(210, 173, 104, 0.18);
-  }
-
   .touch-fire {
     width: 74px;
     height: 64px;
@@ -803,25 +821,23 @@ canvas {
     letter-spacing: 0.1em;
   }
 
-  /* The action column: 出击 / 结阵 above the fire control, so one thumb reaches
-     both. The order button only exists while the player stands in a line he owns
-     (the HUD unhides it), and it is the one control whose label is the *next*
-     order - green for 出击, amber for the way back to 结阵. */
-  .touch-actions {
-    display: grid;
-    gap: 6px;
-    justify-items: center;
-  }
-
+  /* The order key: a smaller circle standing directly above the attack key, so one
+     thumb covers both. The order button only exists while the player stands in a
+     line he owns (the HUD unhides it), and it is the one control whose label is the
+     *next* order - green for 出击, amber for the way back to 结阵. Its size, not a
+     second shape, is what keeps it apart from the fire control. */
   .touch-order {
-    width: 62px;
-    height: 42px;
+    width: 44px;
+    height: 44px;
+    padding: 0 2px;
+    border-radius: 50%;
     border-color: rgba(95, 189, 121, 0.55);
     background: rgba(57, 139, 99, 0.24);
     color: #cdf3d6;
     font-family: inherit;
-    font-size: 11px;
-    letter-spacing: 0.14em;
+    font-size: 10px;
+    line-height: 1.05;
+    letter-spacing: 0.04em;
   }
 
   .touch-order[hidden] {
@@ -911,9 +927,10 @@ canvas {
   }
 
   .touch-order {
-    width: 54px;
-    height: 36px;
-    font-size: 10px;
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    font-size: 9px;
   }
 
   .overlay-card {
@@ -1321,6 +1338,17 @@ body.battle-focus {
     background: rgba(169, 68, 50, 0.48);
   }
 
+  /* The order key stays a circle here as well - the shared `.touch-key` radius
+     above would square it off - and keeps its own smaller size above the disc. */
+  .battle-focus .touch-order {
+    width: 46px;
+    height: 46px;
+    padding: 0 2px;
+    border-radius: 50%;
+    font-size: 10px;
+    line-height: 1.05;
+  }
+
   .battle-focus .battle-hud {
     width: min(520px, calc(100% - 180px));
     gap: 4px 8px;
@@ -1585,20 +1613,30 @@ body.battle-focus {
   left: 8px;
 }
 
-/* The order button sits above the fire disc and reads as a pill, so the round
-   fire control keeps its own silhouette. */
+/* The order key is a smaller circle stacked directly above the fire disc, so one
+   thumb covers both: 出击/结阵 above, the bow below. It is deliberately *smaller*
+   rather than a different silhouette - the two have to read as one cluster, and
+   the size difference plus its green/amber state is what sorts them apart. */
 .battle-focus.touch-layout .touch-order {
-  width: 78px;
-  height: 34px;
-  border-radius: 17px;
-  font-size: 12px;
-  letter-spacing: 0.16em;
+  width: 50px;
+  height: 50px;
+  padding: 0 3px;
+  border-radius: 50%;
+  font-size: 11px;
+  line-height: 1.06;
+  letter-spacing: 0.04em;
   pointer-events: auto;
   touch-action: none;
   user-select: none;
   -webkit-user-select: none;
   -webkit-tap-highlight-color: transparent;
   backdrop-filter: blur(2px);
+}
+
+/* The gap between the circle and the disc it sits on: enough that the two rims
+   read as separate targets, close enough to be one cluster under a thumb. */
+.battle-focus.touch-layout .touch-actions {
+  gap: 8px;
 }
 
 .battle-focus.touch-layout .touch-fire {
@@ -1666,10 +1704,11 @@ body.battle-focus {
   }
 
   .battle-focus.touch-layout .touch-order {
-    width: 68px;
-    height: 30px;
-    border-radius: 15px;
-    font-size: 11px;
+    width: 44px;
+    height: 44px;
+    padding: 0 2px;
+    border-radius: 50%;
+    font-size: 10px;
   }
 }
 

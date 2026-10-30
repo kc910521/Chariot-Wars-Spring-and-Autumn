@@ -1,4 +1,6 @@
-import { enemyStats, formationConfig, formationOrders } from "../../data/formations.js";
+import {
+  allyStats, enemyStats, formationOrders, formationRules, hireCount, tierForIndex,
+} from "../../data/formations.js";
 import { soundBorrowed, soundCues } from "../../data/sounds.js";
 import { clamp } from "../../utils/math.js";
 import { addBloodStain } from "../blood.js";
@@ -26,17 +28,25 @@ import {
 // A player standing in his own line may give it one of two orders (出击 / 结阵,
 // `formation-orders.js`). `出击` glues the line's centre to the chariot, so every
 // slot - and the aura's footprint with them - travels with the player, and the
-// men run to catch up. `结阵` sets the ring down where he stands and marks every
-// body that is off its station `returning`; those bodies run home and fight
-// nothing on the way. The two legs live at the bottom of this file because they
-// are the hired line's alone: an enemy formation would answer the same orders
-// with its own legs.
+// men run to catch up. `结阵` sets the ring down where it stands and marks every
+// body that is off its station `returning`; those bodies run home, and they fight
+// whatever crosses their path on the way (归位开打). The two legs live at the
+// bottom of this file because they are the hired line's alone: an enemy formation
+// would answer the same orders with its own legs.
 
 const SEPARATION_PASSES = 2;
 const SEPARATION_MIN_OVERLAP = 2;
 // A foot ally this close to its slot is home: walking further would jitter on the
 // spot every frame. The number lives in the row with the rest of the guard kit.
-const HOME_EPSILON = formationConfig.engage.homeEpsilon;
+const HOME_EPSILON = formationRules.engage.homeEpsilon;
+
+// A foot bow, as opposed to a slinger or a chariot that happens to carry one: the
+// body whose whole job is the arrow, and the only one the line paints in its
+// second colour (`formationRules.visual.bowRobe`).
+function isFootBow(stats) {
+  return stats.visual.kind === "foot" && stats.projectile === "arrow";
+}
+
 // Bearings to try for a line, in order: left of the chariot, right, behind,
 // then the two rear quarters. The line's facing is the bearing itself, so a line
 // placed on the left of the player looks left - away from him - and its front
@@ -64,12 +74,16 @@ export function createAllies({
   state, player, world, campaign,
   moveEntitySafely, hasLineOfSight, circleIntersectsObstacle,
   rectHitsAnyObstacle, rectTerrain,
-  damageEnemy, fireAllyArrow, addMeleeEffect, burst, playSound = () => {},
+  damageEnemy, fireAllyShot, addMeleeEffect, burst, playSound = () => {},
 }) {
-  const { engage, chariot: chariotConfig } = formationConfig;
+  const { engage, chariot: chariotConfig } = formationRules;
 
+  // Two rows of the roster ride: the 马砲铁阵's chariots and the 攻坚砲营's
+  // chariot-archers. Only the first answers to the morale machine, because a
+  // chariot archer is a horseman with a bow and fights like the bows it rides
+  // with - which is why the vehicle flag alone is not the question.
   function isChariot(unit) {
-    return Boolean(unit.vehicle);
+    return Boolean(unit.vehicle) && !unit.ranged;
   }
 
   function nearestEnemy(ally, range, { requireSight = false } = {}) {
@@ -119,18 +133,53 @@ export function createAllies({
       : ally.homeAngle;
   }
 
+  // The line's own shot, in one place: a bow looses an arrow and the captured
+  // engine throws a stone, but both hand the projectile system a target, a reach
+  // and the row's own `projectile`/`speed` - the flight is the system's business.
+  function looseShot(ally, target, range) {
+    ally.shotCooldown = ally.fireInterval ?? 2;
+    fireAllyShot({
+      x: ally.x,
+      y: ally.y,
+      targetX: target.x,
+      targetY: target.y,
+      damage: ally.damage,
+      range,
+      // Far enough out of the body that the shot does not start inside it, which
+      // matters for the 36px engine behind a rank of heavies.
+      originOffset: Math.max(16, ally.radius + 2),
+      kind: ally.projectile ?? "arrow",
+      speed: ally.projectileSpeed,
+    });
+  }
+
   // 结阵: the ring stopped where the line was set down, so this leg ends. A body
   // that reaches its station drops its own `returning` flag and is handed back to
   // the ordinary guard brain next frame - there is no formation state to leave,
   // which is why a second 结阵 moments later costs nothing.
+  //
+  // 归位开打: walking home is not a truce. A body ordered back to a station that
+  // an enemy is standing beside swings (or shoots) at it on the way, without
+  // breaking step. Otherwise 结阵 in the middle of a fight was a free flank: the
+  // line walked home with its back turned for a second and a half.
   function runToStation(ally, delta) {
     if (Math.hypot(ally.homeX - ally.x, ally.homeY - ally.y) <= HOME_EPSILON) {
       ally.returning = false;
       ally.angle = ally.homeAngle;
       return;
     }
-    ally.angle = Math.atan2(ally.homeY - ally.y, ally.homeX - ally.x);
-    stepToward(ally, ally.homeX, ally.homeY, delta, formationConfig.orders.returnSpeed);
+    const target = nearestEnemy(ally, Math.max(ally.range, ally.radius + 26), { requireSight: Boolean(ally.ranged) });
+    if (target) {
+      ally.angle = Math.atan2(target.y - ally.y, target.x - ally.x);
+      if (ally.ranged) {
+        if (ally.shotCooldown <= 0) looseShot(ally, target, ally.projectileRange ?? ally.range);
+      } else if (ally.attackCooldown <= 0) {
+        swing(ally, target);
+      }
+    } else {
+      ally.angle = Math.atan2(ally.homeY - ally.y, ally.homeX - ally.x);
+    }
+    stepToward(ally, ally.homeX, ally.homeY, delta, formationRules.orders.returnSpeed);
   }
 
   function swing(ally, target) {
@@ -198,24 +247,20 @@ export function createAllies({
       holdGround(ally, delta, walk);
       return;
     }
-    const range = ally.projectileRange ?? ally.range;
-    const target = nearestEnemy(ally, range, { requireSight: true });
+    // 弓手对齐: the bow opens fire at the distance the enemy archer does
+    // (`range`, 460), not at the shorter distance its arrow can actually carry
+    // (`projectileRange`, 330). Those two numbers are different questions - how
+    // far a shooter looks, and how far the shot flies - and using the flight
+    // distance for both put the hired bows a body's length behind every enemy
+    // bow on the field, which is the exchange the line kept losing.
+    const target = nearestEnemy(ally, ally.range, { requireSight: true });
     if (!target) {
       holdGround(ally, delta, walk);
       return;
     }
     ally.angle = Math.atan2(target.y - ally.y, target.x - ally.x);
     if (ally.shotCooldown > 0) return;
-    ally.shotCooldown = ally.fireInterval ?? 2;
-    fireAllyArrow({
-      x: ally.x,
-      y: ally.y,
-      targetX: target.x,
-      targetY: target.y,
-      damage: ally.damage,
-      range,
-      originOffset: 16,
-    });
+    looseShot(ally, target, ally.projectileRange ?? ally.range);
   }
 
   function findLooseChariot(ally) {
@@ -324,7 +369,7 @@ export function createAllies({
     burst(ally.x, ally.y, "#d9a34f");
     if (ally.health === 0) {
       ally.destroyed = true;
-      burst(ally.x, ally.y, formationConfig.visual.deathBurst);
+      burst(ally.x, ally.y, formationRules.visual.deathBurst);
       // A hired vehicle goes down like a chariot, a man like a man. Both are
       // borrowed cues until the line has deaths of its own.
       playSound(ally.vehicle ? soundBorrowed.chariotDied : soundBorrowed.friendlyDied);
@@ -386,7 +431,20 @@ export function createAllies({
           const push = minimum - span;
           const nx = span > 0 ? dx / span : 1;
           const ny = span > 0 ? dy / span : 0;
-          moveEntitySafely(back, nx * push, ny * push, back.radius);
+          // A body walking home from a 结阵 does not stop for a rank that has
+          // already closed: when exactly one of the pair is on its way home, it is
+          // the *settled* body that is shoved aside, by exactly the overlap. The
+          // plain rule (the later body in the list moves) is what a ring of
+          // neighbours wants, but it cannot get a chariot through its own front
+          // rank: the push would cancel the step every frame and the straggler
+          // would stand in the rank for the rest of the battle. The shoved body
+          // holds its ground and walks back on the next frame, so the ring closes
+          // behind the straggler exactly as it was.
+          const shoved = front.returning !== back.returning
+            ? (front.returning ? back : front)
+            : back;
+          const sign = shoved === back ? 1 : -1;
+          moveEntitySafely(shoved, sign * nx * push, sign * ny * push, shoved.radius);
           moved = true;
         }
       }
@@ -406,7 +464,7 @@ export function createAllies({
     // below should see the health it actually has this frame. The player is a
     // patient of his own line (standing in a friendly ring mends him) and the
     // enemy bodies are what dirties the ground the beat needs.
-    tickFormationAura(state.allyFormations, state.allies, delta, formationConfig.aura, {
+    tickFormationAura(state.allyFormations, state.allies, delta, formationRules.aura, {
       intruders: state.enemies,
       friends: [player],
     });
@@ -434,7 +492,7 @@ export function createAllies({
       // whose own walk to a slot that has moved with the player is the same leg.
       // Everything else is the guard brain this file has always had.
       const marching = ally.line?.order === formationOrders.MARCH;
-      const pace = marching ? formationConfig.orders.marchSpeed : undefined;
+      const pace = marching ? formationRules.orders.marchSpeed : undefined;
       if (ally.returning) runToStation(ally, delta);
       else if (isChariot(ally)) updateChariot(ally, delta);
       else if (ally.ranged) updateRanged(ally, delta, { free: marching, walk: pace });
@@ -447,12 +505,14 @@ export function createAllies({
   }
 
   function createAllyUnit(type, slot, formation, heading, order) {
-    const stats = enemyStats[type];
+    // Every rung repaints an enemy row; only the siege engine is an ally of its
+    // own (`allyStats`), because the enemy roster has no foot catapult to borrow.
+    const stats = enemyStats[type] ?? allyStats[type];
     if (!stats) throw new Error(`Unknown friendly formation unit "${type}".`);
-    // The row's own local station, kept as an offset rather than a position: a
-    // 结阵 moves the centre, and every station is that offset rotated through
-    // the new one (`formation-orders.js`). `homeX/homeY` stays the runtime goal.
-    const [, stationX, stationY] = formationConfig.slots[order] ?? [];
+    // The rung's own local station, kept as an offset rather than a position: 出击
+    // drags the centre, and every station is that offset rotated through the new
+    // one (`formation-orders.js`). `homeX/homeY` stays the runtime goal.
+    const [, stationX, stationY] = formation.slots[order] ?? [];
     return {
       ...stats,
       type,
@@ -466,17 +526,23 @@ export function createAllies({
       homeAngle: heading,
       formationId: formation.id,
       // The line itself, so a brain can ask what it has been ordered to do
-      // without a lookup on every frame. One object per line, shared by its
-      // seven bodies.
+      // without a lookup on every frame. One object per line, shared by all of
+      // its bodies.
       line: formation,
       stationX,
       stationY,
       // Set by 结阵 for a body that was left behind; cleared when it arrives.
       returning: false,
-      // The row's own robe is the enemy palette; the hired line is green.
-      visual: { ...stats.visual, robe: formationConfig.visual.robe, overlays: [...(stats.visual.overlays ?? [])] },
-      deathBurst: formationConfig.visual.deathBurst,
-      chariotState: stats.vehicle ? CHARIOT_STATE.HOLD : null,
+      // The row's own robe is the enemy palette; the hired line is green - except
+      // a foot bow, which keeps the line's second colour (`bowRobe`) so the
+      // shooting rank is legible at a glance.
+      visual: {
+        ...stats.visual,
+        robe: isFootBow(stats) ? formationRules.visual.bowRobe : formationRules.visual.robe,
+        overlays: [...(stats.visual.overlays ?? [])],
+      },
+      deathBurst: formationRules.visual.deathBurst,
+      chariotState: isChariot(stats) ? CHARIOT_STATE.HOLD : null,
       // Staggered clocks, fixed rather than rolled: the line opens with a ripple
       // instead of every bow releasing on the same frame, and the seed is intact.
       attackCooldown: 0.9 + order * 0.15,
@@ -494,10 +560,11 @@ export function createAllies({
   // Placement walks the fixed bearing list and keeps the best ground it saw:
   // dry beats merely uniform beats "slots are free but a wall crosses the
   // footprint", the same ladder the enemy spawner uses. Unlike the enemy spawner
-  // it never gives up - a line that cost 1000 coins has to appear - so the best
-  // rung is committed even when every rung failed, and the first clamped
-  // candidate is the floor beneath that.
-  function findSpawn(index, extent, clearance) {
+  // it never gives up - a line that cost coins has to appear - so the best rung is
+  // committed even when every rung failed, and the first clamped candidate is the
+  // floor beneath that. `tier` only supplies the stations being laid out, so a
+  // wide siege camp asks about - and clears - more ground than a rank of halberds.
+  function findSpawn(index, extent, clearance, tier) {
     const preferred = index % 2 === 0 ? -Math.PI / 2 : Math.PI / 2;
     const offsets = [preferred, ...SPAWN_OFFSETS.filter((offset) => offset !== preferred)];
     let best = null;
@@ -507,7 +574,7 @@ export function createAllies({
         const heading = player.angle + offset;
         const centerX = clamp(player.x + Math.cos(heading) * distance, extent.halfWidth + 24, world.width - extent.halfWidth - 24);
         const centerY = clamp(player.y + Math.sin(heading) * distance, extent.halfHeight + 24, world.height - extent.halfHeight - 24);
-        const slotCoordinates = layoutSlots(formationConfig, centerX, centerY, heading);
+        const slotCoordinates = layoutSlots(tier, centerX, centerY, heading);
         const candidate = { centerX, centerY, heading, slotCoordinates, tier: 0 };
         fallback ??= candidate;
         if (slotCoordinates.some((slot) => Math.hypot(slot.x - player.x, slot.y - player.y) < player.radius + 40)) continue;
@@ -532,12 +599,18 @@ export function createAllies({
     return best ?? fallback;
   }
 
-  function commitFormation({ centerX, centerY, heading, slotCoordinates }, index) {
-    const { halfWidth, halfHeight } = formationExtent(formationConfig);
+  function commitFormation({ centerX, centerY, heading, slotCoordinates }, index, tier) {
+    const { halfWidth, halfHeight } = formationExtent(tier);
     const formation = {
       // Negative ids cannot collide with an enemy formation's `elapsed + random`.
       id: -(index + 1),
-      nameKey: formationConfig.nameKey,
+      nameKey: tier.nameKey,
+      // Which rung of the ladder this line was bought from, kept on the line so a
+      // save, a debugger and the camp preview can name it without the recount.
+      tier: index,
+      // The rung's stations, so the orders code can re-place this line without
+      // having to know which line it happens to be holding.
+      slots: tier.slots,
       x: centerX,
       y: centerY,
       heading,
@@ -546,7 +619,7 @@ export function createAllies({
       // The deepest station in the pattern, behind the centre: `formation-orders`
       // uses it to work out how far in front of a leader the ring has to sit for
       // no body to be standing in his hull.
-      depth: Math.max(...formationConfig.slots.map(([, , slotY]) => slotY)),
+      depth: Math.max(...tier.slots.map(([, , slotY]) => slotY)),
       color: "#5fbd79",
       friendly: true,
       // Who may give this line orders. An order is only honoured by the owner
@@ -560,22 +633,25 @@ export function createAllies({
       auraFlash: 0,
     };
     state.allyFormations.push(formation);
-    formationConfig.slots.forEach(([type], order) => {
+    tier.slots.forEach(([type], order) => {
       state.allies.push(createAllyUnit(type, slotCoordinates[order], formation, heading, order));
     });
   }
 
   // Hires are a campaign-level count and each battle rebuilds the lines at full
-  // strength from it: losing the line in one battle does not refund or erase it.
+  // strength from it: losing a line in one battle does not refund or erase it.
+  // The ladder is bought in order, so line `index` fields rung `index` - the
+  // first hire is always the cheap rank and the third always the siege camp.
   function spawnFriendlyFormations() {
     state.allyFormations = [];
     state.allies = [];
-    const hires = clamp(Math.round(campaign.friendlyFormations ?? 0), 0, formationConfig.maxHires);
+    const hires = hireCount(campaign);
     if (hires === 0) return state.allyFormations;
-    const extent = formationExtent(formationConfig);
-    const clearance = formationGroundExtent(formationConfig);
     for (let index = 0; index < hires; index += 1) {
-      commitFormation(findSpawn(index, extent, clearance), index);
+      const tier = tierForIndex(index);
+      commitFormation(
+        findSpawn(index, formationExtent(tier), formationGroundExtent(tier), tier), index, tier,
+      );
     }
     return state.allyFormations;
   }

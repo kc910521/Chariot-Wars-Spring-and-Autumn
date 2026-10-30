@@ -36,13 +36,15 @@ const tufts = [
   [0.62, 0.4, 0.95], [0.86, 0.06, 0.7], [-0.68, -0.24, 0.75], [0.54, -0.3, 0.85],
 ];
 
-// Hired lines pitch their tents beside the fire, one on each flank. Fixed
+// Hired lines pitch their tents beside the fire, one on each flank and a third
+// behind it - one spot per rung of the hire ladder (src/data/formations.js). Fixed
 // fractions of the camp rect (x) and of the seat radius (y), in draw order (left
-// first), because a camp that rearranges itself every frame reads as a glitch
-// rather than as a hire.
+// first, the far one last), because a camp that rearranges itself every frame
+// reads as a glitch rather than as a hire.
 const tentSpots = [
   { x: -0.3, y: -0.34, scale: 1 },
   { x: 0.3, y: -0.2, scale: 0.88 },
+  { x: 0.02, y: -0.78, scale: 0.8 },
 ];
 
 // The green a preview is drawn in: the same stroke the radar's dashed polygon

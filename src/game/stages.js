@@ -7,6 +7,7 @@ import { campaignRules } from "../data/rules.js";
 import { soundBorrowed, soundCues } from "../data/sounds.js";
 import { createRandomSeed, createSeededRandom } from "../utils/random.js";
 import { createBattlefield } from "./map.js";
+import { grantFormation } from "./equipment.js";
 import { CHARIOT_CONTROL_CONFIG } from "./player.js";
 import { ringLayoutFromShares } from "./rings.js";
 import { createTutorialMapCheck } from "./tutorial-map.js";
@@ -22,7 +23,7 @@ export function createStageManager({
   campaign, state, player, world, view, camera, shopScreen = null, seedSource = () => null,
   circleIntersectsObstacle, updateHud, setMode, spawnBoss, spawnBossSquad, announceBoss,
   spawnFriendlyAllies = () => [], resizeCanvas, playSound, hideBanner, lockVictory = () => {},
-  ringSource = () => null,
+  ringSource = () => null, onGrant = () => {},
 }) {
   // The 回 ratios for the whole run: the authored table in src/data/rings.js,
   // unless the host handed in a `?rings=20,45,20,15`-style override. Read once -
@@ -45,6 +46,8 @@ export function createStageManager({
     // Hired formations belong to the run: a new run starts without them, while
     // retrying a stage or marching to the next one keeps the count.
     campaign.friendlyFormations = 0;
+    // The 4th stage's gift is once per run, so the run is what clears it.
+    campaign.formationGrant = false;
     campaign.identity = null;
     // Both wallets of a battle reset with the run: the tutorial's handoff belongs
     // to the stage-1 drill, and the entry purse is re-snapshotted by createBattle.
@@ -154,8 +157,11 @@ export function createStageManager({
     state.spawnTimer = tutorial ? Infinity : 0.8;
     // The hired lines are placed after the player has been returned to the
     // middle of the new map, and they draw no random numbers - spawning them
-    // cannot shift the enemy placement on a seeded battlefield.
-    spawnFriendlyAllies();
+    // cannot shift the enemy placement on a seeded battlefield. A drill is not
+    // the campaign's field, though: it is the player's own training against the
+    // tiger, with the 演武步阵 the drill spawns for it, so no hired line marches
+    // into one (and the drill's count of what stands on the field stays its own).
+    if (!tutorial) spawnFriendlyAllies();
     if (!tutorial && finalBattle) spawnBossSquad();
     else if (!tutorial && state.bossStage) spawnBoss();
     updateHud();
@@ -174,8 +180,10 @@ export function createStageManager({
     // start empty, and a scenario refills them after the field exists.
     state.wilds = [];
     // A new field starts with no scenario script and no camera override: the
-    // tutorial (re)arms itself once the battle is entered.
+    // tutorial (re)arms itself once the battle is entered. The clan's gift card is
+    // cleared with them - it belongs to the battle it was earned in.
     state.tutorial = null;
+    state.grant = null;
     state.cameraFocus = null;
     state.formations = [];
     state.formationsSpawned = 0;
@@ -255,6 +263,29 @@ export function createStageManager({
     updateHud();
     // The extraction point appearing is the one "go there" cue of a battle.
     playSound(soundCues.retreatPoint);
+    offerClanGrant();
+  }
+
+  // The clan's gift: clearing the 4th stage - the first stolen champion - earns a
+  // line of hire, free, from the player's own clan. It is handed out as the gate
+  // opens rather than in the shop, so the player walks off the field already
+  // covered and the line is standing at the start of the next battle. The card is
+  // the host's to paint (`onGrant` -> src/ui/battle-card.js); this module only
+  // decides that the moment has come.
+  function offerClanGrant() {
+    if (state.battleMode !== "campaign") return;
+    if (campaign.stage !== campaignRules.clanGrantStage) return;
+    if (campaign.formationGrant) return;
+    const gift = grantFormation(campaign);
+    // A full ladder has nothing to sell and nothing to give: no card, and the flag
+    // stays clear so a later run (which resets it) is unaffected.
+    if (!gift) return;
+    campaign.formationGrant = true;
+    onGrant({
+      clan: campaign.identity?.clan ?? "",
+      nameKey: gift.tier.nameKey,
+      count: gift.count,
+    });
   }
 
   // The shop page is drawn from the campaign every frame it is open, so opening

@@ -46,10 +46,14 @@ export function createGameState({ seedSource = () => null } = {}) {
     horseCount: 1,
     roster: [],
     nextPersonnelId: 1,
-    // Hired friendly lines (see formationConfig in data/formations.js): bought
+    // Hired friendly lines (see formationTiers in data/formations.js): bought
     // in the shop, kept for the run, and spawned fresh at the start of every
-    // battle. Zero until the player spends the 1000 coins.
+    // battle. Each hire buys the next rung of the ladder, so this count is also
+    // the index of the rung the shop is selling (`nextTierFor`).
     friendlyFormations: 0,
+    // Set once the 4th stage's champion has paid out its free line. The gift is a
+    // campaign reward, not a per-battle one, so it is never handed out twice.
+    formationGrant: false,
     // Rolled once when a run starts (src/game/identity.js): the player's name
     // and the two story keys behind it. Reset with the rest of the run, and
     // never re-rolled by a retry — it belongs to the campaign, not the battle.
@@ -127,6 +131,11 @@ export function createGameState({ seedSource = () => null } = {}) {
     // The tutorial's step machine, or null. Owned by src/game/tutorial.js; the
     // HUD and the canvas overlay only read it.
     tutorial: null,
+    // The clan's gift card, or null (src/ui/battle-card.js). Like `tutorial` it
+    // lives outside the mode machine, because the battle keeps "running" while it
+    // is up - see stages.beginExtraction. Nothing advances on the field until it
+    // is put away.
+    grant: null,
     // Where the camera should look instead of the player, or null to follow the
     // chariot. Only the tutorial writes it (its two pans).
     cameraFocus: null,

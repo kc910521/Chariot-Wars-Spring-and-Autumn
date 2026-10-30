@@ -1,5 +1,5 @@
 import { translate } from "../i18n/index.js";
-import { cardForMode, cardForTutorial } from "./battle-card.js";
+import { cardForGrant, cardForMode, cardForTutorial } from "./battle-card.js";
 
 export function createScreens({
   state, campaign, draw, onModeChange, victoryLock = null, elements, battleCard,
@@ -7,6 +7,27 @@ export function createScreens({
   const {
     menuScreen, prologueScreen, battleScreen, shopScreen, startLabel, startButton,
   } = elements;
+
+  // One card, one line, and one order between them: the mode's card wins, and what
+  // is left over is the drill's beat and the clan's gift - both of which live
+  // outside the mode machine (the battle is "running" while either of them is up)
+  // and both of which have to come back when a pause opened over them closes.
+  //
+  // The gift is the one card that is raised without a mode change: it arrives as
+  // the extraction opens (stages.js offerClanGrant), the field freezes under it
+  // (src/game/game.js), and the gate is walked through after the news is put away.
+  // So a tab switch during the news shows the pause card over it and brings the
+  // news back on resume, which is exactly the two things the player needs to know.
+  //
+  // It is its own function because a card is not always a mode change: whoever
+  // pushes the gift calls this instead of `setMode`.
+  function showCard() {
+    battleCard.show(
+      cardForMode(state.mode, { campaign, state })
+      ?? cardForGrant(state.grant)
+      ?? cardForTutorial(state.tutorial?.overlay),
+    );
+  }
 
   function setMode(mode) {
     state.mode = mode;
@@ -22,10 +43,7 @@ export function createScreens({
     prologueScreen.hidden = mode !== "prologue";
     shopScreen.hidden = mode !== "shop";
     battleScreen.hidden = !inBattle;
-    // One card, one line. The mode's card wins; what is left over is the drill's
-    // beat, which lives outside the mode machine (the battle is "running" while a
-    // drill card is up) - and has to come back when a pause opened over it closes.
-    battleCard.show(cardForMode(mode, { campaign, state }) ?? cardForTutorial(state.tutorial?.overlay));
+    showCard();
     startLabel.textContent = translate(running ? "battle.pause" : mode === "paused" ? "battle.resumeLabel" : "battle.startLabel");
     startButton.setAttribute("aria-label", translate(mode === "paused" ? "battle.resumeLabel" : "battle.pauseLabel"));
     startButton.hidden = mode === "over" || mode === "victory";
@@ -42,5 +60,5 @@ export function createScreens({
     onModeChange?.(mode);
   }
 
-  return { setMode };
+  return { setMode, showCard };
 }
