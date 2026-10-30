@@ -434,7 +434,7 @@ check("menu start opens the prologue", query("#prologue-screen").hidden === fals
 check("the prologue hides the battlefield", query("#battle-screen").hidden === true);
 // The pause card lives on top of the field. It must never be up while the battle
 // is live: the game would keep running underneath it, invisible and unplayable.
-check("the prologue raises no pause card", query("#game-overlay").classList.contains("hidden"));
+check("the prologue raises no pause card", query("#battle-card").classList.contains("hidden"));
 check("the prologue rolled a Chinese name", /^[\u4e00-\u9fa5]{2,}$/u.test(identity?.fullName ?? ""),
   `name=${identity?.fullName}`);
 check("the nameplate shows the rolled name", query("#prologue-name").textContent === identity?.fullName,
@@ -479,18 +479,18 @@ check(
 check("prologue start begins a battle", query("#battle-screen").hidden === false,
   `mode=${game.state.mode}`);
 check("prologue start hides the story card", query("#prologue-screen").hidden === true);
-check("beginning the battle drops the pause card", query("#game-overlay").classList.contains("hidden"),
-  `hidden=${query("#game-overlay").classList.contains("hidden")} mode=${game.state.mode}`);
+check("beginning the battle drops the pause card", query("#battle-card").classList.contains("hidden"),
+  `hidden=${query("#battle-card").classList.contains("hidden")} mode=${game.state.mode}`);
 
 // Round-trip the card through both of its states, so "hidden while running" is
 // paired with "shown while paused" rather than proving a permanently hidden box.
 dispatchWindow("keydown", { key: "p" });
 check("pausing raises the pause card",
-  game.state.mode === "paused" && !query("#game-overlay").classList.contains("hidden"),
+  game.state.mode === "paused" && !query("#battle-card").classList.contains("hidden"),
   `mode=${game.state.mode}`);
 dispatchWindow("keydown", { key: "p" });
 check("resuming drops it again",
-  game.state.mode === "running" && query("#game-overlay").classList.contains("hidden"),
+  game.state.mode === "running" && query("#battle-card").classList.contains("hidden"),
   `mode=${game.state.mode}`);
 check("the battle kept the name the prologue showed", game.campaign.identity === identity);
 check("the battle objective carries the player's name",
@@ -1110,6 +1110,72 @@ check("the hired line holds its ground with finite geometry", !hireGeometryGap,
   `non-finite ${hireGeometryGap}`);
 check("the hired line is still seven bodies after a second of battle",
   (game.state.allies ?? []).length === 7, `bodies=${(game.state.allies ?? []).length}`);
+
+// ---- 出击 / 结阵 --------------------------------------------------------------
+//
+// The order button is the only control the player has over a line he is standing
+// in: hidden everywhere else, 出击 inside his own ring, 结阵 once the line is
+// under way. Both the label and the ring are read back off the live battle, and
+// the ring travelling with the chariot is the whole of 出击.
+const orderButton = query("#touch-order");
+const lineNow = game.state.allyFormations[0];
+const seat = { x: lineNow.x, y: lineNow.y };
+game.player.x = seat.x;
+game.player.y = seat.y;
+runFrames(1);
+check("standing in his own line raises the order button",
+  orderButton.hidden === false && orderButton.textContent === translate("battle.sortie"),
+  `hidden=${orderButton.hidden} label="${orderButton.textContent}"`);
+
+const ringOffset = () => ({ x: lineNow.x - game.player.x, y: lineNow.y - game.player.y });
+orderButton.dispatch("click");
+runFrames(1);
+check("出击 puts the line in march and turns the button into 结阵",
+  lineNow.order === "march" && orderButton.textContent === translate("battle.hold")
+    && orderButton.dataset.order === "reform",
+  `order=${lineNow.order} label="${orderButton.textContent}" data-order=${orderButton.dataset.order}`);
+
+// One frame settles the ring onto the chariot (it was pitched at its spawn centre
+// until the order); from here the attachment is rigid.
+const orderOffset = ringOffset();
+game.player.x = seat.x + 200;
+game.player.y = seat.y + 120;
+runFrames(2);
+check("the marching ring travels with the chariot",
+  Math.abs(ringOffset().x - orderOffset.x) < 1e-6 && Math.abs(ringOffset().y - orderOffset.y) < 1e-6,
+  `offset=${ringOffset().x.toFixed(2)},${ringOffset().y.toFixed(2)}`
+    + ` was ${orderOffset.x.toFixed(2)},${orderOffset.y.toFixed(2)}`);
+
+orderButton.dispatch("click");
+runFrames(1);
+check("结阵 sets the line down and sends the bodies that were left behind home",
+  lineNow.order === "hold" && lineNow.stragglers > 0
+    && (game.state.allies ?? []).some((ally) => ally.returning === true),
+  `order=${lineNow.order} stragglers=${lineNow.stragglers}`);
+check("the button turns back into 出击 once the line is set down",
+  orderButton.textContent === translate("battle.sortie") && orderButton.dataset.order === "march",
+  `label="${orderButton.textContent}" data-order=${orderButton.dataset.order}`);
+
+// Walking out of the ring takes the control away again: an order with no ring to
+// act on would be a button that did nothing.
+game.player.x = lineNow.x + 900;
+game.player.y = lineNow.y + 900;
+runFrames(1);
+check("the order button goes away when the player leaves the ring", orderButton.hidden === true,
+  `hidden=${orderButton.hidden}`);
+
+// The keyboard path walks the same road - a desktop player has no touch control.
+dispatchWindow("keydown", { key: "e" });
+dispatchWindow("keyup", { key: "e" });
+runFrames(1);
+check("the order key does nothing outside a ring", lineNow.order === "hold", `order=${lineNow.order}`);
+game.player.x = lineNow.x;
+game.player.y = lineNow.y;
+dispatchWindow("keydown", { key: "e" });
+dispatchWindow("keyup", { key: "e" });
+runFrames(1);
+check("the order key marches the line the player stands in", lineNow.order === "march",
+  `order=${lineNow.order}`);
 game.campaign.friendlyFormations = 0;
 
 // The defeat card is the other state of that same box, and the two lethal blows
@@ -1127,20 +1193,20 @@ game.combat.damagePlayer(9999, 0, 0);
 game.player.invulnerable = 0;
 game.combat.damagePlayer(9999, 0, 0);
 check("losing the battle raises the defeat card",
-  game.state.mode === "over" && !query("#game-overlay").classList.contains("hidden"),
+  game.state.mode === "over" && !query("#battle-card").classList.contains("hidden"),
   `mode=${game.state.mode}`);
 check("a lost battle keeps none of the coin it collected",
   game.campaign.totalGold === purseAtEntry,
   `gold=${game.campaign.totalGold} entry=${purseAtEntry}`);
 check("the defeat card states the purse the retry really leaves",
-  query("#overlay-copy").textContent === translate("battle.defeatCopy", {
+  query("#card-copy").textContent === translate("battle.defeatCopy", {
     gold: purseAtEntry, stage: game.campaign.stage,
   }),
-  `copy="${query("#overlay-copy").textContent}"`);
+  `copy="${query("#card-copy").textContent}"`);
 check("the defeat card offers the retry action and hides the pause control",
-  query("#overlay-button").firstElementChild.textContent === translate("battle.retry")
+  query("#card-action").textContent === translate("battle.retry")
     && query("#start-button").hidden === true,
-  `action="${query("#overlay-button").firstElementChild.textContent}" startHidden=${query("#start-button").hidden}`);
+  `action="${query("#card-action").textContent}" startHidden=${query("#start-button").hidden}`);
 
 // ---- the last stage, the victory card, and the rest that follows it ----------
 //
@@ -1157,7 +1223,7 @@ const { countdownLabel, lockWindowLabel } = await import(
   pathToFileURL(resolve(projectRoot, "src/ui/labels.js")).href
 );
 
-query("#overlay-button").dispatch("click");
+query("#card-button").dispatch("click");
 check("the retry opens a battle again", game.state.mode === "running", `mode=${game.state.mode}`);
 check("the retried battle starts its score from zero", game.state.score === 0, `score=${game.state.score}`);
 
@@ -1232,23 +1298,23 @@ game.player.y = extraction.y;
 runFrames(1);
 check("reaching the extraction point wins the run instead of opening the shop",
   game.state.mode === "victory", `mode=${game.state.mode}`);
-check("the victory card takes the field, not the pause card",
-  !query("#victory-screen").classList.contains("hidden")
-    && query("#game-overlay").classList.contains("hidden"),
-  `victoryHidden=${query("#victory-screen").classList.contains("hidden")}`);
-check("the card states the victory", query("#victory-title").textContent === translate("victory.title"),
-  `title="${query("#victory-title").textContent}"`);
-check("the card names the run that was won", query("#victory-subtitle").textContent
+check("the victory card takes the field",
+  !query("#battle-card").classList.contains("hidden"),
+  `hidden=${query("#battle-card").classList.contains("hidden")}`);
+check("the card states the victory", query("#card-title").textContent === translate("victory.title"),
+  `title="${query("#card-title").textContent}"`);
+check("the card names the run that was won", query("#card-copy").textContent
   === translate("victory.subtitle", { name: identity.fullName, stage: finalStage }),
-  `subtitle="${query("#victory-subtitle").textContent}"`);
-check("the card reports the score and the spoils", query("#victory-stats").textContent
+  `lede="${query("#card-copy").textContent}"`);
+const victoryLines = query("#card-lines").children;
+check("the card reports the score and the spoils", victoryLines[0]?.textContent
   === translate("victory.stats", { score: victoryScore, gold: game.campaign.totalGold }),
-  `stats="${query("#victory-stats").textContent}"`);
+  `stats="${victoryLines[0]?.textContent}"`);
 check("the spoils are banked before the run ends", game.campaign.totalGold >= goldBeforeVictory,
   `gold=${game.campaign.totalGold} before=${goldBeforeVictory}`);
-check("the card states the rest it is about to enforce", query("#victory-note").textContent
+check("the card states the rest it is about to enforce", victoryLines[1]?.textContent
   === translate("victory.lockNote", { time: lockWindowLabel() }),
-  `note="${query("#victory-note").textContent}"`);
+  `note="${victoryLines[1]?.textContent}"`);
 
 const storedVictory = JSON.parse(deviceStorage.get(VICTORY_LOCK_KEY) ?? "null");
 check("the victory is written to storage as the card appears",
@@ -1257,7 +1323,7 @@ check("the victory is written to storage as the card appears",
 check("the victory card leaves the loop's time base alone", game.state.lastTime === nextFrameTime,
   `lastTime=${game.state.lastTime} frameClock=${nextFrameTime}`);
 
-query("#victory-return").dispatch("click");
+query("#card-button").dispatch("click");
 runFrames(1);
 check("the card returns to the menu", game.state.mode === "menu", `mode=${game.state.mode}`);
 check("the menu rests instead of offering a new run",
@@ -1303,9 +1369,10 @@ check("a run starts again once the rest is over", game.state.mode === "prologue"
 //
 // The prologue's second door: two encounters on one battlefield, played as a
 // scenario instead of a campaign stage. Everything below is the real runtime path
-// - the button opens the drill, the cards are canvas UI confirmed by a click and
-// by Enter, the tiger and the line spawn through the enemy system's scenario
-// entry points, and the clear hands the run into stage 1 through the shop.
+// - the button opens the drill, the cards are the same DOM card every other dialog
+// uses (confirmed by a click and by Enter), the tiger and the line spawn through
+// the enemy system's scenario entry points, and the clear hands the run into
+// stage 1 through the shop.
 query("#prologue-tutorial").dispatch("click");
 const drill = () => game.state.tutorial;
 check("the story card's tutorial button opens the drill",
@@ -1338,19 +1405,30 @@ check("a carded drill does not move the field",
   `tiger=${game.state.wilds[0].x},${game.state.wilds[0].y} player=${game.player.x},${game.player.y}`);
 check("a carded drill shows no objective arrow", query("#extraction-guide").hidden === true);
 
-const briefCard = game.tutorialOverlay.layout();
-check("the card the canvas painted has a button to press",
-  briefCard !== null && briefCard.confirm.width > 0, `card=${JSON.stringify(briefCard?.confirm)}`);
+// The card is DOM, so it is read the way a player sees it: a title, one line per
+// beat, and one button. Nothing on it is measured - the browser wraps and scrolls.
+const briefCopy = drill().overlay;
+check("the drill's first beat is painted on the one card",
+  !query("#battle-card").classList.contains("hidden")
+    && query("#card-title").textContent === translate(briefCopy.titleKey)
+    && query("#card-action").textContent === translate("tutorial.confirm"),
+  `title="${query("#card-title").textContent}" action="${query("#card-action").textContent}"`);
+check("the card takes the wider measure for the drill's paragraphs",
+  query("#battle-card").dataset.width === "wide", `width=${query("#battle-card").dataset.width}`);
+const briefLines = query("#card-lines").children;
+check("the card holds one line per beat, in the drill's order",
+  briefLines.length === briefCopy.bodyKeys.length
+    && briefLines.every((line, index) => line.textContent === translate(briefCopy.bodyKeys[index])
+      && line.dataset.tone === "body"),
+  `lines=${briefLines.map((line) => line.textContent).join(" / ")}`);
 // The drill is played by thumb, not by keyboard: no line on the card may name a
 // key the player has no way to press.
 const keyHint = /空格|space|WASD|Enter|↑|↓|←|→/i;
 check("the brief talks about the joystick and the fire button, not the keyboard",
-  briefCard !== null && !keyHint.test([briefCard.title, ...briefCard.bodyLines, translate("tutorial.confirm")].join("")),
-  `card="${[briefCard?.title, ...(briefCard?.bodyLines ?? [])].join(" / ")}"`);
-query("#game").dispatch("pointerdown", {
-  clientX: briefCard.confirm.x + briefCard.confirm.width / 2,
-  clientY: briefCard.confirm.y + briefCard.confirm.height / 2,
-});
+  !keyHint.test([translate(briefCopy.titleKey), ...briefCopy.bodyKeys.map((key) => translate(key)),
+    translate("tutorial.confirm")].join("")),
+  `card="${briefCopy.bodyKeys.map((key) => translate(key)).join(" / ")}"`);
+query("#card-button").dispatch("click");
 check("clicking the card's button hands the field over",
   drill()?.step === "hunt" && drill().frozen === false && drill().overlay === null,
   `step=${drill()?.step} frozen=${drill()?.frozen}`);
@@ -1409,23 +1487,24 @@ check("the pan holds the field while it runs", drill()?.frozen === true && drill
 
 runFrames(90);
 check("the pan ends on the tactics card",
-  drill()?.step === "tactics" && drill().frozen === true && drill().overlay !== null,
+  drill()?.step === "tactics" && drill().frozen === true && drill().overlay !== null
+    && !query("#battle-card").classList.contains("hidden"),
   `step=${drill()?.step}`);
-const tacticsCard = game.tutorialOverlay.layout();
+const tacticsCopy = drill().overlay;
 check("the tactics card describes the three things in the line",
-  drill()?.overlay?.bodyKeys?.length === 3
-    && tacticsCard.bodyLines.join("") === drill().overlay.bodyKeys.map((key) => translate(key)).join(""),
-  `beats=${drill()?.overlay?.bodyKeys?.length} lines=${tacticsCard?.bodyLines?.length}`);
+  tacticsCopy.bodyKeys?.length === 3 && query("#card-lines").children.length === 3,
+  `beats=${tacticsCopy?.bodyKeys?.length} lines=${query("#card-lines").children.length}`);
 check("the tactics card has no keyboard hints on it either",
-  !keyHint.test([tacticsCard.title, ...tacticsCard.bodyLines, translate("tutorial.confirm")].join("")),
-  `card="${[tacticsCard.title, ...tacticsCard.bodyLines].join(" / ")}"`);
-// Three beats wrap wider than two, and the button is the only way out of a frozen
-// field: the panel has to stay inside the canvas.
-const viewHeight = game.view.height;
-check("the taller card still fits the view, button and all",
-  tacticsCard.y >= 0 && tacticsCard.y + tacticsCard.height <= viewHeight
-    && tacticsCard.confirm.y + tacticsCard.confirm.height <= viewHeight,
-  `panel y=${tacticsCard.y} height=${tacticsCard.height} button ends at ${tacticsCard.confirm.y + tacticsCard.confirm.height}`);
+  !keyHint.test([translate(tacticsCopy.titleKey),
+    ...tacticsCopy.bodyKeys.map((key) => translate(key)), translate("tutorial.confirm")].join("")),
+  `card="${tacticsCopy.bodyKeys.map((key) => translate(key)).join(" / ")}"`);
+// Three beats used to need a measurement to stay inside the canvas. The card is a
+// DOM box now: styles/game.css lets it wrap and scroll, so the one thing left to
+// prove is that its button is still the way out of a frozen field.
+check("the taller card keeps its button",
+  query("#card-button").dataset.action === "tutorial"
+    && query("#card-action").textContent === translate("tutorial.confirm"),
+  `action="${query("#card-action").textContent}"`);
 check("the tactics card raises nothing of its own", game.state.fireHeld === false && game.state.fireHold === 0);
 dispatchWindow("keydown", { key: " " });
 dispatchWindow("keyup", { key: " " });

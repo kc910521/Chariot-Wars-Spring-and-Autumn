@@ -1,14 +1,15 @@
 import { translate } from "../i18n/index.js";
+import { CARD_ACTIONS } from "./battle-card.js";
 
 export function bindControls({
   state, keys, startRun, startTutorial, beginMission, restartStage, setMode,
   resizeCanvas, resizeShop = () => {}, resizeMenu = () => {}, battleScreen, touchInput, endRun,
-  confirmTutorial = () => {}, onSoundToggle = () => {}, elements,
+  confirmTutorial = () => {}, onSoundToggle = () => {}, onFormationOrder = () => {}, elements,
 }) {
   const {
     startButton, menuStartButton, prologueStartButton, prologueTutorialButton,
-    overlayButton, victoryReturnButton, soundButton, soundIcon,
-    touchJoystickElement, touchJoystickKnob,
+    cardButton, soundButton, soundIcon,
+    touchJoystickElement, touchJoystickKnob, touchOrderElement,
   } = elements;
 
   function togglePause() {
@@ -39,6 +40,13 @@ export function bindControls({
       togglePause();
       return;
     }
+    // 出击 / 结阵 on a keyboard. The button for it is a touch control, so a
+    // desktop player would otherwise have no way to give the order at all; the
+    // key is swallowed here so it never reaches a movement binding.
+    if ((key === "e" || key === "E") && state.mode === "running") {
+      onFormationOrder();
+      return;
+    }
     if (state.mode === "menu" && (key === "Enter" || key === " ")) {
       startRun();
       return;
@@ -65,13 +73,19 @@ export function bindControls({
   prologueStartButton.addEventListener("click", () => beginMission());
   // The drill opens from the same story card, with the same freshly rolled run.
   prologueTutorialButton.addEventListener("click", () => startTutorial());
-  // The victory card's only button: the run is over, so the campaign goes back to
-  // nothing and the menu (now locked) shows what the next wait is for.
-  victoryReturnButton.addEventListener("click", () => endRun());
-  overlayButton.addEventListener("click", () => {
-    if (state.mode === "paused") setMode("running");
-    else if (state.mode === "over") restartStage();
-  });
+  // The card's one button. What it means was decided when the card was painted -
+  // src/ui/battle-card.js leaves it in `data-action` - so this is a table rather
+  // than a branch on the mode: the drill's cards and the three screens share the
+  // button without either side knowing about the other.
+  const cardActions = {
+    [CARD_ACTIONS.resume]: () => setMode("running"),
+    [CARD_ACTIONS.retry]: () => restartStage(),
+    // The victory card's only button: the run is over, so the campaign goes back
+    // to nothing and the menu (now locked) shows what the next wait is for.
+    [CARD_ACTIONS.endRun]: () => endRun(),
+    [CARD_ACTIONS.tutorial]: () => confirmTutorial(),
+  };
+  cardButton.addEventListener("click", () => cardActions[cardButton.dataset.action]?.());
   function refreshSoundLabel() {
     soundButton.setAttribute("aria-label", translate(state.sound ? "battle.soundOn" : "battle.soundOff"));
     soundButton.title = translate(state.sound ? "battle.soundOn" : "battle.soundOff");
@@ -134,6 +148,13 @@ export function bindControls({
   attackButton.addEventListener("pointerup", releaseAttack);
   attackButton.addEventListener("pointercancel", releaseAttack);
   attackButton.addEventListener("lostpointercapture", releaseAttack);
+
+  // The order button: one tap is one order, and the HUD rewrites the label the
+  // moment it lands (it is the next order, not the current one).
+  touchOrderElement.addEventListener("click", () => {
+    if (state.mode !== "running") return;
+    onFormationOrder();
+  });
 
   window.addEventListener("resize", () => {
     updateTouchLayout();

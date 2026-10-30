@@ -1,34 +1,31 @@
 import { translate } from "../i18n/index.js";
-import { lockWindowLabel } from "./labels.js";
+import { cardForMode, cardForTutorial } from "./battle-card.js";
 
 export function createScreens({
-  state, campaign, draw, onModeChange, victoryLock = null, elements,
+  state, campaign, draw, onModeChange, victoryLock = null, elements, battleCard,
 }) {
   const {
-    menuScreen, prologueScreen, battleScreen, shopScreen, victoryScreen, overlay, startLabel,
-    startButton,
-    overlayEyebrow, overlayTitle, overlayCopy, overlayButton,
-    victoryEyebrow, victoryTitle, victorySubtitle, victoryStats, victoryNote, victoryReturnButton,
+    menuScreen, prologueScreen, battleScreen, shopScreen, startLabel, startButton,
   } = elements;
 
   function setMode(mode) {
     state.mode = mode;
     const running = mode === "running";
     // Only the battle states own the battlefield and the `battle-focus` chrome;
-    // the menu, the story card, the shop and the victory card sit outside. The
-    // overlay card is narrower still: it is the pause/defeat dialog, so a live
-    // battle must not show it - it stays on top of the field but hidden. The
-    // victory card is its own overlay: the field keeps its last frame underneath
-    // while the run is being reported.
+    // the menu, the story card and the shop sit outside. The card is the field's
+    // own dialog: a live battle must not show it, it stays on top of the field but
+    // hidden, and a victory keeps the field's last frame underneath while the run
+    // is being reported.
     const inBattle = running || mode === "paused" || mode === "over" || mode === "victory";
-    const showOverlayCard = mode === "paused" || mode === "over";
     document.body.classList.toggle("battle-focus", inBattle);
     menuScreen.hidden = mode !== "menu";
     prologueScreen.hidden = mode !== "prologue";
     shopScreen.hidden = mode !== "shop";
     battleScreen.hidden = !inBattle;
-    overlay.classList.toggle("hidden", !showOverlayCard);
-    victoryScreen.classList.toggle("hidden", mode !== "victory");
+    // One card, one line. The mode's card wins; what is left over is the drill's
+    // beat, which lives outside the mode machine (the battle is "running" while a
+    // drill card is up) - and has to come back when a pause opened over it closes.
+    battleCard.show(cardForMode(mode, { campaign, state }) ?? cardForTutorial(state.tutorial?.overlay));
     startLabel.textContent = translate(running ? "battle.pause" : mode === "paused" ? "battle.resumeLabel" : "battle.startLabel");
     startButton.setAttribute("aria-label", translate(mode === "paused" ? "battle.resumeLabel" : "battle.pauseLabel"));
     startButton.hidden = mode === "over" || mode === "victory";
@@ -39,30 +36,6 @@ export function createScreens({
       // canvas card paints is then worked out from the timestamp, not polled. It
       // happens before `onModeChange` below, which is what opens the page.
       victoryLock?.refresh();
-    } else if (mode === "paused") {
-      overlayEyebrow.textContent = translate("battle.pausedEyebrow");
-      overlayTitle.textContent = translate("battle.pausedTitle");
-      overlayCopy.textContent = translate("battle.pausedCopy");
-      overlayButton.firstElementChild.textContent = translate("battle.resume");
-    } else if (mode === "over") {
-      overlayEyebrow.textContent = translate("battle.defeatEyebrow");
-      overlayTitle.textContent = translate("battle.defeatTitle");
-      overlayCopy.textContent = translate("battle.defeatCopy", { gold: campaign.totalGold, stage: campaign.stage });
-      overlayButton.firstElementChild.textContent = translate("battle.retry");
-    } else if (mode === "victory") {
-      // The one card in the game that is not a gate: the last stage is won, the
-      // run is over, and the campaign is about to rest. It reports the run (who,
-      // which stage, what it was worth) and states the rule it is about to
-      // enforce, so the locked menu that follows is a consequence the player has
-      // already read.
-      victoryEyebrow.textContent = translate("victory.eyebrow");
-      victoryTitle.textContent = translate("victory.title");
-      victorySubtitle.textContent = translate("victory.subtitle", {
-        name: campaign.identity?.fullName ?? "", stage: campaign.stage,
-      });
-      victoryStats.textContent = translate("victory.stats", { score: state.score, gold: campaign.totalGold });
-      victoryNote.textContent = translate("victory.lockNote", { time: lockWindowLabel() });
-      victoryReturnButton.firstElementChild.textContent = translate("victory.return");
     }
 
     draw();
@@ -71,4 +44,3 @@ export function createScreens({
 
   return { setMode };
 }
-

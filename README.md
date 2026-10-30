@@ -23,7 +23,7 @@ python3 -m http.server 8000     # 备选：使用系统自带 Python
 
 序章卡片上有两个入口：右侧「出征」进入正式征途，左侧「猛虎下山 · 教学」进入一场两段式的教学战。教学战就是这一局的第一战局，只是以剧本方式演出：`state.battleMode` 为 `"tutorial"`，`campaign.stage` 始终为 1，`state.spawnTimer` 设为 `Infinity`（不刷新普通波次），`state.battleMode` 与 `state.tutorial` 都存放在 `state` 上，因此 `stages.createBattle()` 对这一战只需要换一份开局参数，其余（地图、撤离点、商店）都是同一条代码路径。打完开店整备，商店的「开始下一战」会直接进入正式的第 1 战局：`campaign.tutorialHandoff` 在 `rollForNextBattle()` 里被消费一次，战局号因此不 +1。
 
-剧本写在 `src/game/tutorial.js`，只有状态机与两次推镜：**brief**（画布卡片：摇杆怎么开车、右下角怎么放弩）→ **hunt**（猛虎在场，引导箭头指向它）→ 猛虎倒下后 **pan**（阵线在视野外列阵，镜头推过去）→ **tactics**（画布卡片，三条各说一件事：步卒守阵位、四五人围住车身会一起反击；弓手在远处朝拉车的马放箭、贴上去就边退边射；敌车先撞上来、血少时回阵中旗鼓下回血再冲）→ **return**（镜头回到战车）→ **engage**（击破步阵，引导箭头始终跟着剩下的人；最后一人倒下时按与普通战局相同的击杀数规则开启撤离点：1 只虎 + 9 名步卒 = 10 = `objectiveTarget`）。文案只讲触屏：左手摇杆、右下角「弩 / 击」、卡片自己的按钮，一个键名都不出现（单元测试对 `tutorial.*` 逐条禁止 `空格 / Space / WASD / Enter / 方向键`）。卡片不是 DOM，而是画在 canvas 上的一层（`src/render/tutorial-overlay.js`），布局与命中判定共用同一份几何，所以画出来的按钮就是能点到的按钮；三条正文比两条更高，因此面板既居中又被夹在画面内，确认按钮永远不会被挤到画布外。桌面调试时键盘 Enter / 空格仍然走同一个 `confirm()`，但这是给键盘的便利，不写进文案。
+剧本写在 `src/game/tutorial.js`，只有状态机与两次推镜：**brief**（卡片：摇杆怎么开车、右下角怎么放弩）→ **hunt**（猛虎在场，引导箭头指向它）→ 猛虎倒下后 **pan**（阵线在视野外列阵，镜头推过去）→ **tactics**（卡片，三条各说一件事：步卒守阵位、四五人围住车身会一起反击；弓手在远处朝拉车的马放箭、贴上去就边退边射；敌车先撞上来、血少时回阵中旗鼓下回血再冲）→ **return**（镜头回到战车）→ **engage**（击破步阵，引导箭头始终跟着剩下的人；最后一人倒下时按与普通战局相同的击杀数规则开启撤离点：1 只虎 + 9 名步卒 = 10 = `objectiveTarget`）。文案只讲触屏：左手摇杆、右下角「弩 / 击」、卡片自己的按钮，一个键名都不出现（单元测试对 `tutorial.*` 逐条禁止 `空格 / Space / WASD / Enter / 方向键`）。卡片就是战场那张唯一的卡（`ui/battle-card.js`）：教程只交出「哪张卡」，标题与正文的 locale key 由 `cardForTutorial()` 拼成一条 spec，DOM 负责换行、滚动与命中——画布版本为了这三件事自己量过一遍字符串、自己算过按钮矩形，现在这些几何都不存在了。三条正文比两条更高，因此面板在 `styles/game.css` 里限高并可滚动，确认按钮永远不会被挤出画面。桌面调试时键盘 Enter / 空格仍然走同一个 `confirm()`，但这是给键盘的便利，不写进文案。
 
 卡片与推镜都是**真正的暂停**：`game.js` 的帧门在 `state.tutorial.frozen` 为真时跳过单位、投射物与生成，并让 `readControls(delta, true)` 读到空输入（战车惯性滑停，而不是整体冻住）。否则视野外的弓手会在你不能操舵的时候先放箭。镜头用 `updateCamera({ ..., focus })` 的 `focus` 点推镜，缓动比跟随更慢；`state.cameraFocus` 为 null 时恢复跟随战车。
 
@@ -48,7 +48,7 @@ python3 -m http.server 8000     # 备选：使用系统自带 Python
 
 战场 HUD 用 `ui/labels.js` 的 `stageLabel()` 决定战局栏写什么：平时是两位数字，终局改写 `battle.finalStage`（中文「终局」、英文 `FINAL`），并带上 `.is-final` 让样式把字号收小一档，以免五个字符撑破原本只放两位数字的格子。本役目标栏在首领战里显示整支车队的总耐久（`battle.bossSquad`，例：「8 将 · 象兵」），条随每一具倒下而下降；预警横幅在终局读作 `battle.finalWarning`，副标题为 `battle.bossSquadBanner`。
 
-走到撤离点在终局不再开店，而是 `stages.enterVictory()`：战利先入军府，`setMode("victory")` 打开凯旋卡（`#victory-screen`，与暂停/失利卡同一层，但独立一张：`#victory-title`、`#victory-subtitle`、`#victory-stats`、`#victory-note`、`#victory-return`），卡上写明这一局是谁、打到第几战局、战功与军资，并提前说明接下来要休整多久。卡片唯一按钮回到主菜单，此时菜单上画在卡片里的「击鼓出征」已被同样画在画布上的休战卡取代：它只有两行文字、没有登记任何可点的目标。
+走到撤离点在终局不再开店，而是 `stages.enterVictory()`：战利先入军府，`setMode("victory")` 打开凯旋卡——它是战场那张唯一的卡（`#battle-card`，`ui/battle-card.js`），与暂停卡、失利卡、教程卡同一份 DOM、同一套样式，只是 spec 不同：`copy` 是这一局的名字与战局数（`data-tone="lede"`，读作引题），列表里两行写战功与军资、以及接下来要休整多久。卡片唯一按钮回到主菜单，此时菜单上画在卡片里的「击鼓出征」已被同样画在画布上的休战卡取代：它只有两行文字、没有登记任何可点的目标。
 
 休战记录写在 Local Storage 的 `chariot-wars.victory.v1` 上，经由 `src/platform/storage.js` 的门面（浏览器驱动把载荷写成 JSON 文本，读取时由 `parseVictoryRecord()` 校验每一栏）。写入发生在 `enterVictory()` 内、卡片出现的同一刻，所以即便玩家在凯旋卡上直接关掉标签页，这一局也算赢了。窗口长度只有 `VICTORY_LOCK_MINUTES` 一处：`VICTORY_LOCK_MS` 与卡上的每一段文案（`menu.timeHours`/`menu.timeMinutes`/`menu.timeSeconds` 等）都由它派生，单测会断言这层派生关系。当前构建把它设成 1 分钟，以便在真机上一口气看完「锁定 → 倒计时 → 到期 → 再出征」；把 `src/game/victory-lock.js` 的 `VICTORY_LOCK_MINUTES` 改成 `24 * 60` 即为上线的二十四小时。到期时键会被删除而不是留在存储里；窗口尚在时再次胜利不会延长等待（以第一次胜利的时间戳为准）；记录损坏、缺栏，或时间戳比现在晚出 60 秒以上（时钟被回拨、或被人改过）时，一律按「没有记录」处理——这样的时钟只会让玩家少休一次，不会把存档锁死。它是节奏装置而不是反作弊手段：改系统时间或清站点数据都能绕过。
 
@@ -171,7 +171,6 @@ h5game/
 │   │   ├── elements.js           # Element art: palisades, canopies, terrain patterns, cloud puffs
 │   │   ├── ground.js             # The floor: soil washes, grass flecks and grit, hashed onto the world
 │   │   ├── sprites.js            # Unit art: chariot rig and foot figure, shared by battlefield and shop
-│   │   ├── tutorial-overlay.js   # The drill's canvas card: layout, hit test and paint
 │   │   └── renderer.js           # Canvas rendering for terrain, units, and effects
 │   ├── platform/
 │   │   ├── audio.js              # Host seam: the only file that names Web Audio / <audio>; decode cache, unlock, graceful silence
@@ -192,7 +191,8 @@ h5game/
 │       ├── hud.js                # Battle HUD updates, including the FINAL readout and the squad health total
 │       ├── labels.js             # Pure label helpers: the stage readout, the countdown and the rest's window
 │       ├── prologue.js           # The story card: five lines from the rolled identity, plus the stage the run ends on
-│       ├── screens.js            # Prologue, pause, defeat and victory screen state; the menu is a canvas page now
+│       ├── screens.js            # Which screen is up, and which card it puts over the field
+│       ├── battle-card.js        # The one card: one spec per dialog, one DOM painter (pause, defeat, victory, the drill)
 │       ├── canvas-page.js        # The shared canvas host: backing store, page clock, pointer router, live region
 │       ├── menu-page.js          # The home page's wiring: the painter, the start hook, 出征's focus proxy
 │       ├── menu.js               # Home page paint: the card, the seal, the lede, 出征 or the resting countdown

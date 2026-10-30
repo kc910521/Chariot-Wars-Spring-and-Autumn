@@ -30,14 +30,13 @@ import { createTutorial } from "../src/game/tutorial.js";
 import {
   LINE_DISTANCES, TUTORIAL_LAYOUT, createTutorialMapCheck, findLineGround, lineGroundExtent, planTigerGround,
 } from "../src/game/tutorial-map.js";
-import { createTutorialOverlay } from "../src/render/tutorial-overlay.js";
 import { wildAnimalStats } from "../src/data/wilds.js";
 import { createElementRenderer } from "../src/render/elements.js";
 import { createGroundPainter } from "../src/render/ground.js";
 import { createRenderer } from "../src/render/renderer.js";
 import { chariotRigBox, createSpriteArt, spritePalette } from "../src/render/sprites.js";
 import { CHARIOT_CONTROL_CONFIG, createPlayerController } from "../src/game/player.js";
-import { bossTypes, chariotTactics, enemyStats, formationAura, formationConfig, formationPatterns, formationPresets } from "../src/data/formations.js";
+import { bossTypes, chariotTactics, enemyStats, formationAura, formationConfig, formationOrders, formationPatterns, formationPresets } from "../src/data/formations.js";
 import {
   createBallisticProjectile, createProjectileSystem, solveBallisticElevation,
   solveTimeToGround, updateProjectiles,
@@ -56,6 +55,9 @@ import {
   chasePoint, defendedPoint, formationExtent, formationGroundExtent, isInsideFormation, searchPoint,
   tickFormationAura, updateFormationAlerts,
 } from "../src/game/units/formations.js";
+import {
+  ORDER_ACTION, advanceOrders, applyOrder, commandedFormation, formationUnder, issueOrder, toggleOrder,
+} from "../src/game/units/formation-orders.js";
 import { clamp, shortestAngleDifference } from "../src/utils/math.js";
 import { createRandomSeed, createSeededRandom, parseSeed } from "../src/utils/random.js";
 import { updateCamera } from "../src/render/camera.js";
@@ -66,6 +68,7 @@ import {
 import { drawCamp, drawRig } from "../src/ui/shop-scene.js";
 import { drawRadar } from "../src/ui/shop-dossier.js";
 import { createShopScreen } from "../src/ui/shop-screen.js";
+import { CARD_ACTIONS, cardForMode, cardForTutorial } from "../src/ui/battle-card.js";
 import { createMenuPage } from "../src/ui/menu-page.js";
 import { computeMenuLayout } from "../src/ui/menu-layout.js";
 import { prologueLines } from "../src/ui/prologue.js";
@@ -4490,16 +4493,28 @@ test("the story card grows a sixth line that names the last stage", () => {
   assert.equal(prologueLines(null, 12).length, 0, "no identity, no card");
 });
 
-test("index.html carries the victory card, and a menu whose 出征 is painted", () => {
+test("index.html carries the one card, and a menu whose 出征 is painted", () => {
   const html = readFileSync(new URL("../index.html", import.meta.url), "utf8");
-  for (const id of ["victory-screen", "victory-eyebrow", "victory-title", "victory-subtitle",
-    "victory-stats", "victory-note", "victory-return"]) {
+  // One card for every dialog that stops the battle. There used to be two DOM
+  // cards with their own ids and their own CSS, plus a third painted on the canvas
+  // for the drill; the copy now lives in the locale tables and the ids are the
+  // presenter's (src/ui/battle-card.js).
+  for (const id of ["battle-card", "card-icon", "card-eyebrow", "card-title", "card-copy",
+    "card-lines", "card-button", "card-action"]) {
     assert.ok(html.includes(`id="${id}"`), `index.html is missing #${id}`);
   }
-  // The victory card is hidden in the markup: it may not flash before a run has
-  // earned it, and it must not cover the menu at boot.
-  const victoryTag = html.match(/<div[^>]*id="victory-screen"[^>]*>/)?.[0] ?? "";
-  assert.ok(victoryTag.includes("hidden"), `the victory card is not hidden at boot: ${victoryTag}`);
+  assert.ok(!html.includes('id="game-overlay"') && !html.includes('id="victory-screen"'),
+    "a second card survived the merge");
+  // The card is hidden in the markup: it may not flash before a run has earned it,
+  // and it must not cover the menu at boot.
+  const cardTag = html.match(/<div[^>]*id="battle-card"[^>]*>/)?.[0] ?? "";
+  assert.ok(cardTag.includes("hidden"), `the card is not hidden at boot: ${cardTag}`);
+  // The slots are painted from the spec, so the markup carries none of the copy: a
+  // string here would be a second table to keep in sync with the locale files.
+  const cardMarkup = html.slice(html.indexOf('id="battle-card"'), html.indexOf('id="battle-card"') + 1200);
+  for (const id of ["card-eyebrow", "card-title", "card-copy", "card-action"]) {
+    assert.match(cardMarkup, new RegExp(`id="${id}"[^>]*></`), `#${id} carries hard-coded copy`);
+  }
   // The home page is one canvas now: the resting card is painted on it, so what the
   // page keeps is the canvas, the live region that announces the countdown, and the
   // focus proxy that stands in for the painted 出征.
@@ -4593,8 +4608,13 @@ test("the hire is one row: price, cap, roster and aura all read from it", () => 
   assert.equal(types.filter((type) => type === "chariot").length, 1);
   assert.equal(types.filter((type) => type === "archer").length, 2);
   assert.equal(types.filter((type) => type === "spear").length, 2);
-  assert.equal(formationConfig.aura.heal, 1);
+  assert.equal(formationConfig.aura.heal, 3);
   assert.equal(formationConfig.aura.interval, 3);
+  // The two legs an order opens up are in the row too, and they pull in opposite
+  // directions: a marcher keeps step with the chariot (slower), a straggler sent
+  // home by a 结阵 runs (faster).
+  assert.ok(formationConfig.orders.marchSpeed < formationConfig.orders.returnSpeed,
+    "a march must be slower than a return, or 结阵 would gain nothing");
   assert.ok(formationConfig.chariot.reengageAt > formationConfig.chariot.fleeAt,
     "the two thresholds must leave a hysteresis band");
 });
@@ -4742,7 +4762,7 @@ test("the enemy chariot drives the same morale machine as the hire", () => {
 });
 
 
-test("the aura heals one point every three seconds, only inside the footprint", () => {
+test("the aura heals three points every three seconds, only inside the footprint", () => {
   const extent = formationExtent(formationConfig);
   const formation = {
     id: 7, x: 0, y: 0, heading: 0, halfWidth: extent.halfWidth, halfHeight: extent.halfHeight,
@@ -4760,7 +4780,8 @@ test("the aura heals one point every three seconds, only inside the footprint", 
 
   const healed = tickFormationAura([formation], units, 0.2);
   assert.deepEqual(healed, [inside], "the beat healed the wrong bodies");
-  assert.equal(inside.health, 6);
+  // One beat is a third of a foot body: 5 -> 8 of 14.
+  assert.equal(inside.health, 8);
   assert.equal(outside.health, 5, "a body outside the border was healed");
   assert.equal(stranger.health, 5, "another line's unit was healed");
   assert.equal(full.health, 14, "the heal overshot the maximum");
@@ -4769,10 +4790,23 @@ test("the aura heals one point every three seconds, only inside the footprint", 
   // The remainder is carried, not rounded up: after the 0.1s overshoot the next
   // beat is 2.9s away, not a fresh 3s.
   tickFormationAura([formation], units, 1.4);
-  assert.equal(inside.health, 6);
+  assert.equal(inside.health, 8);
   tickFormationAura([formation], units, 1.5);
-  assert.equal(inside.health, 7, "the timer lost the overshoot from the previous beat");
+  assert.equal(inside.health, 11, "the timer lost the overshoot from the previous beat");
   assert.ok(formation.auraFlash <= formationConfig.aura.flash);
+});
+
+test("a full body is not over-healed, and a beat lands on the maximum, not past it", () => {
+  const formation = { id: 1, x: 0, y: 0, heading: 0, auraTimer: 0, auraFlash: 0 };
+  // A spear is a two-point body: the three-point beat still leaves it at 2.
+  const spear = { formationId: 1, x: 4, y: 4, health: 2, maxHealth: 2 };
+  const archer = { formationId: 1, x: -4, y: 4, health: 1, maxHealth: 1 };
+  const heavy = { formationId: 1, x: 4, y: -4, health: 5, maxHealth: 6 };
+  const healed = tickFormationAura([formation], [spear, archer, heavy], 3);
+  assert.deepEqual(healed, [heavy], "the beat tried to heal a body that was already full");
+  assert.equal(spear.health, 2);
+  assert.equal(archer.health, 1);
+  assert.equal(heavy.health, 6, "a six-point body was healed past its maximum");
 });
 
 test("the aura heals a unit that came home, not one still running", () => {
@@ -4811,7 +4845,9 @@ test("both sides run the same banner beat, and an enemy line heals its own", () 
   for (let frame = 0; frame < 179; frame += 1) rig.enemies.updateUnits(1 / 60);
   assert.equal(patient.health, 1, "the enemy banner fired before its interval");
   for (let frame = 0; frame < 6; frame += 1) rig.enemies.updateUnits(1 / 60);
-  assert.equal(patient.health, 2, "a wounded enemy on its own footprint was not healed");
+  // A ge is a three-point body and the beat is three points: one beat fills it,
+  // and the clamp is what keeps it there rather than at four.
+  assert.equal(patient.health, 3, "a wounded enemy on its own footprint was not healed");
   assert.ok(patient.healFlash > 0, "the healed enemy body did not glow");
   assert.ok(formation.auraFlash > 0, "the enemy banner did not pulse");
   assert.equal(outside.health, 1, "an enemy outside the border was patched up");
@@ -4830,20 +4866,94 @@ test("an enemy chariot heals at its own banner and charges out above 40%", () =>
   rig.player.x = spot.x;
   rig.player.y = spot.y;
 
-  // Three beats only mend it to 5/14 (35%), still inside the hysteresis band:
-  // it must hold its slot and not charge out.
-  for (let frame = 0; frame < 700; frame += 1) rig.enemies.updateUnits(1 / 60);
+  // One beat mends it to 5/14 (35.7%), still inside the hysteresis band: it must
+  // hold its slot and not charge out.
+  for (let frame = 0; frame < 185; frame += 1) rig.enemies.updateUnits(1 / 60);
   assert.equal(chariot.health, 5);
   assert.equal(chariot.chariotState, CHARIOT_STATE.FLEE, "the enemy chariot left camp inside the band");
   assert.equal(chariot.x, chariot.homeX, "a chariot at 35% charged out");
 
-  // The fourth beat takes it to 6/14 (42.9%): now it re-engages.
-  for (let frame = 0; frame < 80; frame += 1) rig.enemies.updateUnits(1 / 60);
-  assert.equal(chariot.health, 6);
+  // The second beat takes it to 8/14 (57%): now it re-engages.
+  for (let frame = 0; frame < 185; frame += 1) rig.enemies.updateUnits(1 / 60);
+  assert.equal(chariot.health, 8);
   assert.equal(chariot.chariotState, CHARIOT_STATE.CHASE, "a mended enemy chariot did not re-engage");
   assert.notEqual(chariot.x, chariot.homeX, "the re-engaged chariot stayed on its slot");
 });
 
+
+// A ring that is standing still, with no order on it: the plain aura case.
+const auraRing = (id = 1) => ({
+  id, x: 0, y: 0, heading: 0, halfWidth: 116, halfHeight: 86, auraTimer: 0, auraFlash: 0,
+});
+
+test("a friendly ring mends the player standing in it, and only inside the ring", () => {
+  const formation = auraRing(-1);
+  const player = { x: 0, y: 20, radius: 17, health: 40, maxHealth: 100, healFlash: 0 };
+  const healed = tickFormationAura([formation], [], 3, formationAura, { friends: [player] });
+  assert.deepEqual(healed, [player], "the player was not mended by his own line");
+  assert.equal(player.health, 43);
+  assert.ok(player.healFlash > 0, "the mended player did not glow");
+  // The footprint is the whole rule: outside the dashed border, nothing.
+  player.x = 900;
+  player.y = 900;
+  tickFormationAura([formation], [], 3, formationAura, { friends: [player] });
+  assert.equal(player.health, 43, "the player was mended from outside the ring");
+  // The glow decays on him as well, because nothing else ticks it.
+  assert.equal(player.healFlash, 0, "the player's glow outlived the beat");
+});
+
+test("an enemy inside the ring stops the beat, and the beat returns when it leaves", () => {
+  const formation = auraRing(3);
+  const patient = { formationId: 3, x: 10, y: -10, health: 5, maxHealth: 14 };
+  const intruder = { x: 40, y: 30, radius: 14, destroyed: false };
+  const blocked = tickFormationAura([formation], [patient], 3, formationAura, { intruders: [intruder] });
+  assert.deepEqual(blocked, [], "a stepped-on banner healed anyway");
+  assert.equal(patient.health, 5);
+  assert.equal(formation.auraFlash, 0, "a stepped-on banner still pulsed");
+  // The phase was kept, so the dirty beat is *spent* rather than banked and
+  // rather than refunded: once the ground is clear the line waits out the rest
+  // of a normal interval instead of getting the lost heal straight back.
+  intruder.x = 900;
+  intruder.y = 900;
+  tickFormationAura([formation], [patient], 3, formationAura, { intruders: [intruder] });
+  assert.equal(patient.health, 8, "the beat did not come back when the ground cleared");
+  // A body that has already fallen is not standing on anything.
+  const corpse = { x: 10, y: 10, radius: 14, destroyed: true };
+  patient.health = 5;
+  tickFormationAura([formation], [patient], 3, formationAura, { intruders: [corpse] });
+  assert.equal(patient.health, 8, "a corpse was counted as an intruder");
+});
+
+test("the player is an intruder in an enemy ring, never one of its patients", () => {
+  const formation = auraRing(5);
+  const enemy = { formationId: 5, x: -10, y: 10, health: 2, maxHealth: 14 };
+  const player = { x: 0, y: 0, radius: 17, health: 40, maxHealth: 100, healFlash: 0 };
+  tickFormationAura([formation], [enemy], 3, formationAura, { intruders: [player], friends: [] });
+  assert.equal(enemy.health, 2, "an enemy line healed under the player's hull");
+  assert.equal(player.health, 40, "an enemy line healed the player");
+  player.x = 900;
+  player.y = 900;
+  tickFormationAura([formation], [enemy], 3, formationAura, { intruders: [player], friends: [] });
+  assert.equal(enemy.health, 5, "the enemy beat did not come back once he stepped out");
+  assert.equal(player.health, 40, "an enemy banner mended the player standing outside it");
+});
+
+test("a marching line spends its beat on the move and heals nobody", () => {
+  const formation = { ...auraRing(9), order: formationOrders.MARCH };
+  const patient = { formationId: 9, x: 10, y: 10, health: 5, maxHealth: 14 };
+  assert.deepEqual(tickFormationAura([formation], [patient], 2.9), []);
+  assert.equal(patient.health, 5);
+  assert.deepEqual(tickFormationAura([formation], [patient], 0.2), [], "a marching line healed");
+  assert.equal(patient.health, 5);
+  assert.equal(formation.auraFlash, 0, "a marching banner pulsed");
+  // The beat was due and spent. Being set down must not buy a free one: the next
+  // beat is 2.9s away, exactly as it would have been.
+  formation.order = formationOrders.HOLD;
+  tickFormationAura([formation], [patient], 1.4);
+  assert.equal(patient.health, 5, "a line that halted early got a beat it had already spent");
+  tickFormationAura([formation], [patient], 1.5);
+  assert.equal(patient.health, 8, "the phase restarted when the line halted");
+});
 
 test("a loose chariot is one that left the border the player can see", () => {
   const line = { id: 4, x: 0, y: 0, heading: 0, halfWidth: 116, halfHeight: 86 };
@@ -4953,6 +5063,102 @@ test("damage to a hire stains the ground, and the last point kills it", () => {
   rig.allies.update(1 / 60);
   assert.equal(rig.state.allies.includes(archer), false, "the corpse stayed in the line");
   assert.ok(rig.state.allyFormations[0], "one fallen archer removed the whole line");
+});
+
+test("the order button acts on the nearest own line the player stands in", () => {
+  const rig = hireRig({ hires: 2 });
+  const lines = rig.allies.spawnFriendlyFormations();
+  const [first] = lines;
+  // Nowhere near a line: nothing to order, and the button would be hidden.
+  rig.player.x = 20;
+  rig.player.y = 20;
+  assert.equal(formationUnder(lines, rig.player), null);
+  assert.equal(toggleOrder({
+    formations: lines, members: rig.state.allies, leader: rig.player, owner: "player",
+  }), null);
+  // Standing in his own line: that line, and only through the flag it carries.
+  rig.player.x = first.x;
+  rig.player.y = first.y;
+  assert.equal(formationUnder(lines, rig.player), first);
+  assert.equal(commandedFormation(lines, rig.player, "player"), first);
+  assert.equal(commandedFormation(lines, rig.player, "enemy"), null,
+    "a rival flag commanded the player's line");
+  // A rival commander is refused, and the line is left exactly as it was.
+  assert.equal(issueOrder({
+    formations: lines, members: rig.state.allies, leader: rig.player, owner: "enemy", action: ORDER_ACTION.march,
+  }), null);
+  assert.equal(first.order, formationOrders.HOLD, "a rival commander moved the player's line");
+  assert.equal(applyOrder({
+    formation: first, members: rig.state.allies, leader: rig.player, action: "retreat",
+  }), null, "an unknown action was applied");
+  // The per-frame pass walks only the lines that still have a body on them, and
+  // reports which ones it staffed - an emptied line is left exactly as it is.
+  assert.equal(advanceOrders({
+    formations: lines, members: rig.state.allies, leader: rig.player,
+  }).length, 2);
+  for (const ally of rig.state.allies.filter((member) => member.formationId === lines[1].id)) {
+    ally.destroyed = true;
+  }
+  assert.deepEqual(advanceOrders({ formations: lines, members: rig.state.allies, leader: rig.player }), [first]);
+});
+
+test("出击 glues the ring to the chariot; 结阵 sets it down and sends the stragglers home", () => {
+  const rig = hireRig({ hires: 1 });
+  const [line] = rig.allies.spawnFriendlyFormations();
+  const spear = rig.state.allies.find((ally) => ally.type === "spear");
+  const order = (action) => issueOrder({
+    formations: rig.state.allyFormations, members: rig.state.allies, leader: rig.player, owner: "player", action,
+  });
+  assert.equal(line.order, formationOrders.HOLD);
+  assert.equal(line.owner, "player");
+  rig.player.x = line.x;
+  rig.player.y = line.y;
+
+  // 出击: the line is under way, and it is rigidly attached to the chariot.
+  assert.equal(order(ORDER_ACTION.march).action, ORDER_ACTION.march);
+  assert.equal(line.order, formationOrders.MARCH);
+  // One frame settles the ring onto the chariot: it was pitched at a spawn
+  // centre, and 出击 attaches it to the leader from this frame on.
+  rig.allies.update(1 / 60);
+  const station = { x: spear.homeX, y: spear.homeY };
+  rig.player.x += 240;
+  rig.player.y -= 90;
+  rig.allies.update(1 / 60);
+  assert.ok(Math.abs(spear.homeX - station.x - 240) < 1e-6, "a slot did not travel with the line");
+  assert.ok(Math.abs(spear.homeY - station.y + 90) < 1e-6, "a slot did not travel with the line");
+  // He stays at the same spot in his own ring, which is what keeps the button
+  // under his thumb while the line is out.
+  assert.equal(isInsideFormation(line, rig.player.x, rig.player.y), true,
+    "the line marched out from under the player");
+
+  // 结阵: the ring lands around him, front facing the way he faces.
+  rig.player.angle = Math.PI / 2;
+  assert.equal(order(ORDER_ACTION.hold).action, ORDER_ACTION.hold);
+  assert.equal(line.order, formationOrders.HOLD);
+  const front = { x: Math.sin(line.heading), y: -Math.cos(line.heading) };
+  assert.ok(Math.abs(front.x - Math.cos(rig.player.angle)) < 1e-9, "the line did not face where he faces");
+  assert.ok(Math.abs(front.y - Math.sin(rig.player.angle)) < 1e-9, "the line did not face where he faces");
+  // The ring's centre sits back from his hull: the centre slot is the line's own
+  // chariot, and two vehicles in one pixel is not a formation.
+  assert.ok(Math.hypot(line.x - rig.player.x, line.y - rig.player.y) > rig.player.radius,
+    "the ring was centred on the player's own hull");
+  assert.equal(isInsideFormation(line, rig.player.x, rig.player.y), true, "he ended up outside his own ring");
+  // Every body that was left behind is walking back, and the line counts them.
+  assert.ok(spear.returning, "a body left behind was not told to come home");
+  assert.equal(line.stragglers, rig.state.allies.length, "the line did not count its stragglers");
+
+  // They run rather than re-form on the spot: the flag clears on arrival, and
+  // the count follows it down. Nothing else has to end the state. The spear is
+  // the first to arrive, so the loop waits for the slowest body, not for it.
+  for (let frame = 0; frame < 900 && rig.state.allies.some((ally) => ally.returning); frame += 1) {
+    rig.allies.update(1 / 60);
+  }
+  assert.equal(rig.state.allies.every((ally) => ally.returning === false), true,
+    "a straggler never reached its station");
+  assert.ok(Math.hypot(spear.x - spear.homeX, spear.y - spear.homeY)
+    <= formationConfig.engage.homeEpsilon + 1, "a body that came home is not standing on its slot");
+  rig.allies.update(1 / 60);
+  assert.equal(line.stragglers, 0, "the line still counts a body that came home");
 });
 
 test("the camp pitches one tent per hire, and a hover stays a preview", () => {
@@ -5423,43 +5629,55 @@ test("the arrow keeps pointing at the ranks that are left", () => {
 });
 
 
-test("the drill's card paints a title, its lines, and a button the hit test agrees with", () => {
-  const drawn = [];
-  const context = {
-    font: "", textAlign: "left", fillStyle: "", strokeStyle: "", lineWidth: 1,
-    save() {}, restore() {},
-    measureText: (text) => ({ width: text.length * 12 }),
-    fillRect() {}, strokeRect() {},
-    fillText: (text, x, y) => drawn.push({ text, x, y }),
-  };
-  const view = { width: 960, height: 592 };
-  const state = {
-    tutorial: {
-      overlay: { titleKey: "tutorial.brief.title", bodyKeys: ["tutorial.brief.drive", "tutorial.brief.fire"] },
-    },
-  };
-  const overlay = createTutorialOverlay({ context, view, state });
-  overlay.draw();
+test("one card serves every mode, and a live field has none", () => {
+  const campaign = { totalGold: 120, stage: 3, identity: { fullName: "司马长风" } };
+  const state = { score: 460 };
 
-  const title = drawn.find((entry) => entry.text === translate("tutorial.brief.title"));
-  assert.ok(title, "the card never painted its title");
-  const button = drawn.find((entry) => entry.text === translate("tutorial.confirm"));
-  assert.ok(button, "the card never painted its button");
-  assert.ok(drawn.length > 3, "the card's copy never reached the canvas");
+  const paused = cardForMode("paused", { campaign, state });
+  assert.equal(paused.titleKey, "battle.pausedTitle");
+  assert.equal(paused.action, CARD_ACTIONS.resume);
+  assert.equal(paused.lines, undefined, "the pause card grew a list it has no copy for");
 
-  // The button the pointer can hit is the button that was painted.
-  assert.equal(overlay.hitConfirm(button.x, button.y), true, "the painted button is not clickable");
-  assert.equal(overlay.hitConfirm(button.x, button.y + 200), false, "a click far below the button confirmed the card");
-  // Canvas pixels are view units: a pointer event arrives in CSS pixels.
-  const canvas = { getBoundingClientRect: () => ({ left: 10, top: 20, width: 960, height: 592 }) };
-  assert.deepEqual(overlay.toView({ clientX: 110, clientY: 120 }, canvas), { x: 100, y: 100 });
+  const defeat = cardForMode("over", { campaign, state });
+  assert.equal(defeat.action, CARD_ACTIONS.retry);
+  assert.deepEqual(defeat.copyParams, { gold: 120, stage: 3 },
+    "the defeat card lost the run it reports");
 
-  // With no card there is nothing to paint and nothing to hit.
-  state.tutorial = null;
-  drawn.length = 0;
-  overlay.draw();
-  assert.equal(drawn.length, 0, "the overlay painted without a card");
-  assert.equal(overlay.hitConfirm(400, 300), false);
+  const victory = cardForMode("victory", { campaign, state });
+  assert.equal(victory.action, CARD_ACTIONS.endRun);
+  // The lede is the run that was won; the list is what it was worth and the rule
+  // the locked menu is about to enforce.
+  assert.equal(victory.copyTone, "lede");
+  assert.deepEqual(victory.lines.map((line) => line.tone), ["stat", "note"]);
+  assert.deepEqual(victory.lines[0].params, { score: 460, gold: 120 });
+  assert.match(victory.lines[1].params.time, /[0-9]/, "the lock note has no countdown in it");
+
+  for (const mode of ["menu", "prologue", "shop", "running"]) {
+    assert.equal(cardForMode(mode, { campaign, state }), null, `${mode} was given a card`);
+  }
+});
+
+test("the drill's beats are the same card, one line per beat", () => {
+  assert.equal(cardForTutorial(null), null);
+  assert.equal(cardForTutorial(undefined), null, "a drill without a card still painted one");
+
+  const brief = cardForTutorial({
+    titleKey: "tutorial.brief.title",
+    bodyKeys: ["tutorial.brief.drive", "tutorial.brief.fire"],
+  });
+  assert.equal(brief.titleKey, "tutorial.brief.title");
+  assert.equal(brief.action, CARD_ACTIONS.tutorial);
+  assert.equal(brief.actionKey, "tutorial.confirm");
+  assert.equal(brief.width, "wide", "the drill's paragraphs lost their wider measure");
+  assert.deepEqual(brief.lines.map((line) => line.textKey),
+    ["tutorial.brief.drive", "tutorial.brief.fire"]);
+  assert.deepEqual(brief.lines.map((line) => line.tone), ["body", "body"]);
+
+  const tactics = cardForTutorial({
+    titleKey: "tutorial.tactics.title",
+    bodyKeys: ["tutorial.tactics.infantry", "tutorial.tactics.archers", "tutorial.tactics.chariot"],
+  });
+  assert.equal(tactics.lines.length, 3, "the three-beat card lost a beat");
 });
 
 test("a drill battle says so on the stage tile instead of a number", () => {
@@ -5471,7 +5689,7 @@ test("a drill battle says so on the stage tile instead of a number", () => {
 
 test("both locales carry the drill's copy and the drilled line's name", () => {
   const keys = [
-    "prologue.tutorial", "battle.tutorialStage", "formation.tutorial",
+    "prologue.tutorial", "battle.tutorialStage", "formation.tutorial", "tutorial.eyebrow",
     "tutorial.brief.title", "tutorial.brief.drive", "tutorial.brief.fire",
     "tutorial.tactics.title", "tutorial.tactics.infantry",
     "tutorial.tactics.archers", "tutorial.tactics.chariot",

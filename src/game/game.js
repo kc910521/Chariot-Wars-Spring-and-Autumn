@@ -22,6 +22,7 @@ import { createRenderer } from "../render/renderer.js";
 import { createHud } from "../ui/hud.js";
 import { bindControls } from "../ui/controls.js";
 import { createScreens } from "../ui/screens.js";
+import { createBattleCard, cardForTutorial } from "../ui/battle-card.js";
 import { createMenuPage } from "../ui/menu-page.js";
 import { createShopScreen } from "../ui/shop-screen.js";
 import { createStageManager } from "./stages.js";
@@ -31,7 +32,7 @@ import { createTutorial } from "./tutorial.js";
 import { getGameElements } from "../ui/elements.js";
 import { applyTranslations, getLocale, setLocale, translate } from "../i18n/index.js";
 import { createPrologue } from "../ui/prologue.js";
-import { createTutorialOverlay } from "../render/tutorial-overlay.js";
+import { commandedFormation, toggleOrder } from "./units/formation-orders.js";
 import { distanceBetween } from "../utils/math.js";
 
 // The combat <-> enemy <-> projectile triangle is mutually recursive by nature.
@@ -66,14 +67,12 @@ function boot() {
     prologueStartButton, prologueTutorialButton,
     shopCanvas, shopLiveElement, menuCanvas, menuLiveElement, scoreElement,
     waveElement, goldElement, modeElement, hullLabelElement, hullValueElement, hullHealthElement,
-    overlay, overlayEyebrow, overlayTitle, overlayCopy, overlayButton, startButton,
-    startLabel, objectiveCountElement, objectiveProgressElement, objectiveLabelElement,
+    startButton, startLabel, objectiveCountElement, objectiveProgressElement, objectiveLabelElement,
     extractionGuideElement, extractionArrowElement, extractionDistanceElement, guideLabelElement,
     touchPadElement, touchHintElement, touchControlsElement,
-    touchJoystickElement, touchJoystickKnob, touchFireElement,
+    touchJoystickElement, touchJoystickKnob, touchFireElement, touchOrderElement,
     bossWarningElement, bossWarningTitleElement, bossWarningSubtitleElement,
-    victoryScreen, victoryEyebrow, victoryTitle, victorySubtitle, victoryStats, victoryNote,
-    victoryReturnButton, soundButton, soundIcon, fatalErrorReloadButton,
+    soundButton, soundIcon, fatalErrorReloadButton, cardButton,
   } = elements;
   const context = canvas.getContext("2d");
   // Read once here so no engine module has to know about `location` (or `wx`).
@@ -167,12 +166,16 @@ function boot() {
     // identity the prologue showed. Null before a run starts, which falls back
     // to the plain objective label.
     getPlayerName: () => campaign.identity?.fullName ?? null,
+    // The line the player is standing in, or null. The HUD shows 出击 / 结阵 only
+    // for a line it can actually order - `commandedFormation` answers with the
+    // nearest ring he is inside *and* owns.
+    getFormationOrder: () => commandedFormation(state.allyFormations, player, "player"),
     elements: {
       scoreElement, waveElement, goldElement, modeElement, hullLabelElement, hullValueElement,
       hullHealthElement, objectiveCountElement, objectiveProgressElement,
       objectiveLabelElement, extractionGuideElement, extractionArrowElement,
       extractionDistanceElement, guideLabelElement, touchPadElement, touchHintElement, touchControlsElement,
-      touchJoystickElement, touchJoystickKnob, touchFireElement,
+      touchJoystickElement, touchJoystickKnob, touchFireElement, touchOrderElement,
     },
   });
   const collision = createCollisionSystem({ campaign, world });
@@ -188,15 +191,15 @@ function boot() {
     getEquipment: () => campaign.equipment,
     getStumps: () => campaign.stumps ?? [],
   });
-  // The tutorial's card is canvas UI, not a DOM screen: the beat it introduces is
-  // a pause of the field beneath it, so it paints in the same layer as the field.
-  const tutorialOverlay = createTutorialOverlay({ context, view, state });
-  // The frame's draw: the field, then the tutorial card that pauses it. Both pages
-  // - the shop and the home page - paint on their own canvases and their own clock,
-  // so nothing here has to keep a DOM card live.
+  // The one card (src/ui/battle-card.js): pause, defeat, victory and the drill's
+  // beats all paint through this. It is DOM, so the field's own draw has nothing
+  // to layer on top of itself any more.
+  const battleCard = createBattleCard({ elements });
+  // The frame's draw: the field, and nothing else. The card is a DOM element over
+  // the canvas, and both pages - the shop and the home page - paint on their own
+  // canvases and their own clock, so nothing here has to keep a dialog live.
   function draw() {
     renderer.draw();
-    tutorialOverlay.draw();
   }
   // The tutorial arms itself on every entry into "running" (a battle opening, a
   // pause being dismissed, a tab regaining focus after a blur). The ref exists
@@ -208,6 +211,7 @@ function boot() {
     campaign,
     draw,
     victoryLock,
+    battleCard,
     // Both canvas pages run on their own clock and must start and stop with the
     // screen, not with the battle loop.
     onModeChange: (mode) => {
@@ -219,10 +223,7 @@ function boot() {
       syncSoundscape();
     },
     elements: {
-      menuScreen, prologueScreen, battleScreen, shopScreen, victoryScreen, overlay, startLabel,
-      startButton,
-      overlayEyebrow, overlayTitle, overlayCopy, overlayButton,
-      victoryEyebrow, victoryTitle, victorySubtitle, victoryStats, victoryNote, victoryReturnButton,
+      menuScreen, prologueScreen, battleScreen, shopScreen, startLabel, startButton,
     },
   });
   const { setMode } = screens;
@@ -303,7 +304,12 @@ function boot() {
   // The tutorial: a step machine that spawns through the enemy system's scenario
   // entry points (a tiger, then a preset line) and hands the HUD its objective.
   // It runs only in a tutorial battle; `arm()` is idempotent per battle.
-  const tutorial = createTutorial({ state, player, world, campaign, enemySystem, updateHud });
+  const tutorial = createTutorial({
+    state, player, world, campaign, enemySystem, updateHud,
+    // A beat's card is the DOM card every other dialog uses: the drill says which
+    // beat is up, the card paints it (src/ui/battle-card.js).
+    onOverlay: (overlay) => battleCard.show(cardForTutorial(overlay)),
+  });
   tutorialRef.current = tutorial;
 
   // The hired line fights with the same verbs the enemies do: `damageEnemy` for
@@ -578,28 +584,33 @@ function boot() {
     // sees, and the player applies it immediately so the shop's campfire and the
     // menu's ambience stop on the same tap.
     onSoundToggle: (enabled) => audio.setEnabled(enabled),
+    // One press of 出击 / 结阵. The order itself knows which state it came from
+    // (`toggleOrder`), and the HUD is refreshed straight away so the label turns
+    // over inside the same tap rather than on the next frame - the button is
+    // covered by the thumb that pressed it.
+    onFormationOrder: () => {
+      if (!toggleOrder({
+        formations: state.allyFormations, members: state.allies, leader: player, owner: "player",
+      })) return;
+      updateHud();
+    },
     elements: {
       startButton, menuStartButton, prologueStartButton, prologueTutorialButton,
-      overlayButton, victoryReturnButton, soundButton, soundIcon,
-      touchJoystickElement, touchJoystickKnob,
+      cardButton, soundButton, soundIcon,
+      touchJoystickElement, touchJoystickKnob, touchOrderElement,
     },
-  });
-
-  // The tutorial card's button lives on the canvas, so its hit test happens here
-  // rather than in the DOM.
-  canvas.addEventListener("pointerdown", (event) => {
-    if (state.mode !== "running" || !state.tutorial?.overlay) return;
-    const point = tutorialOverlay.toView(event, canvas);
-    if (tutorialOverlay.hitConfirm(point.x, point.y)) tutorial.confirm();
   });
 
   elements.localeSelect.addEventListener("change", () => {
     setLocale(elements.localeSelect.value);
     applyTranslations();
     controls.refreshLocale();
-    // The shop and the home page draw every label from the translator on each
-    // frame, so a language switch only has to get the pages repainted - and each is
-    // only on screen, and so only painting, while it is open.
+    // The card is painted imperatively from a spec, so `applyTranslations()` above
+    // cannot reach it: it repaints itself from the spec it is showing. The shop and
+    // the home page draw every label from the translator on each frame, so a
+    // language switch only has to get the pages repainted - and each is only on
+    // screen, and so only painting, while it is open.
+    battleCard.refresh();
     stageManager.refreshShop();
     menuPage.refresh();
     // The prologue keeps the name it was shown with; only the story around it
@@ -622,10 +633,11 @@ function boot() {
   // instead of reaching into module internals, `damageEnemy` for the same reason
   // on the last stage's champion squad, `victoryLock` so a test can rewind a
   // record instead of waiting out the rest, and `menuPage` so it can press the
-  // painted 出征 without guessing where the card put it.
+  // painted 出征 without guessing where the card put it. The card itself is DOM,
+  // so a harness reads it the way a player does - through the page.
   globalThis.__h5game = {
     state, player, campaign, world, view, camera, combat, stageManager, equipmentShop, shopPage,
-    menuPage, damageEnemy, victoryLock, tutorial, tutorialOverlay,
+    menuPage, damageEnemy, victoryLock, tutorial,
   };
 
   startGameLoop({

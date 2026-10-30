@@ -1,13 +1,16 @@
+import { formationOrders } from "../data/formations.js";
 import { projectileRules } from "../data/rules.js";
 import { getLocale, translate } from "../i18n/index.js";
 import { stageLabel } from "./labels.js";
 
 export function createHud({
-  state, player, campaign, getCampaignFunds, getPlayerName = () => null, elements,
+  state, player, campaign, getCampaignFunds, getPlayerName = () => null,
+  getFormationOrder = () => null, elements,
 }) {
   let lastFootMode;
   let lastLocale;
   let lastCharge;
+  let lastOrderStamp;
 
   // The fire control doubles as the bow's draw meter: holding it fills a ring,
   // and a full ring means the release will be the long shot. Only write when the
@@ -22,6 +25,29 @@ export function createHud({
     const fireButton = elements.touchFireElement;
     fireButton.style.setProperty("--charge", String(step));
     fireButton.classList.toggle("charged", step >= 1);
+  }
+
+  // 出击 / 结阵. The button only exists while the player is standing in a line he
+  // owns - the ring under his feet is what it acts on, so a button with no ring
+  // would have nothing to say. Its label is the *next* order, which is what a
+  // player reaches for; `data-order` carries the state for the stylesheet (amber
+  // while the line is out, so the way back is the loud one).
+  function updateOrderButton() {
+    const button = elements.touchOrderElement;
+    const line = getFormationOrder();
+    // `hidden` is only written when it changes: this runs on every frame.
+    if (button.hidden !== !line) button.hidden = !line;
+    if (!line) return;
+    const marching = line.order === formationOrders.MARCH;
+    const locale = getLocale();
+    const stamp = `${locale}:${marching}`;
+    if (stamp === lastOrderStamp) return;
+    lastOrderStamp = stamp;
+    const key = marching ? "battle.hold" : "battle.sortie";
+    button.textContent = translate(key);
+    button.setAttribute("aria-label", translate(`${key}.hint`));
+    button.title = translate(`${key}.hint`);
+    button.dataset.order = marching ? "reform" : "march";
   }
 
   function updateHud() {
@@ -121,6 +147,7 @@ export function createHud({
     objectiveProgressElement.classList.toggle("boss-health", squadHealth);
     extractionGuideElement.hidden = !guideTarget;
     updateCharge();
+    updateOrderButton();
   }
 
   return updateHud;

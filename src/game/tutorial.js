@@ -5,9 +5,10 @@ import { findLineGround, planTigerGround } from "./tutorial-map.js";
 //
 // This module is orchestration and nothing else. It owns the step machine, the
 // two pans and the two cards; it spawns through the enemy system's scenario entry
-// points (spawnWildAnimal / spawnPreset) and paints nothing - the card is drawn on
-// the canvas by src/render/tutorial-overlay.js, and the objective and guide arrow
-// are the HUD's, reading `state.tutorial`.
+// points (spawnWildAnimal / spawnPreset) and paints nothing - a card is announced
+// through `onOverlay` and drawn as DOM by src/ui/battle-card.js (the same card the
+// pause, defeat and victory screens use), and the objective and guide arrow are
+// the HUD's, reading `state.tutorial`.
 //
 // The scene, in the order the player meets it:
 //
@@ -25,11 +26,18 @@ import { findLineGround, planTigerGround } from "./tutorial-map.js";
 const PAN_SECONDS = 1.7;
 const RETURN_SECONDS = 1.5;
 
-export function createTutorial({ state, player, world, campaign, enemySystem, updateHud }) {
+export function createTutorial({ state, player, world, campaign, enemySystem, updateHud, onOverlay = () => {} }) {
   // Which battle the tutorial was armed for. `arm()` runs on every entry into
   // "running" - a pause, a language switch, a tab that regained focus - and the
   // opening beat must only happen once per battle.
   let armedBattleId = -1;
+
+  // The one thing this module says about its cards: which beat's card is up, or
+  // null. Called once per beat rather than per frame, so the card is painted when
+  // the beat changes and never while the field is running.
+  function announceCard() {
+    onOverlay(state.tutorial?.overlay ?? null);
+  }
 
   function arm() {
     if (state.battleMode !== "tutorial") return;
@@ -62,6 +70,7 @@ export function createTutorial({ state, player, world, campaign, enemySystem, up
     };
     state.cameraFocus = null;
     updateHud();
+    announceCard();
   }
 
   function setStep(step, patch = {}) {
@@ -76,6 +85,7 @@ export function createTutorial({ state, player, world, campaign, enemySystem, up
     tutorial.frozen = Boolean(tutorial.overlay) || step === "pan" || step === "return";
     state.cameraFocus = patch.cameraFocus ?? null;
     updateHud();
+    announceCard();
   }
 
   // The tiger is down: the drill line forms out of view and the camera goes to
@@ -184,6 +194,7 @@ export function createTutorial({ state, player, world, campaign, enemySystem, up
       state.tutorial = null;
       state.cameraFocus = null;
       updateHud();
+      announceCard();
     }
   }
 

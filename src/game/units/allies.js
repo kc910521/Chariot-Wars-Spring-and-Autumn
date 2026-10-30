@@ -1,8 +1,9 @@
-import { enemyStats, formationConfig } from "../../data/formations.js";
+import { enemyStats, formationConfig, formationOrders } from "../../data/formations.js";
 import { soundBorrowed, soundCues } from "../../data/sounds.js";
 import { clamp } from "../../utils/math.js";
 import { addBloodStain } from "../blood.js";
 import { formationExtent, formationGroundExtent, isInsideFormation, layoutSlots, tickFormationAura } from "./formations.js";
+import { advanceOrders } from "./formation-orders.js";
 import {
   CHARIOT_INTENT, CHARIOT_STATE, chariotIntent, isAtHome, updateChariotState,
 } from "./chariot.js";
@@ -21,6 +22,15 @@ import {
 // - Nothing here rolls dice. Placement walks a fixed list of bearings and the
 //   brains break ties by list order, so a seeded battle stays reproducible with
 //   or without a hired line.
+//
+// A player standing in his own line may give it one of two orders (出击 / 结阵,
+// `formation-orders.js`). `出击` glues the line's centre to the chariot, so every
+// slot - and the aura's footprint with them - travels with the player, and the
+// men run to catch up. `结阵` sets the ring down where he stands and marks every
+// body that is off its station `returning`; those bodies run home and fight
+// nothing on the way. The two legs live at the bottom of this file because they
+// are the hired line's alone: an enemy formation would answer the same orders
+// with its own legs.
 
 const SEPARATION_PASSES = 2;
 const SEPARATION_MIN_OVERLAP = 2;
@@ -109,6 +119,20 @@ export function createAllies({
       : ally.homeAngle;
   }
 
+  // 结阵: the ring stopped where the line was set down, so this leg ends. A body
+  // that reaches its station drops its own `returning` flag and is handed back to
+  // the ordinary guard brain next frame - there is no formation state to leave,
+  // which is why a second 结阵 moments later costs nothing.
+  function runToStation(ally, delta) {
+    if (Math.hypot(ally.homeX - ally.x, ally.homeY - ally.y) <= HOME_EPSILON) {
+      ally.returning = false;
+      ally.angle = ally.homeAngle;
+      return;
+    }
+    ally.angle = Math.atan2(ally.homeY - ally.y, ally.homeX - ally.x);
+    stepToward(ally, ally.homeX, ally.homeY, delta, formationConfig.orders.returnSpeed);
+  }
+
   function swing(ally, target) {
     ally.attackCooldown = ally.attackInterval ?? 1.2;
     const angle = Math.atan2(target.y - ally.y, target.x - ally.x);
@@ -131,13 +155,16 @@ export function createAllies({
     state.shake = Math.max(state.shake, 2);
   }
 
-  function updateMelee(ally, delta) {
+  function updateMelee(ally, delta, { free = false, walk = 0.65 } = {}) {
     // Only enemies near the line's own ground are worth stepping for; the reach
     // the ally stops at is the honest one (weapon range or the two bodies plus a
     // hair), so it can actually land the blow once it arrives.
     const target = nearestEnemy(ally, engage.meleeRange + ally.range);
     if (!target) {
-      holdGround(ally, delta);
+      // Nothing to fight: walk back onto the slot. `walk` is the pace the caller
+      // wants that walk taken at - a marching line runs its slot down at
+      // `orders.marchSpeed`, because the slot is moving with the chariot.
+      holdGround(ally, delta, walk);
       return;
     }
     const reach = Math.max(ally.range, ally.radius + target.radius + 2);
@@ -147,7 +174,11 @@ export function createAllies({
       else ally.angle = Math.atan2(target.y - ally.y, target.x - ally.x);
       return;
     }
-    const goal = clampToHome(ally, target.x, target.y, engage.leash);
+    // Marching (`free`) trades the leash for the walk: the slot is moving with
+    // the chariot anyway, and a line that may press one step further is what
+    // 出击 buys. The acquisition range above still bounds the pursuit, so a
+    // marcher can never leave the line to chase the field.
+    const goal = free ? { x: target.x, y: target.y } : clampToHome(ally, target.x, target.y, engage.leash);
     if (Math.hypot(goal.x - ally.x, goal.y - ally.y) < 2) {
       // The leash is already spent: stand and face the enemy rather than jitter
       // against the clamp.
@@ -158,15 +189,19 @@ export function createAllies({
     stepToward(ally, goal.x, goal.y, delta);
   }
 
-  function updateRanged(ally, delta) {
-    if (Math.hypot(ally.homeX - ally.x, ally.homeY - ally.y) > HOME_EPSILON) {
-      holdGround(ally, delta, 0.8);
+  function updateRanged(ally, delta, { free = false, walk = 0.8 } = {}) {
+    // A bow planted on its slot shoots; one that is still walking home does not.
+    // Marching releases that rule - the archers are permanently off-slot while
+    // the line moves, and a line that cannot shoot on the move would be a line
+    // that never shoots at all.
+    if (!free && Math.hypot(ally.homeX - ally.x, ally.homeY - ally.y) > HOME_EPSILON) {
+      holdGround(ally, delta, walk);
       return;
     }
     const range = ally.projectileRange ?? ally.range;
     const target = nearestEnemy(ally, range, { requireSight: true });
     if (!target) {
-      holdGround(ally, delta);
+      holdGround(ally, delta, walk);
       return;
     }
     ally.angle = Math.atan2(target.y - ally.y, target.x - ally.x);
@@ -360,9 +395,21 @@ export function createAllies({
   }
 
   function update(delta) {
-    // Aura first: it may top a chariot up over a threshold, and the state machine
-    // below should see the health it actually has this frame.
-    tickFormationAura(state.allyFormations, state.allies, delta);
+    // Orders first: a 结阵 this frame rewrites every station, and the aura below
+    // must test the ring the line is actually holding, not last frame's.
+    advanceOrders({
+      formations: state.allyFormations,
+      members: state.allies,
+      leader: player,
+    });
+    // Aura next: it may top a chariot up over a threshold, and the state machine
+    // below should see the health it actually has this frame. The player is a
+    // patient of his own line (standing in a friendly ring mends him) and the
+    // enemy bodies are what dirties the ground the beat needs.
+    tickFormationAura(state.allyFormations, state.allies, delta, formationConfig.aura, {
+      intruders: state.enemies,
+      friends: [player],
+    });
     for (const ally of state.allies) {
       if (ally.destroyed) continue;
       ally.hitFlash = Math.max(0, ally.hitFlash - delta);
@@ -379,9 +426,19 @@ export function createAllies({
         ally.knockbackX = (ally.knockbackX || 0) * drag;
         ally.knockbackY = (ally.knockbackY || 0) * drag;
       }
-      if (isChariot(ally)) updateChariot(ally, delta);
-      else if (ally.ranged) updateRanged(ally, delta);
-      else updateMelee(ally, delta);
+      // One question, three answers. A body that was left behind by the last
+      // 结阵 runs to its station and fights nothing on the way - the flag is
+      // cleared the frame it arrives. A marching line fights on the move
+      // (`free`: no leash, no home-first rule) and walks back to its moving slot
+      // at the marching pace; the chariot keeps the morale machine it always had,
+      // whose own walk to a slot that has moved with the player is the same leg.
+      // Everything else is the guard brain this file has always had.
+      const marching = ally.line?.order === formationOrders.MARCH;
+      const pace = marching ? formationConfig.orders.marchSpeed : undefined;
+      if (ally.returning) runToStation(ally, delta);
+      else if (isChariot(ally)) updateChariot(ally, delta);
+      else if (ally.ranged) updateRanged(ally, delta, { free: marching, walk: pace });
+      else updateMelee(ally, delta, { free: marching, walk: pace });
     }
     separateAllies();
     state.allies = state.allies.filter((ally) => !ally.destroyed);
@@ -392,6 +449,10 @@ export function createAllies({
   function createAllyUnit(type, slot, formation, heading, order) {
     const stats = enemyStats[type];
     if (!stats) throw new Error(`Unknown friendly formation unit "${type}".`);
+    // The row's own local station, kept as an offset rather than a position: a
+    // 结阵 moves the centre, and every station is that offset rotated through
+    // the new one (`formation-orders.js`). `homeX/homeY` stays the runtime goal.
+    const [, stationX, stationY] = formationConfig.slots[order] ?? [];
     return {
       ...stats,
       type,
@@ -404,6 +465,14 @@ export function createAllies({
       homeY: slot.y,
       homeAngle: heading,
       formationId: formation.id,
+      // The line itself, so a brain can ask what it has been ordered to do
+      // without a lookup on every frame. One object per line, shared by its
+      // seven bodies.
+      line: formation,
+      stationX,
+      stationY,
+      // Set by 结阵 for a body that was left behind; cleared when it arrives.
+      returning: false,
       // The row's own robe is the enemy palette; the hired line is green.
       visual: { ...stats.visual, robe: formationConfig.visual.robe, overlays: [...(stats.visual.overlays ?? [])] },
       deathBurst: formationConfig.visual.deathBurst,
@@ -474,8 +543,19 @@ export function createAllies({
       heading,
       halfWidth,
       halfHeight,
+      // The deepest station in the pattern, behind the centre: `formation-orders`
+      // uses it to work out how far in front of a leader the ring has to sit for
+      // no body to be standing in his hull.
+      depth: Math.max(...formationConfig.slots.map(([, , slotY]) => slotY)),
       color: "#5fbd79",
       friendly: true,
+      // Who may give this line orders. An order is only honoured by the owner
+      // its formation names (`commandedFormation`), which is the seam a second
+      // commander - and a networked command - goes through.
+      owner: "player",
+      // A hired line starts on its ground: 出击 is the player's to give.
+      order: formationOrders.HOLD,
+      stragglers: 0,
       auraTimer: 0,
       auraFlash: 0,
     };

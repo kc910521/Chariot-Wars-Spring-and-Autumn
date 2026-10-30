@@ -80,15 +80,33 @@ export const chariotTactics = {
   regroupSpeed: 1.15,
 };
 
+// What a line has been told to do. Two states are enough because 结阵 is a
+// one-shot placement rather than a third mode: it sets the ring down in front of
+// the player and hands every body that is not on its new station a `returning`
+// flag, so "reforming" is a per-unit walk and not a formation state.
+// The table lives here, beside the aura and the hire row, so neither side of the
+// field has to import the other's module merely to name a state.
+export const formationOrders = {
+  HOLD: "hold",
+  MARCH: "march",
+};
+
 // Formation banners, shared by both sides of the field. The enemy line and the
 // hired line read the same table: every living member standing on the dashed
 // footprint recovers `heal` health once per `interval`, and `flash` is both the
 // banner pulse and the healed unit's glow. Keeping it outside either roster is
 // what lets `formations.js` run one aura pass for `state.formations` and
 // `state.allyFormations` without knowing whose flag is on the line.
+//
+// Two rules come from the field rather than from the roster, and both are read
+// by `tickFormationAura`: a marching line does not heal (it is moving, not
+// holding ground), and neither does a line with an enemy standing inside its
+// ring - a banner that has been stepped on has lost the ground that heals.
+// The player is a recipient as well as a trespasser, so a friendly ring mends
+// him while an enemy ring is dirtied by him merely standing in it.
 export const formationAura = {
   interval: 3,
-  heal: 1,
+  heal: 3,
   flash: 0.6,
 };
 
@@ -129,6 +147,12 @@ export const formationConfig = {
   // The same banner the enemy line reads; the aura is a formation property,
   // not something that belongs to the hire.
   aura: formationAura,
+  // The two legs 出击 opens up. Marching keeps step with the chariot instead of
+  // matching it (0.55x of the unit's own speed), which is what makes the line
+  // trail behind a gallop rather than teleport along with it; a body that was
+  // left behind when the line was set down runs, because the ground it has to
+  // cover was already paid for.
+  orders: { marchSpeed: 0.55, returnSpeed: 1.3 },
 };
 
 // Everything the simulation and the renderer need to know about a unit type

@@ -111,24 +111,18 @@
             <button class="start-button" id="start-button" type="button" data-i18n-aria-label="battle.pauseLabel" aria-label="暂停战局">
               <span id="start-label" data-i18n="battle.startLabel">整军出征</span><span aria-hidden="true">↗</span>
             </button>
-            <div class="game-overlay" id="game-overlay">
+            <!-- The one card. Pause, defeat, victory and the two cards of the drill
+                 are the same element, painted from a different spec by
+                 src/ui/battle-card.js - the copy lives in the locale tables, never
+                 here. -->
+            <div class="game-overlay hidden" id="battle-card" role="dialog" aria-modal="true" aria-labelledby="card-title">
               <div class="overlay-card">
-                <span class="overlay-icon" id="overlay-icon">✦</span>
-                <p class="eyebrow" id="overlay-eyebrow" data-i18n="overlay.ready">整军待发</p>
-                <h2 id="overlay-title" data-i18n="overlay.title">将军，请下令</h2>
-                <p id="overlay-copy" data-i18n="overlay.copy">驾驭战车，冲破敌阵，争夺中原。</p>
-                <button class="overlay-button" id="overlay-button" type="button"><span data-i18n="menu.start">击鼓出征</span><span aria-hidden="true">→</span></button>
-              </div>
-            </div>
-            <div class="game-overlay victory-overlay hidden" id="victory-screen" role="dialog" aria-modal="true" aria-labelledby="victory-title">
-              <div class="overlay-card victory-card">
-                <span class="overlay-icon victory-icon" aria-hidden="true">✦</span>
-                <p class="eyebrow" id="victory-eyebrow" data-i18n="victory.eyebrow">天下已定</p>
-                <h2 id="victory-title" data-i18n="victory.title">凯旋</h2>
-                <p class="victory-subtitle" id="victory-subtitle"></p>
-                <p class="victory-stats" id="victory-stats"></p>
-                <p class="victory-note" id="victory-note"></p>
-                <button class="overlay-button" id="victory-return" type="button"><span data-i18n="victory.return">收兵回营</span><span aria-hidden="true">→</span></button>
+                <span class="overlay-icon" id="card-icon" aria-hidden="true">✦</span>
+                <p class="eyebrow" id="card-eyebrow"></p>
+                <h2 id="card-title"></h2>
+                <p class="card-copy" id="card-copy"></p>
+                <ul class="card-lines" id="card-lines" hidden></ul>
+                <button class="overlay-button" id="card-button" type="button"><span id="card-action"></span><span aria-hidden="true">→</span></button>
               </div>
             </div>
             <div class="touch-controls" data-i18n-aria-label="battle.touch" aria-label="触屏操作">
@@ -141,7 +135,10 @@
                   <span class="touch-joystick-knob" id="touch-joystick-knob" aria-hidden="true"></span>
                 </div>
               </div>
-              <button class="touch-key touch-fire" type="button" data-control=" " data-i18n="battle.attack.short" data-i18n-aria-label="battle.attack" data-i18n-title="battle.attack.hint" aria-label="弩射或近战攻击">弩 / 击</button>
+              <div class="touch-actions">
+                <button class="touch-key touch-order" id="touch-order" type="button" hidden data-i18n="battle.sortie" data-i18n-aria-label="battle.sortie.hint" aria-label="出击">出击</button>
+                <button class="touch-key touch-fire" type="button" data-control=" " data-i18n="battle.attack.short" data-i18n-aria-label="battle.attack" data-i18n-title="battle.attack.hint" aria-label="弩射或近战攻击">弩 / 击</button>
+              </div>
               <p class="touch-hint" id="touch-hint" data-i18n="battle.touchHint">↑ 前进 · ↓ 后退 · ← → 转向</p>
             </div>
           </div>

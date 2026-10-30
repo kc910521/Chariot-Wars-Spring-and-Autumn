@@ -578,6 +578,11 @@ canvas {
   border: 1px solid rgba(210, 173, 104, 0.36);
   background: rgba(42, 31, 22, 0.96);
   text-align: center;
+  /* The drill's tactics card is three long beats and the view is only as tall as
+     the canvas: the card scrolls rather than pushing its own button off the
+     bottom edge, which would leave a frozen field with nothing to press. */
+  max-height: calc(100% - 32px);
+  overflow-y: auto;
 }
 
 .overlay-icon {
@@ -598,6 +603,18 @@ canvas {
   font-size: 8px;
 }
 
+/* `display: flex` on `.eyebrow` beats the `hidden` attribute's own rule, and a
+   card without an eyebrow (the presenter supports one) must not leave the row. */
+.eyebrow[hidden] {
+  display: none;
+}
+
+/* The drill's cards are the only long-form ones: they keep the wider measure the
+   canvas card had, so three beats do not become a single narrow column. */
+#battle-card[data-width="wide"] .overlay-card {
+  width: min(480px, calc(100% - 40px));
+}
+
 .overlay-card h2 {
   margin: 10px 0 8px;
   font-family: "Noto Serif SC", "Songti SC", serif;
@@ -606,45 +623,58 @@ canvas {
   letter-spacing: 0.01em;
 }
 
-.overlay-card > p:last-of-type {
+/* The card's copy, then its list of lines. A card has one of each at most: the
+   pause and defeat cards speak in the paragraph alone, the victory card leads
+   with the run it is reporting and then lists its spoils and the rule it is
+   about to enforce, and the drill's cards list one beat per thing standing in the
+   line the player is about to hit. */
+.card-copy {
   margin: 0 0 19px;
   color: #c5b28e;
   font-size: 11px;
+  line-height: 1.7;
 }
 
-/* The victory card shares the pause/defeat overlay's placement but not its
-   voice: gold frame, gold seal, and the run's report instead of a question. */
-.victory-overlay {
-  background: rgba(32, 23, 16, 0.66);
-}
-
-.victory-card {
-  border-color: rgba(210, 173, 104, 0.55);
-}
-
-.victory-icon {
-  color: var(--lime);
-}
-
-.victory-subtitle {
-  margin: 0 0 6px;
+/* The run that was won is a lede, not a footnote. */
+.card-copy[data-tone="lede"] {
   color: #e8d6b0;
   font-family: "Noto Serif SC", "Songti SC", serif;
   font-size: 13px;
 }
 
-.victory-stats {
-  margin: 0 0 12px;
+.card-lines {
+  margin: 0 0 19px;
+  padding: 0;
+  list-style: none;
+}
+
+.card-lines li {
+  margin: 0 0 8px;
+}
+
+.card-lines li:last-child {
+  margin-bottom: 0;
+}
+
+/* A drill beat: a paragraph of what the line does, read left to right. */
+.card-lines li[data-tone="body"] {
+  color: #c5b28e;
+  font-family: "Noto Serif SC", "Songti SC", serif;
+  font-size: 12px;
+  line-height: 1.85;
+  text-align: left;
+}
+
+.card-lines li[data-tone="stat"] {
   color: var(--lime);
   font-family: "DM Mono", monospace;
   font-size: 10px;
   letter-spacing: 0.04em;
 }
 
-/* The rule the card is about to enforce, so the locked menu that follows is a
-   consequence the player has already read. */
-.victory-note {
-  margin: 0 0 19px;
+/* The rule the victory card is about to enforce, so the locked menu that follows
+   is a consequence the player has already read. */
+.card-lines li[data-tone="note"] {
   color: #c5b28e;
   font-size: 11px;
   line-height: 1.7;
@@ -773,6 +803,44 @@ canvas {
     letter-spacing: 0.1em;
   }
 
+  /* The action column: 出击 / 结阵 above the fire control, so one thumb reaches
+     both. The order button only exists while the player stands in a line he owns
+     (the HUD unhides it), and it is the one control whose label is the *next*
+     order - green for 出击, amber for the way back to 结阵. */
+  .touch-actions {
+    display: grid;
+    gap: 6px;
+    justify-items: center;
+  }
+
+  .touch-order {
+    width: 62px;
+    height: 42px;
+    border-color: rgba(95, 189, 121, 0.55);
+    background: rgba(57, 139, 99, 0.24);
+    color: #cdf3d6;
+    font-family: inherit;
+    font-size: 11px;
+    letter-spacing: 0.14em;
+  }
+
+  .touch-order[hidden] {
+    display: none;
+  }
+
+  .touch-order[disabled] {
+    border-color: rgba(211, 185, 139, 0.24);
+    background: rgba(255, 235, 204, 0.05);
+    color: #8d8474;
+    cursor: default;
+  }
+
+  .touch-order[data-order="reform"] {
+    border-color: rgba(210, 173, 104, 0.6);
+    background: rgba(210, 173, 104, 0.2);
+    color: #f0e0bd;
+  }
+
   .touch-hint {
     display: block;
     grid-column: 1 / -1;
@@ -840,6 +908,12 @@ canvas {
     width: 68px;
     height: 58px;
     background: var(--cinnabar);
+  }
+
+  .touch-order {
+    width: 54px;
+    height: 36px;
+    font-size: 10px;
   }
 
   .overlay-card {
@@ -1177,6 +1251,24 @@ body.battle-focus {
   background: var(--cinnabar);
 }
 
+/* The order button keeps its own colour in the battle HUD: the plain key
+   background would swallow the green/amber that says which order is next. */
+.battle-focus .touch-order {
+  border-color: rgba(95, 189, 121, 0.62);
+  background-color: rgba(57, 139, 99, 0.42);
+  color: #cdf3d6;
+}
+
+.battle-focus .touch-order[data-order="reform"] {
+  border-color: rgba(210, 173, 104, 0.62);
+  background-color: rgba(160, 116, 47, 0.42);
+  color: #f0e0bd;
+}
+
+.battle-focus .touch-order[hidden] {
+  display: none;
+}
+
 .battle-focus .touch-hint {
   display: none;
 }
@@ -1346,9 +1438,18 @@ body.battle-focus {
     left: 10px;
   }
 
-  .overlay-card > p:last-of-type {
+  .card-copy {
     margin-bottom: 12px;
     font-size: 9px;
+  }
+
+  .card-lines {
+    margin-bottom: 12px;
+  }
+
+  .card-lines li[data-tone="body"] {
+    font-size: 10px;
+    line-height: 1.75;
   }
 
   .overlay-button {
@@ -1484,6 +1585,22 @@ body.battle-focus {
   left: 8px;
 }
 
+/* The order button sits above the fire disc and reads as a pill, so the round
+   fire control keeps its own silhouette. */
+.battle-focus.touch-layout .touch-order {
+  width: 78px;
+  height: 34px;
+  border-radius: 17px;
+  font-size: 12px;
+  letter-spacing: 0.16em;
+  pointer-events: auto;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  backdrop-filter: blur(2px);
+}
+
 .battle-focus.touch-layout .touch-fire {
   width: 72px;
   height: 72px;
@@ -1546,6 +1663,13 @@ body.battle-focus {
   .battle-focus.touch-layout .touch-fire {
     width: 64px;
     height: 64px;
+  }
+
+  .battle-focus.touch-layout .touch-order {
+    width: 68px;
+    height: 30px;
+    border-radius: 15px;
+    font-size: 11px;
   }
 }
 

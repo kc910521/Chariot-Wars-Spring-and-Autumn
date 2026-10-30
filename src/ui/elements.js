@@ -42,20 +42,19 @@ const SELECTORS = {
   hullLabelElement: "#hull-label",
   hullValueElement: "#hull-value",
   hullHealthElement: "#hull-health",
-  overlay: "#game-overlay",
-  overlayEyebrow: "#overlay-eyebrow",
-  overlayTitle: "#overlay-title",
-  overlayCopy: "#overlay-copy",
-  overlayButton: "#overlay-button",
-  // The victory card: its own overlay over the field, shown by the last stage
-  // instead of the shop.
-  victoryScreen: "#victory-screen",
-  victoryEyebrow: "#victory-eyebrow",
-  victoryTitle: "#victory-title",
-  victorySubtitle: "#victory-subtitle",
-  victoryStats: "#victory-stats",
-  victoryNote: "#victory-note",
-  victoryReturnButton: "#victory-return",
+  // The one card: the pause, defeat and victory screens and the two beats of the
+  // drill are this element painted from a different spec (src/ui/battle-card.js).
+  // One node is enough because only one card can ever be up - the mode that owns
+  // the field owns the card, and a drill beat is only ever painted while the battle
+  // is running.
+  card: "#battle-card",
+  cardIcon: "#card-icon",
+  cardEyebrow: "#card-eyebrow",
+  cardTitle: "#card-title",
+  cardCopy: "#card-copy",
+  cardLines: "#card-lines",
+  cardButton: "#card-button",
+  cardAction: "#card-action",
   startButton: "#start-button",
   startLabel: "#start-label",
   objectiveCountElement: "#objective-count",
@@ -73,6 +72,10 @@ const SELECTORS = {
   touchJoystickElement: "#touch-joystick",
   touchJoystickKnob: "#touch-joystick-knob",
   touchFireElement: ".touch-fire",
+  // The order button (出击 / 结阵) is hidden until the player stands inside one
+  // of his own lines; the HUD owns that visibility, so the hook it needs is the
+  // node itself rather than a painted rect.
+  touchOrderElement: "#touch-order",
   bossWarningElement: "#boss-warning",
   bossWarningTitleElement: "#boss-warning-title",
   bossWarningSubtitleElement: "#boss-warning-subtitle",

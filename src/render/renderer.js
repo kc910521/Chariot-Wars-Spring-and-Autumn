@@ -1,6 +1,6 @@
 import { translate } from "../i18n/index.js";
 import { calculateChariotKit } from "../data/equipment.js";
-import { formationAura } from "../data/formations.js";
+import { formationAura, formationOrders } from "../data/formations.js";
 import { effectRules } from "../data/rules.js";
 import { cloudDrift, elementCullMargin } from "../game/elements.js";
 import { createElementRenderer } from "./elements.js";
@@ -58,11 +58,12 @@ export function createRenderer({
 
     // The formation aura's heal, drawn under the body so it never hides the
     // silhouette: a pulse that fades over the same `formationAura.flash` as the
-    // banner. Both sides heal from the same beat, so both sides show it - green
-    // for a hired line, amber for an enemy one.
+    // banner. A friendly ring mends the player as well as the line it belongs to,
+    // so his body takes the same green; an enemy line's beat is amber, and the
+    // player standing in one is a trespasser, not a patient.
     if (unit.healFlash > 0) {
       const glow = Math.min(1, unit.healFlash / formationAura.flash);
-      context.fillStyle = isAlly
+      context.fillStyle = isAlly || isPlayer
         ? `rgba(126, 233, 152, ${0.34 * glow})`
         : `rgba(232, 166, 105, ${0.3 * glow})`;
       context.beginPath();
@@ -322,11 +323,19 @@ export function createRenderer({
   // owns, and only the palette differs - rust for an enemy line, green for a
   // hired one. Both lines pulse on their aura beat, from the same shared tick;
   // the colour is what tells the player whose banner just healed.
+  //
+  // A hired line also says what it has been ordered to do, because the player
+  // gave that order and the ring is the only place it shows: marching is a
+  // brighter, heavier stroke (the line is under way, and its slots are travelling
+  // with the chariot), and a line with bodies still walking back from a 结阵
+  // carries an amber stroke until the last of them is on station.
   function drawFormation(formation, friendly) {
     if (formation.x < camera.x - 120 || formation.x > camera.x + view.width + 120
       || formation.y < camera.y - 80 || formation.y > camera.y + view.height + 80) return;
     const halfWidth = formation.halfWidth || 116;
     const halfHeight = formation.halfHeight || 86;
+    const marching = formation.order === formationOrders.MARCH;
+    const straggling = friendly && !marching && (formation.stragglers ?? 0) > 0;
     context.save();
     context.translate(formation.x, formation.y);
     context.rotate(formation.heading);
@@ -334,8 +343,10 @@ export function createRenderer({
     context.beginPath();
     context.rect(-halfWidth, -halfHeight, halfWidth * 2, halfHeight * 2);
     context.fill();
-    context.strokeStyle = friendly ? "rgba(95, 189, 121, 0.34)" : "rgba(112, 39, 31, 0.2)";
-    context.lineWidth = 1;
+    if (straggling) context.strokeStyle = "rgba(226, 189, 106, 0.5)";
+    else if (friendly && marching) context.strokeStyle = "rgba(141, 240, 168, 0.62)";
+    else context.strokeStyle = friendly ? "rgba(95, 189, 121, 0.34)" : "rgba(112, 39, 31, 0.2)";
+    context.lineWidth = friendly && marching ? 1.6 : 1;
     context.setLineDash([7, 8]);
     context.stroke();
     context.setLineDash([]);

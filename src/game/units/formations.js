@@ -1,4 +1,4 @@
-import { formationAura } from "../../data/formations.js";
+import { formationAura, formationOrders } from "../../data/formations.js";
 import { clamp } from "../../utils/math.js";
 
 // Formation *geometry* - the envelope a spawned line occupies. The data table
@@ -135,13 +135,30 @@ export function isInsideFormation(formation, x, y, margin = 0) {
 // the dashed footprint (not merely in the formation) recovers `heal`, capped at
 // its own maximum. A chariot that ran home is healed here like anyone else; one
 // still running is outside the footprint and is not. `healFlash` decays on every
-// unit passed in, so a caller that ticks this once per frame does not need a
+// body passed in, so a caller that ticks this once per frame does not need a
 // second per-unit timer - and an enemy line and a hired line get the same
 // visuals from the same beat.
-export function tickFormationAura(formations = [], units = [], delta = 0, config = formationAura) {
-  for (const unit of units) {
-    if (unit && unit.healFlash > 0) unit.healFlash = Math.max(0, unit.healFlash - delta);
+//
+// Two exceptions, both read from the field:
+// - a marching line is not holding ground, so its beat keeps the timer but heals
+//   nobody. The phase is preserved on purpose: a line that is set down must not
+//   get a free beat the frame it stops.
+// - a line with a hostile body inside its ring has been stepped on, and that
+//   beat is void - no heal and no pulse. `intruders` is what the *other* side
+//   looks like, so the caller passes the enemies of the line it is ticking.
+//
+// `friends` are bodies the caller wants mended without being members of any
+// roster (the player). They are healed by any formation they stand in, and their
+// flash decays here too, because nothing else ticks it.
+export function tickFormationAura(
+  formations = [], units = [], delta = 0, config = formationAura,
+  { intruders = [], friends = [] } = {},
+) {
+  const bodies = friends.length === 0 ? units : [...units, ...friends];
+  for (const body of bodies) {
+    if (body && body.healFlash > 0) body.healFlash = Math.max(0, body.healFlash - delta);
   }
+  const hostile = intruders.filter((unit) => unit && !unit.destroyed);
   const healed = [];
   for (const formation of formations) {
     formation.auraFlash = Math.max(0, (formation.auraFlash ?? 0) - delta);
@@ -150,6 +167,8 @@ export function tickFormationAura(formations = [], units = [], delta = 0, config
     // Keep the remainder instead of resetting to 0: a frame that overshoots the
     // interval must not stretch the next beat.
     formation.auraTimer %= config.interval;
+    if (formation.order === formationOrders.MARCH) continue;
+    if (hostile.some((unit) => isInsideFormation(formation, unit.x, unit.y))) continue;
     formation.auraFlash = config.flash;
     for (const unit of units) {
       if (!unit || unit.destroyed || unit.formationId !== formation.id) continue;
@@ -158,6 +177,16 @@ export function tickFormationAura(formations = [], units = [], delta = 0, config
       unit.health = Math.min(unit.maxHealth, unit.health + config.heal);
       unit.healFlash = config.flash;
       healed.push(unit);
+    }
+    for (const friend of friends) {
+      // A body with no health of its own (a stub, a prop) is not a patient.
+      const cap = friend?.maxHealth ?? friend?.health;
+      if (!friend || friend.destroyed || !Number.isFinite(friend.health) || !Number.isFinite(cap)) continue;
+      if (friend.health <= 0 || friend.health >= cap) continue;
+      if (!isInsideFormation(formation, friend.x, friend.y)) continue;
+      friend.health = Math.min(cap, friend.health + config.heal);
+      friend.healFlash = config.flash;
+      healed.push(friend);
     }
   }
   return healed;

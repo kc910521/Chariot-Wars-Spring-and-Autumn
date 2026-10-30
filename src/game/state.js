@@ -26,6 +26,9 @@ export function createGameState({ seedSource = () => null } = {}) {
     knockbackY: 0,
     impactCooldown: 0,
     swarmDamageCooldown: 0,
+    // The formation aura's glow on the player's own body: a friendly ring heals
+    // him, and this is what the renderer pulses while it does.
+    healFlash: 0,
     mode: "chariot",
     maxHealth: 100,
   };

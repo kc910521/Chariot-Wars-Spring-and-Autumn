@@ -1,3 +1,4 @@
+import { formationAura, formationOrders } from "../../data/formations.js";
 import { addBloodStain } from "../blood.js";
 import { campaignRules, effectRules } from "../../data/rules.js";
 import { soundCues, soundDeathCues } from "../../data/sounds.js";
@@ -214,9 +215,18 @@ export function createEnemies({
       heading,
       halfWidth,
       halfHeight,
+      // The deepest station behind the centre; `formation-orders` reads it to
+      // place the ring around a commander without standing bodies in his hull.
+      depth: Math.max(...pattern.slots.map(([, , slotY]) => slotY)),
       color: "#a74732",
       // Latched by `updateFormationAlerts` before the first unit thinks.
       alerted: false,
+      // Who may give this line orders. No commander does yet - an enemy officer
+      // is the documented next step for `formation-orders.js` - but the flag is
+      // what would keep a hired player from ordering it (`commandedFormation`).
+      owner: "enemy",
+      order: formationOrders.HOLD,
+      stragglers: 0,
       // The banner beat is the same one the hired line runs; see
       // `tickFormationAura` in formations.js.
       auraTimer: 0,
@@ -677,7 +687,12 @@ export function createEnemies({
     // The banner first: a wounded chariot may be topped up over the re-engage
     // threshold this frame, and the morale machine below should see the health
     // it actually has. The hired line ticks the same function on its own pass.
-    tickFormationAura(state.formations, state.enemies, delta);
+    // The player and the hired bodies are the intruders this line's ground has to
+    // be clear of: a banner with an enemy standing in its ring does not beat.
+    tickFormationAura(state.formations, state.enemies, delta, formationAura, {
+      intruders: [player, ...(state.allies ?? [])],
+      friends: [],
+    });
     // One pass decides, per formation, whether the player or a hired ally is
     // standing inside its footprint; the brains below only read the mirrored flag.
     updateFormationAlerts(state.formations, state.enemies, [player, ...(state.allies ?? [])]);
