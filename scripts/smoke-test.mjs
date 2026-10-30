@@ -1494,8 +1494,9 @@ check("a hired line does not march into a drill",
   (game.state.allies ?? []).length === 0 && (game.state.allyFormations ?? []).length === 0,
   `hires=${game.campaign.friendlyFormations} allies=${(game.state.allies ?? []).length}`);
 game.campaign.friendlyFormations = 0;
-check("the objective counts the animal and the line it guards",
-  game.state.objectiveTarget === formationPresets.tutorialLine.slots.length + 1,
+check("the objective counts the animal and both bands the drill stands",
+  game.state.objectiveTarget === formationPresets.tutorialLine.slots.length
+    + formationPresets.tutorialWave.slots.length + 1,
   `objective=${game.state.objectiveTarget}`);
 check("the animal is a wild tiger, not a rank in a line",
   game.state.wilds[0].species === "tiger" && game.state.wilds[0].loot === "meat"
@@ -1629,11 +1630,88 @@ check("the engagement points the guide at the line",
     && query("#objective-label").textContent === translate("tutorial.lineLabel"),
   `label="${query("#objective-label").textContent}"`);
 
+// The first band falls and the drill does *not* end: the clan lends the player a
+// line for the last encounter. The extraction stays shut, because a drill answers
+// to its script and not to a body count.
 for (const unit of drill().line) game.damageEnemy(unit, 999);
 runFrames(2);
-check("the last of the line clears the drill and opens the extraction",
+check("the first band's fall musters the clan's squad instead of ending the drill",
+  drill()?.step === "muster" && game.state.allyFormations.length === 1
+    && game.state.phase === "combat",
+  `step=${drill()?.step} lines=${game.state.allyFormations.length} phase=${game.state.phase}`);
+check("the muster is the same card, with the loan's two beats on it",
+  !query("#battle-card").classList.contains("hidden")
+    && query("#card-title").textContent === translate("tutorial.muster.title")
+    && query("#card-lines").children.length === 2,
+  `title="${query("#card-title").textContent}" lines=${query("#card-lines").children.length}`);
+const squadLine = game.state.allyFormations[0];
+check("the borrowed squad is a line he can order and never bought",
+  squadLine.tier === -1 && squadLine.owner === "player"
+    && squadLine.nameKey === "formation.friendly" && game.campaign.friendlyFormations === 0,
+  `tier=${squadLine.tier} owner=${squadLine.owner} hires=${game.campaign.friendlyFormations}`);
+check("the muster forms off screen and the camera goes to it",
+  Math.hypot(squadLine.x - game.player.x, squadLine.y - game.player.y) > 400
+    && game.state.cameraFocus !== null,
+  `gap=${Math.hypot(squadLine.x - game.player.x, squadLine.y - game.player.y).toFixed(0)}`);
+
+// The drill is not the kill count. With every body a campaign stage would need
+// already dead, the scenario still holds the extraction shut.
+game.state.kills = game.state.objectiveTarget;
+runFrames(2);
+check("a drill answers to its scenario, not to the kill count",
+  game.state.phase === "combat" && game.state.tutorial !== null,
+  `phase=${game.state.phase} kills=${game.state.kills} target=${game.state.objectiveTarget}`);
+
+query("#card-button").dispatch("click");
+runFrames(1);
+check("the muster hands over to the orders, with the arrow on the ring",
+  drill()?.step === "orders" && drill().frozen === false
+    && query("#objective-label").textContent === translate("tutorial.orderLabel"),
+  `step=${drill()?.step} label="${query("#objective-label").textContent}"`);
+
+// 出击 and 结阵, from inside the ring, by thumb: one tap on the order button each.
+game.player.x = squadLine.x;
+game.player.y = squadLine.y;
+runFrames(1);
+check("standing in the borrowed ring raises the order button",
+  orderButton.hidden === false && orderButton.textContent === translate("battle.sortie"),
+  `hidden=${orderButton.hidden} label="${orderButton.textContent}"`);
+orderButton.dispatch("click");
+runFrames(2);
+check("出击 is the drill's first order",
+  drill()?.hud.count === 1 && squadLine.order === "march" && drill().step === "orders",
+  `count=${drill()?.hud.count} order=${squadLine.order} step=${drill()?.step}`);
+orderButton.dispatch("click");
+runFrames(2);
+check("结阵 is the second, and it sets the ring down before the next band",
+  drill()?.hud.count === 2 && squadLine.order === "hold" && squadLine.stragglers > 0,
+  `count=${drill()?.hud.count} order=${squadLine.order} stragglers=${squadLine.stragglers}`);
+
+// The settle is a beat of the field, then the camera pans to the second band.
+runFrames(80);
+check("the second band forms while the ranks close",
+  game.state.formations.some((formation) => formation.id === "preset-tutorialWave"),
+  `formations=${game.state.formations.map((formation) => formation.id).join(",")}`);
+runFrames(90);
+check("the drill hands the last encounter over, with the squad still standing",
+  drill()?.step === "squadEngage" && drill().frozen === false
+    && query("#objective-label").textContent === translate("tutorial.squadLabel"),
+  `step=${drill()?.step} label="${query("#objective-label").textContent}"`);
+check("the second band is twice the first, and the squad is still on the field",
+  drill().wave.length === formationPresets.tutorialWave.slots.length
+    && game.state.allies.length === formationPresets.tutorialSquad.slots.length,
+  `band=${drill().wave.length} squad=${game.state.allies.length}`);
+
+for (const unit of drill().wave) game.damageEnemy(unit, 999);
+runFrames(2);
+check("the last of the second band clears the drill and opens the extraction",
   game.state.tutorial === null && game.state.phase === "extract" && game.campaign.tutorialHandoff === true,
   `tutorial=${game.state.tutorial} phase=${game.state.phase} handoff=${game.campaign.tutorialHandoff}`);
+check("the loan goes home: no borrowed bodies and no line bought",
+  game.state.allies.length === 0 && game.state.allyFormations.length === 0
+    && game.campaign.friendlyFormations === 0,
+  `allies=${game.state.allies.length} lines=${game.state.allyFormations.length}`
+    + ` hires=${game.campaign.friendlyFormations}`);
 check("the cleared drill goes back to pointing at the extraction point",
   query("#extraction-guide").hidden === false
     && query("#extraction-guide-label").textContent === translate("battle.extractGuide"),

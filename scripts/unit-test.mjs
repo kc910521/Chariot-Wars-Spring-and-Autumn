@@ -29,7 +29,8 @@ import { parseRingShares, ringRules } from "../src/data/rings.js";
 import { buildWalkMap } from "../src/game/reachability.js";
 import { createTutorial } from "../src/game/tutorial.js";
 import {
-  LINE_DISTANCES, TUTORIAL_LAYOUT, createTutorialMapCheck, findLineGround, lineGroundExtent, planTigerGround,
+  LINE_DISTANCES, SQUAD_DISTANCES, TUTORIAL_LAYOUT, createTutorialMapCheck, findLineGround, findSquadGround,
+  findWaveGround, lineGroundExtent, planTigerGround, squadGroundExtent, waveGroundExtent,
 } from "../src/game/tutorial-map.js";
 import { wildAnimalStats } from "../src/data/wilds.js";
 import { createElementRenderer } from "../src/render/elements.js";
@@ -5286,6 +5287,67 @@ test("出击 glues the ring to the chariot; 结阵 sets it down and sends the st
   assert.equal(line.stragglers, 0, "the line still counts a body that came home");
 });
 
+test("a marching ring is an outline: the wash is the ground a line holds", () => {
+  // The wash inside the dashed ring is the ground a line *holds*, which is the same
+  // ground its banner mends - `tickFormationAura` skips a marching line for exactly
+  // that reason. So 出击 (the ring travelling with the chariot) is painted as an
+  // outline only, and nothing is tinted under the player's own wheels; 结阵 puts the
+  // wash back on the frame the ring is set down, stragglers and all.
+  const ringWash = "rgba(64, 140, 92, 0.07)";
+  const view = { width: 960, height: 592 };
+  const frame = (order, extra = {}) => {
+    const context = callLog();
+    const line = {
+      id: -1, nameKey: "formation.friendly", x: 420, y: 300, heading: 0,
+      halfWidth: 116, halfHeight: 86, tier: -1, stragglers: 0, auraFlash: 0,
+      order, friendly: true, owner: "player", color: "#5fbd79", ...extra,
+    };
+    createRenderer({
+      canvas: { width: view.width, height: view.height },
+      context, view,
+      camera: { x: 0, y: 0 },
+      world: { width: 2800, height: 1800 },
+      player: {
+        x: 420, y: 300, angle: 0, radius: 14, health: 10, maxHealth: 10,
+        invulnerable: 0, mode: "mounted", destroyed: false,
+      },
+      state: {
+        elapsed: 1, shake: 0, damageFlash: 0, phase: "running", extractionPoint: null,
+        particles: [], bloodStains: [], groundArrows: [], drops: [], meleeEffects: [],
+        formations: [], allyFormations: [line], bullets: [], enemies: [],
+        footCompanions: [], allies: [],
+      },
+      getObstacles: () => [],
+      getTerrain: () => [],
+      getClouds: () => [],
+      getHorseCount: () => 0,
+      getRoster: () => [],
+    }).draw();
+    return context.log;
+  };
+  // The ring is the only painter using this alpha, so the colour is its marker.
+  const washed = (log) => log.some(([name, args]) => name === "fillStyle" && args[0] === ringWash);
+  const dashed = (log) => log.some(([name, args]) => name === "setLineDash"
+    && JSON.stringify(args) === JSON.stringify([[7, 8]]));
+
+  const holding = frame(formationOrders.HOLD);
+  assert.equal(washed(holding), true, "a line holding ground lost its wash");
+  assert.equal(dashed(holding), true, "a line holding ground lost its outline");
+
+  // 出击: the same ring, the same dash, no wash - an outline is all a travelling
+  // line holds, and the player's wheels are not standing on tinted ground.
+  const marching = frame(formationOrders.MARCH);
+  assert.equal(dashed(marching), true, "a marching ring lost its outline");
+  assert.equal(washed(marching), false, "a marching ring is still washed under the chariot");
+
+  // 结阵: the ring is down and the ranks are still walking home, and the wash is
+  // back on that very frame - the amber stroke, not a missing fill, says "closing".
+  const closing = frame(formationOrders.HOLD, { stragglers: 3 });
+  assert.equal(washed(closing), true, "the wash did not come back with 结阵");
+  assert.ok(closing.some(([name, args]) => name === "strokeStyle" && args[0] === "rgba(226, 189, 106, 0.5)"),
+    "the closing ranks lost their amber stroke");
+});
+
 test("the camp pitches one tent per hire, and a hover stays a preview", () => {
   const rect = { x: 0, y: 0, width: 320, height: 128 };
   const campFor = (model) => drawCamp(recordingContext().context, rect, { crew: [], ...model });
@@ -5492,7 +5554,52 @@ test("a field with nowhere clear to stand still gets a line", () => {
   assert.ok(Number.isFinite(spot.x) && Number.isFinite(spot.y), "the search returned no ground at all");
 });
 
-test("the check wants a clear, reachable tiger and room for the line from anywhere", () => {
+test("the squad musters on the far side, off screen and on clear ground", () => {
+  const spot = findSquadGround(drillSpawn, { world: drillWorld, obstacles: [] });
+  const span = Math.hypot(spot.x - drillSpawn.x, spot.y - drillSpawn.y);
+  assert.equal(TUTORIAL_LAYOUT.squad.distance, SQUAD_DISTANCES[0]);
+  assert.ok(Math.abs(span - TUTORIAL_LAYOUT.squad.distance) < 1, `the squad stood ${span.toFixed(1)}px off`);
+  assert.equal(spot.clear, true, "open ground was not read as clear");
+  // Off the bottom of the 960x592 view, or the pan that reveals it is not a reveal.
+  assert.ok(Math.abs(spot.y - drillSpawn.y) > 592 / 2, "the squad musters on screen");
+  // The opposite quarter from the first band: the player has just fought his way
+  // out to that line, so the muster must not sit behind the fight he has left.
+  const line = findLineGround(drillSpawn, { world: drillWorld, obstacles: [] });
+  const gap = Math.hypot(spot.x - line.x, spot.y - line.y);
+  assert.ok(gap > 600, `the squad mustered ${gap.toFixed(0)}px from the first band`);
+  assert.equal(spot.heading, Math.atan2(drillSpawn.y - spot.y, drillSpawn.x - spot.x));
+  // Deterministic, and asked about on its own footprint.
+  assert.deepEqual(findSquadGround(drillSpawn, { world: drillWorld, obstacles: [] }), spot);
+  assert.deepEqual(squadGroundExtent(), formationGroundExtent(formationPresets.tutorialSquad));
+});
+
+test("the second band forms on the drill line's ground, on a wider footprint", () => {
+  const wave = findWaveGround(drillSpawn, { world: drillWorld, obstacles: [] });
+  const line = findLineGround(drillSpawn, { world: drillWorld, obstacles: [] });
+  assert.deepEqual(
+    { x: wave.x, y: wave.y, heading: wave.heading },
+    { x: line.x, y: line.y, heading: line.heading },
+    "the second band did not form where the first one did",
+  );
+  assert.equal(wave.clear, true, "open ground was not read as clear");
+  // Twice the line is a wider box, and the ground is asked about that box.
+  const wide = waveGroundExtent();
+  const narrow = lineGroundExtent();
+  assert.ok(wide.halfWidth > narrow.halfWidth, "the second band is not the wider footprint");
+  assert.ok(wide.halfHeight > narrow.halfHeight, "the second band is not the deeper footprint");
+  // Ground another line is standing on moves it: the squad is still on the field
+  // when the second band is placed, and two footprints on one spot interpenetrate.
+  const blocked = findWaveGround(drillSpawn, {
+    world: drillWorld,
+    obstacles: [],
+    avoid: [{ x: wave.x, y: wave.y, halfWidth: 60, halfHeight: 60 }],
+  });
+  assert.notDeepEqual({ x: blocked.x, y: blocked.y }, { x: wave.x, y: wave.y },
+    "the second band formed on top of the line already standing there");
+  assert.equal(blocked.clear, true);
+});
+
+test("the check wants a clear, reachable tiger and room for all three lines from anywhere", () => {
   const check = createTutorialMapCheck({
     world: drillWorld, spawn: drillSpawn, circleIntersectsObstacle: drillIntersects,
   });
@@ -5542,7 +5649,30 @@ function drillRig({ seed = 5 } = {}) {
   rig.state.battleId = 7;
   rig.state.tutorial = null;
   rig.state.cameraFocus = null;
+  // The borrowed squad is a friendly line, so the drill needs the ally system the
+  // real battle has. Same stubs as `hireRig`: flat ground, no obstacles, every
+  // draw fixed - a drill has to stay reproducible.
+  rig.state.allyFormations = [];
+  rig.state.allies = [];
   rig.campaign.tutorialHandoff = false;
+  rig.campaign.friendlyFormations = 0;
+  rig.campaign.random = () => 0.5;
+  const allies = createAllies({
+    state: rig.state,
+    player: rig.player,
+    world: rig.world,
+    campaign: rig.campaign,
+    moveEntitySafely: (unit, dx, dy) => { unit.x += dx; unit.y += dy; },
+    hasLineOfSight: () => true,
+    circleIntersectsObstacle: () => false,
+    rectHitsAnyObstacle: () => false,
+    rectTerrain: () => ({ dry: true, uniform: true, speed: 1, overlapped: 0 }),
+    damageEnemy: rig.enemies.damageEnemy,
+    fireAllyShot: () => {},
+    addMeleeEffect: () => {},
+    burst: () => {},
+    playSound: () => {},
+  });
   let hudCalls = 0;
   const tutorial = createTutorial({
     state: rig.state,
@@ -5551,8 +5681,10 @@ function drillRig({ seed = 5 } = {}) {
     campaign: rig.campaign,
     enemySystem: rig.enemies,
     updateHud: () => { hudCalls += 1; },
+    spawnScenarioLine: allies.spawnScenarioLine,
+    despawnScenarioLine: allies.despawnScenarioLine,
   });
-  return { ...rig, tutorial, hudCalls: () => hudCalls };
+  return { ...rig, allies, tutorial, hudCalls: () => hudCalls };
 }
 
 test("the drill opens frozen, with one wild animal on the field", () => {
@@ -5645,7 +5777,7 @@ test("a line of soldiers fights the tiger and the tiger fights back", () => {
   assert.equal(rig.state.formations.length, 1, "the preset spawned no line");
   assert.equal(formation.id, "preset-tutorialLine");
   assert.equal(formation.groundTier, "dry", "a preset claimed a spawn tier it never searched");
-  assert.equal(rig.state.enemies.length, 10, "the line is nine ranks plus the animal");
+  assert.equal(rig.state.enemies.length, 8, "the line is seven ranks plus the animal");
   for (let frame = 0; frame < 120; frame += 1) rig.enemies.updateUnits(1 / 60);
   assert.ok(tiger.destroyed || tiger.health < tiger.maxHealth, "the line never touched the animal");
 });
@@ -5661,7 +5793,8 @@ test("the drill pans to the line, holds the field, and hands it back", () => {
   let tutorial = rig.state.tutorial;
   assert.equal(tutorial.step, "pan", `the animal's death left the drill at ${tutorial.step}`);
   assert.equal(tutorial.frozen, true, "the pan is not a pause");
-  assert.equal(tutorial.line.length, 9, `the line formed with ${tutorial.line.length} bodies`);
+  assert.equal(tutorial.line.length, formationPresets.tutorialLine.slots.length,
+    `the line formed with ${tutorial.line.length} bodies`);
   const lineSpot = tutorial.lineSpot;
   assert.deepEqual(rig.state.cameraFocus, { x: lineSpot.x, y: lineSpot.y });
   assert.equal(tutorial.objective, null, "the arrow was left on a dead animal");
@@ -5691,11 +5824,13 @@ test("the drill pans to the line, holds the field, and hands it back", () => {
   };
   assert.deepEqual(tutorial.objective, centroid);
 
-  // The last body of the line is the trigger, and it is what hands the run on.
+  // The last body of the first band is *not* the end of the drill: it is the
+  // muster. `state.tutorial` staying set is what keeps the extraction shut.
   for (const unit of tutorial.line) rig.enemies.damageEnemy(unit, 999);
   rig.tutorial.update(1 / 60);
-  assert.equal(rig.state.tutorial, null, "the drill never finished");
-  assert.equal(rig.campaign.tutorialHandoff, true, "the cleared drill did not hand the run on");
+  assert.equal(rig.state.tutorial, tutorial, "the first band's fall ended the drill");
+  assert.equal(rig.state.tutorial.step, "muster", `the drill went to ${rig.state.tutorial.step}`);
+  assert.equal(rig.campaign.tutorialHandoff, false, "the drill handed the run on before its second band");
 });
 
 test("the line forms around the chariot's live position, not its spawn corner", () => {
@@ -5757,6 +5892,217 @@ test("the arrow keeps pointing at the ranks that are left", () => {
   assert.equal(tutorial.hud.count, firstHalf.length, "the counter lost the fallen");
 });
 
+
+// The drill's third encounter, walked to the beat each test needs. The cards are
+// confirmed and the pans waited out exactly as a player would, and the ally system
+// is driven through `allies.update` so the ring's orders advance the way they do in
+// a battle.
+function drillMuster(rig) {
+  rig.tutorial.arm();
+  rig.tutorial.confirm();
+  rig.enemies.damageEnemy(rig.state.wilds[0], 999);
+  rig.tutorial.update(1 / 60);
+  rig.tutorial.update(2);
+  rig.tutorial.confirm();
+  rig.tutorial.update(2);
+  for (const unit of rig.state.tutorial.line) rig.enemies.damageEnemy(unit, 999);
+  rig.tutorial.update(1 / 60);
+  return rig.state.tutorial;
+}
+
+function drillOrders(rig) {
+  drillMuster(rig);
+  rig.tutorial.confirm();
+  return rig.state.tutorial;
+}
+
+// 出击 then 结阵, with the chariot standing in its own ring the way the order
+// button requires (`commandedFormation` only answers from inside the footprint).
+function drillOrderTheSquad(rig) {
+  const squad = rig.state.tutorial.squadFormation;
+  rig.player.x = squad.x;
+  rig.player.y = squad.y;
+  const order = () => toggleOrder({
+    formations: rig.state.allyFormations, members: rig.state.allies, leader: rig.player, owner: "player",
+  });
+  const marched = order();
+  if (marched) rig.tutorial.noteOrder(marched);
+  rig.allies.update(1 / 60);
+  const held = order();
+  if (held) rig.tutorial.noteOrder(held);
+  return { marched, held };
+}
+
+function drillWave(rig) {
+  drillOrders(rig);
+  drillOrderTheSquad(rig);
+  rig.tutorial.update(1 / 60);
+  rig.tutorial.update(2);
+  return rig.state.tutorial;
+}
+
+function drillSquadEngage(rig) {
+  drillWave(rig);
+  rig.tutorial.update(2);
+  return rig.state.tutorial;
+}
+
+test("the first band's fall musters the clan's loan, and the drill goes on", () => {
+  const rig = drillRig();
+  const tutorial = drillMuster(rig);
+
+  assert.equal(tutorial.step, "muster", `the drill went to ${tutorial.step}`);
+  assert.equal(tutorial.frozen, true, "the muster card is not a pause");
+  assert.equal(tutorial.overlay.titleKey, "tutorial.muster.title");
+  assert.equal(tutorial.overlay.bodyKeys.length, 2, "the muster card lost a beat");
+
+  // The squad is a real friendly line: the same banner, the same owner, the same
+  // order machine as a hire - it just belongs to nobody.
+  const squad = tutorial.squadFormation;
+  assert.equal(rig.state.allyFormations.length, 1, "the muster fielded no line");
+  assert.equal(rig.state.allyFormations[0], squad);
+  assert.equal(squad.nameKey, "formation.friendly");
+  assert.equal(squad.tier, -1, "the borrowed squad was numbered as a purchase");
+  assert.equal(squad.owner, "player");
+  assert.equal(tutorial.squad.length, formationPresets.tutorialSquad.slots.length);
+  assert.equal(rig.state.allies.length, formationPresets.tutorialSquad.slots.length);
+  assert.equal(squad.id, -1, "a scenario line took a hire's id");
+
+  // Nothing was bought and nothing is owed: the hire count the shop reads never
+  // moves, so playing the drill cannot buy a campaign line.
+  assert.equal(rig.campaign.friendlyFormations, 0);
+  assert.equal(hireCount(rig.campaign), 0);
+
+  // The camera goes to the muster, off screen from where the chariot is standing.
+  const span = Math.hypot(squad.x - rig.player.x, squad.y - rig.player.y);
+  assert.ok(span > 400, `the squad mustered ${span.toFixed(0)}px from the chariot`);
+  assert.deepEqual(rig.state.cameraFocus, { x: squad.x, y: squad.y });
+
+  // The HUD counts the two orders the drill is about to ask for.
+  assert.equal(tutorial.hud.labelKey, "tutorial.orderLabel");
+  assert.equal(tutorial.hud.count, 0);
+  assert.equal(tutorial.hud.total, 2);
+});
+
+test("the order stage waits for 出击 and then for 结阵, and neither is assumed", () => {
+  const rig = drillRig();
+  const tutorial = drillOrders(rig);
+  assert.equal(tutorial.step, "orders");
+  assert.equal(tutorial.frozen, false, "the order stage holds the field");
+  assert.equal(tutorial.overlay, null);
+  const squad = tutorial.squadFormation;
+  // The arrow points at the ring the player has to drive into: a line only takes an
+  // order from a commander standing inside it.
+  assert.deepEqual(tutorial.objective, { x: squad.x, y: squad.y });
+
+  // A player who does nothing is told nothing: the drill is waiting, not skipping.
+  rig.tutorial.update(2);
+  rig.tutorial.update(2);
+  assert.equal(tutorial.step, "orders", "the drill advanced without its orders");
+  assert.equal(tutorial.hud.count, 0);
+  assert.equal(rig.state.tutorial.waveFormation, null, "the second band arrived unasked");
+
+  // 出击, then 结阵: the ring is glued to the chariot, then set down in front of it
+  // with everybody off their station told to walk home.
+  const { marched, held } = drillOrderTheSquad(rig);
+  assert.equal(marched?.action, "march");
+  assert.equal(held?.action, "hold");
+  assert.equal(squad.order, formationOrders.HOLD);
+  assert.equal(squad.stragglers, formationPresets.tutorialSquad.slots.length,
+    "nobody was told to walk home");
+  assert.ok(isInsideFormation(squad, rig.player.x, rig.player.y),
+    "the chariot is not standing in its own ring");
+});
+
+test("出击 and 结阵 are counted one at a time, and 结阵 buys the banner a beat", () => {
+  const rig = drillRig();
+  const tutorial = drillOrders(rig);
+  const squad = tutorial.squadFormation;
+  rig.player.x = squad.x;
+  rig.player.y = squad.y;
+  const order = () => toggleOrder({
+    formations: rig.state.allyFormations, members: rig.state.allies, leader: rig.player, owner: "player",
+  });
+
+  const report = (given) => { if (given) rig.tutorial.noteOrder(given); return given; };
+
+  report(order());                // 出击
+  rig.tutorial.update(1 / 60);
+  assert.equal(tutorial.hud.count, 1, "出击 was not counted");
+  assert.equal(tutorial.step, "orders", "出击 ended the order stage");
+  assert.equal(tutorial.ordered.hold, false);
+
+  report(order());                // 结阵
+  rig.tutorial.update(1 / 60);
+  assert.equal(tutorial.step, "settle", `结阵 left the drill at ${tutorial.step}`);
+  assert.deepEqual(tutorial.ordered, { march: true, hold: true });
+  assert.equal(tutorial.hud.count, 2, "the HUD lost the second order");
+  assert.equal(tutorial.hud.labelKey, "tutorial.orderLabel");
+  // The settle is a beat of the field, not another card.
+  assert.equal(tutorial.frozen, false);
+  assert.equal(tutorial.waveFormation, null, "the second band arrived with the ring still closing");
+
+  rig.tutorial.update(1);
+  assert.equal(tutorial.step, "settle", "the settle skipped its beat");
+
+  rig.tutorial.update(1);
+  assert.equal(tutorial.step, "arrive", `the settled drill went to ${tutorial.step}`);
+  assert.equal(tutorial.frozen, true, "the second band's pan is not a pause");
+  const wave = rig.state.formations[rig.state.formations.length - 1];
+  assert.equal(wave.id, "preset-tutorialWave");
+  assert.equal(tutorial.wave.length, formationPresets.tutorialWave.slots.length);
+  assert.deepEqual(rig.state.cameraFocus, { x: wave.x, y: wave.y });
+  // Twice the first band, and formed away from the squad it was sent to break.
+  const gap = Math.hypot(wave.x - squad.x, wave.y - squad.y);
+  assert.ok(gap > 300, `the second band formed ${gap.toFixed(0)}px from the squad`);
+  // The HUD now counts the second band, from zero.
+  assert.equal(tutorial.hud.labelKey, "tutorial.squadLabel");
+  assert.equal(tutorial.hud.count, 0);
+  assert.equal(tutorial.hud.total, tutorial.wave.length);
+
+  rig.tutorial.update(2);
+  assert.equal(tutorial.step, "squadEngage", `the pan left the drill at ${tutorial.step}`);
+  assert.equal(tutorial.frozen, false);
+  assert.notEqual(tutorial.objective, null, "the last encounter has no objective arrow");
+});
+
+test("the second band's fall ends the drill, and the loan goes home with it", () => {
+  const rig = drillRig();
+  const tutorial = drillSquadEngage(rig);
+  const squad = tutorial.squadFormation;
+  assert.equal(tutorial.step, "squadEngage");
+  assert.ok(rig.state.allies.length > 0, "the squad left before the last encounter");
+
+  for (const unit of tutorial.wave) {
+    if (!unit.destroyed) rig.enemies.damageEnemy(unit, 999);
+  }
+  rig.tutorial.update(1 / 60);
+
+  assert.equal(rig.state.tutorial, null, "the drill never finished");
+  assert.equal(rig.campaign.tutorialHandoff, true, "the cleared drill did not hand the run on");
+  // The loan is taken back: no bodies, no formation, and the campaign's own hire
+  // count never even noticed it was there.
+  assert.equal(rig.state.allies.length, 0, "the borrowed squad stayed on the field");
+  assert.equal(rig.state.allyFormations.length, 0, "the borrowed formation stayed on the field");
+  assert.equal(rig.state.allyFormations.includes(squad), false);
+  assert.equal(rig.campaign.friendlyFormations, 0, "the drill bought the player a line");
+  assert.equal(rig.state.cameraFocus, null, "the camera was left on the drill's ground");
+});
+
+test("a squad wiped before its order still leads to the second band", () => {
+  const rig = drillRig();
+  const tutorial = drillOrders(rig);
+  assert.equal(tutorial.step, "orders");
+  // A vanguard chariot that broke off, or a body that walked into the rebels: the
+  // drill must not wait for an order nobody is left to take.
+  for (const ally of tutorial.squad) rig.allies.damageAlly(ally, 999, ally.x, ally.y - 10);
+  rig.allies.update(1 / 60);
+  assert.equal(rig.state.allyFormations.length, 0, "the wiped squad was left on the field");
+
+  rig.tutorial.update(1 / 60);
+  assert.equal(tutorial.step, "arrive", `the empty muster left the drill at ${tutorial.step}`);
+  assert.equal(tutorial.wave.length, formationPresets.tutorialWave.slots.length);
+});
 
 test("one card serves every mode, and a live field has none", () => {
   const campaign = { totalGold: 120, stage: 3, identity: { fullName: "司马长风" } };
@@ -5906,13 +6252,16 @@ test("a drill battle says so on the stage tile instead of a number", () => {
   assert.equal(stageLabel({ stage: 3 }, {}), "03");
 });
 
-test("both locales carry the drill's copy and the drilled line's name", () => {
+test("both locales carry the drill's copy and the names of its three lines", () => {
   const keys = [
-    "prologue.tutorial", "battle.tutorialStage", "formation.tutorial", "tutorial.eyebrow",
+    "prologue.tutorial", "battle.tutorialStage", "formation.rebelVanguard",
+    "formation.rebelElite", "tutorial.eyebrow",
     "tutorial.brief.title", "tutorial.brief.drive", "tutorial.brief.fire",
     "tutorial.tactics.title", "tutorial.tactics.infantry",
     "tutorial.tactics.archers", "tutorial.tactics.chariot",
-    "tutorial.confirm", "tutorial.huntLabel", "tutorial.lineLabel", "tutorial.guide",
+    "tutorial.muster.title", "tutorial.muster.clan", "tutorial.muster.orders",
+    "tutorial.confirm", "tutorial.huntLabel", "tutorial.lineLabel",
+    "tutorial.orderLabel", "tutorial.squadLabel", "tutorial.guide",
   ];
   for (const locale of Object.keys(supportedLocales)) {
     for (const key of keys) assert.ok(hasTranslation(locale, key), `${locale} is missing ${key}`);
@@ -5935,16 +6284,40 @@ test("the drill's copy never sends a touch player to the keyboard", () => {
   }
 });
 
-test("the drill line is nine ranks led by one chariot, and not a rolled pattern", () => {
-  const preset = formationPresets.tutorialLine;
-  assert.equal(preset.slots.length, 9, `the line is ${preset.slots.length} bodies`);
-  assert.equal(preset.slots.filter(([type]) => type === "chariot").length, 1);
-  assert.equal(preset.slots.filter(([type]) => type === "archer").length, 2);
-  for (const [type] of preset.slots) assert.ok(enemyStats[type], `no stats row for "${type}"`);
-  // The campaign picks its lines with `formationsSpawned + wave - 1` modulo the
-  // pattern list: a preset in that list would turn up in a real battle.
-  assert.equal(formationPatterns.includes(preset), false, "the drill line is in the campaign's rotation");
-  assert.equal(hasTranslation(defaultLocale, preset.nameKey), true, "the preset has no banner name");
+test("the drill's three lines are presets, and none of them is a rolled pattern", () => {
+  const vanguard = formationPresets.tutorialLine;
+  assert.equal(vanguard.slots.length, 7, `the first band is ${vanguard.slots.length} bodies`);
+  assert.equal(vanguard.slots.filter(([type]) => type === "chariot").length, 1);
+  assert.equal(vanguard.slots.filter(([type]) => type === "archer").length, 2);
+
+  // The loan: eight men, a heavy on the centre slot and two bows behind it.
+  const squad = formationPresets.tutorialSquad;
+  assert.equal(squad.slots.length, 8, `the squad is ${squad.slots.length} bodies`);
+  assert.equal(squad.slots.filter(([type]) => type === "heavy").length, 1);
+  assert.equal(squad.slots.filter(([type]) => type === "archer").length, 2);
+  // It carries the hire ladder's own name: it *is* the same kind of line, it was
+  // just never bought, and the player should recognise it in the shop.
+  assert.equal(squad.nameKey, formationTiers[0].nameKey);
+  assert.equal(hasTranslation(defaultLocale, squad.nameKey), true);
+
+  // The second band: twice the first, and the only encounter in the drill that
+  // outnumbers the player even with his eight borrowed men.
+  const wave = formationPresets.tutorialWave;
+  assert.equal(wave.slots.length, 14, `the second band is ${wave.slots.length} bodies`);
+  assert.ok(wave.slots.length > vanguard.slots.length * 1.5, "the second band is not the bigger fight");
+  assert.equal(wave.slots.filter(([type]) => type === "chariot").length, 1);
+
+  const presets = [vanguard, squad, wave];
+  for (const preset of presets) {
+    for (const [type] of preset.slots) assert.ok(enemyStats[type], `no stats row for "${type}"`);
+    assert.equal(hasTranslation(defaultLocale, preset.nameKey), true, "the preset has no banner name");
+    // The campaign picks its lines with `formationsSpawned + wave - 1` modulo the
+    // pattern list: a preset in that list would turn up in a real battle.
+    assert.equal(formationPatterns.includes(preset), false, "a drill line is in the campaign's rotation");
+    // No two bodies on one station: a formation is a line, not a pile.
+    const stations = new Set(preset.slots.map(([, x, y]) => `${x},${y}`));
+    assert.equal(stations.size, preset.slots.length, "a drill line stacks two bodies on one station");
+  }
 });
 
 test("index.html puts the drill beside 出征 on the story card", () => {

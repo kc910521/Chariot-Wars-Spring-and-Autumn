@@ -1,5 +1,5 @@
 import {
-  allyStats, enemyStats, formationOrders, formationRules, hireCount, tierForIndex,
+  allyStats, enemyStats, formationOrders, formationPresets, formationRules, hireCount, tierForIndex,
 } from "../../data/formations.js";
 import { soundBorrowed, soundCues } from "../../data/sounds.js";
 import { clamp } from "../../utils/math.js";
@@ -599,18 +599,25 @@ export function createAllies({
     return best ?? fallback;
   }
 
-  function commitFormation({ centerX, centerY, heading, slotCoordinates }, index, tier) {
-    const { halfWidth, halfHeight } = formationExtent(tier);
+  // One line, committed to the field: the formation row, its stations filled with
+  // bodies, both pushed into the battle's lists. `pattern` is where the stations
+  // come from and `rung` is what the line calls itself afterwards - the index in
+  // the hire ladder for a purchase, `-1` for a line nobody bought (the drill's
+  // borrowed squad). `index` only decides the id: hired lines are numbered by their
+  // rung, and a scripted line takes the next free slot in the negative ladder.
+  function commitFormation({ centerX, centerY, heading, slotCoordinates }, { index, pattern, rung = index }) {
+    const { halfWidth, halfHeight } = formationExtent(pattern);
     const formation = {
       // Negative ids cannot collide with an enemy formation's `elapsed + random`.
       id: -(index + 1),
-      nameKey: tier.nameKey,
+      nameKey: pattern.nameKey,
       // Which rung of the ladder this line was bought from, kept on the line so a
       // save, a debugger and the camp preview can name it without the recount.
-      tier: index,
+      // `-1` is a scripted line: it fights like a hire and is nobody's property.
+      tier: rung,
       // The rung's stations, so the orders code can re-place this line without
       // having to know which line it happens to be holding.
-      slots: tier.slots,
+      slots: pattern.slots,
       x: centerX,
       y: centerY,
       heading,
@@ -619,7 +626,7 @@ export function createAllies({
       // The deepest station in the pattern, behind the centre: `formation-orders`
       // uses it to work out how far in front of a leader the ring has to sit for
       // no body to be standing in his hull.
-      depth: Math.max(...tier.slots.map(([, , slotY]) => slotY)),
+      depth: Math.max(...pattern.slots.map(([, , slotY]) => slotY)),
       color: "#5fbd79",
       friendly: true,
       // Who may give this line orders. An order is only honoured by the owner
@@ -633,9 +640,10 @@ export function createAllies({
       auraFlash: 0,
     };
     state.allyFormations.push(formation);
-    tier.slots.forEach(([type], order) => {
+    pattern.slots.forEach(([type], order) => {
       state.allies.push(createAllyUnit(type, slotCoordinates[order], formation, heading, order));
     });
+    return formation;
   }
 
   // Hires are a campaign-level count and each battle rebuilds the lines at full
@@ -650,11 +658,46 @@ export function createAllies({
     for (let index = 0; index < hires; index += 1) {
       const tier = tierForIndex(index);
       commitFormation(
-        findSpawn(index, formationExtent(tier), formationGroundExtent(tier), tier), index, tier,
+        findSpawn(index, formationExtent(tier), formationGroundExtent(tier), tier),
+        { index, pattern: tier, rung: index },
       );
     }
     return state.allyFormations;
   }
 
-  return { spawnFriendlyFormations, update, damageAlly };
+  // A line the *script* owns, laid out on the ground the caller chose: the drill
+  // lends the player eight men for one encounter (see `formationPresets`), and they
+  // are a line in every way that matters - the same banner, the same 出击 / 结阵,
+  // the same brains - except that nobody paid for them. So this path skips the
+  // spawn ladder entirely (the tutorial's map promises already picked the ground,
+  // and a re-roll here would move the scene the player is watching) and it never
+  // touches `campaign.friendlyFormations`, which is the hire count the shop reads.
+  //
+  // The formation it returns is the handle the caller keeps: `state.allyFormations`
+  // drops a line the frame its last body falls (see `update`), so the tutorial
+  // holds the object and asks it, not the list.
+  function spawnScenarioLine(name, { x, y, heading = 0 }) {
+    const pattern = formationPresets[name];
+    if (!pattern) throw new Error(`Unknown scenario line "${name}".`);
+    return commitFormation(
+      { centerX: x, centerY: y, heading, slotCoordinates: layoutSlots(pattern, x, y, heading) },
+      // The next free slot in the negative id ladder: a borrowed line is numbered
+      // like any other line and still cannot collide with an enemy's id.
+      { index: state.allyFormations.length, pattern, rung: -1 },
+    );
+  }
+
+  // The loan goes home. Takes the formation (not a name) so a caller cannot pull
+  // somebody else's line: the bodies are removed with it, and the line leaves both
+  // lists here instead of waiting for the next frame's filter - a caller that
+  // despawns on the frame the act ends must not have the HUD still count them.
+  function despawnScenarioLine(formation) {
+    if (!formation) return 0;
+    const before = state.allies.length;
+    state.allies = state.allies.filter((ally) => ally.formationId !== formation.id);
+    state.allyFormations = state.allyFormations.filter((line) => line !== formation);
+    return before - state.allies.length;
+  }
+
+  return { spawnFriendlyFormations, spawnScenarioLine, despawnScenarioLine, update, damageAlly };
 }

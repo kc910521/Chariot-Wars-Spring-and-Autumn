@@ -45,19 +45,53 @@ export const formationPatterns = [
 // line faces the player it is spawned against, and the ranks read from the front
 // (halberdiers) to the back (bows).
 //
-// `tutorialLine` is the tiger drill's second half: one chariot at the centre, six
-// halberdiers in front of it, two archers behind. Ten bodies including the tiger,
-// which is exactly the objective count stages.js hands a tutorial battle - the
-// extraction opens on the last of them, on the same kill-count rule a campaign
-// stage uses.
+// The drill has three of them - one battlefield, three encounters - and each is a
+// scripted composition rather than a rolled pattern:
+//
+//   tutorialLine  乱军先锋 - the band the tiger was guarding. Four spears, one
+//                 chariot on the centre slot, two archers. Seven bodies: the
+//                 first line a player ever fights, so it is the softest line on
+//                 the field - a front rank thin enough to break at speed, and one
+//                 chariot to teach the morale machine.
+//   tutorialSquad 族中援兵 - the eight men the clan lends the player for the third
+//                 encounter (paid for by nobody: see `formation.friendly`, the
+//                 name the hire ladder's first rung carries, because it is the
+//                 same kind of line). Five halberdiers, a heavy on the centre
+//                 slot, two bows: a rank that can hold while the chariot works.
+//   tutorialWave  乱军精锐 - the second band, the one the borrowed squad is for.
+//                 Seven halberdiers and a pair of heavies in front of a chariot,
+//                 four bows behind: twice the line, and the only encounter in the
+//                 drill that outnumbers the player.
+//
+// The body count of all three encounters is what stages.js hangs the drill's
+// objective counter on, so the numbers are read from here rather than typed a
+// second time (`tutorialLine.slots.length + tutorialWave.slots.length + 1`).
+// That total is the counter's ceiling, not the door: the drill's extraction is
+// the script's answer (see src/game/tutorial.js).
 export const formationPresets = {
   tutorialLine: {
-    nameKey: "formation.tutorial",
+    nameKey: "formation.rebelVanguard",
     slots: [
-      ["ge", -90, -30], ["ge", -54, -30], ["ge", -18, -30],
-      ["ge", 18, -30], ["ge", 54, -30], ["ge", 90, -30],
+      ["spear", -72, -30], ["spear", -24, -30], ["spear", 24, -30], ["spear", 72, -30],
       ["chariot", 0, 10],
-      ["archer", -45, 70], ["archer", 45, 70],
+      ["archer", -42, 70], ["archer", 42, 70],
+    ],
+  },
+  tutorialSquad: {
+    nameKey: "formation.friendly",
+    slots: [
+      ["ge", -72, -30], ["ge", -36, -30], ["ge", 0, -30], ["ge", 36, -30], ["ge", 72, -30],
+      ["heavy", 0, 18],
+      ["archer", -36, 72], ["archer", 36, 72],
+    ],
+  },
+  tutorialWave: {
+    nameKey: "formation.rebelElite",
+    slots: [
+      ["ge", -102, -40], ["ge", -68, -40], ["ge", -34, -40], ["ge", 0, -40],
+      ["ge", 34, -40], ["ge", 68, -40], ["ge", 102, -40],
+      ["heavy", -78, 8], ["chariot", 0, 8], ["heavy", 78, 8],
+      ["archer", -72, 72], ["archer", -24, 72], ["archer", 24, 72], ["archer", 72, 72],
     ],
   },
 };

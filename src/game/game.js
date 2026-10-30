@@ -302,10 +302,16 @@ function boot() {
   } = enemySystem;
 
   // The tutorial: a step machine that spawns through the enemy system's scenario
-  // entry points (a tiger, then a preset line) and hands the HUD its objective.
-  // It runs only in a tutorial battle; `arm()` is idempotent per battle.
+  // entry points (a tiger, then two preset bands) and the ally system's (the clan's
+  // borrowed squad). It runs only in a tutorial battle; `arm()` is idempotent per
+  // battle.
   const tutorial = createTutorial({
     state, player, world, campaign, enemySystem, updateHud,
+    // The borrowed squad is the ally system's, and the ally system is built below
+    // this line: `defer` is the same seam `damageAlly` uses, so the tutorial never
+    // holds a reference to a half-built system.
+    spawnScenarioLine: defer(() => alliesRef.current, "spawnScenarioLine"),
+    despawnScenarioLine: defer(() => alliesRef.current, "despawnScenarioLine"),
     // A beat's card is the DOM card every other dialog uses: the drill says which
     // beat is up, the card paints it (src/ui/battle-card.js).
     onOverlay: (overlay) => battleCard.show(cardForTutorial(overlay)),
@@ -572,7 +578,16 @@ function boot() {
       state.bossWarningTimer = Math.max(0, state.bossWarningTimer - delta);
       if (state.bossWarningTimer === 0) bossWarningElement.hidden = true;
     }
-    if (state.phase === "combat" && (state.bossStage ? state.bossDefeated : state.kills >= state.objectiveTarget)) {
+    // The extraction opens on the battle's own objective: the champion's fall, or
+    // the kill count a stage set. A drill is the exception - its extraction is the
+    // *scenario's* answer, not a body count, because the tutorial's encounters are
+    // three separate lines and only the last one finishing means the player has
+    // been taught what the drill is for (`state.tutorial` is cleared by
+    // `tutorial.finish()`). A tutorial battle therefore never opens its extraction
+    // here; the moment the script ends, `state.tutorial` is null and the ordinary
+    // rule below takes over on the same frame.
+    if (state.phase === "combat" && !state.tutorial
+      && (state.bossStage ? state.bossDefeated : state.kills >= state.objectiveTarget)) {
       beginExtraction();
     }
     checkExtractionArrival();
@@ -614,9 +629,15 @@ function boot() {
     // over inside the same tap rather than on the next frame - the button is
     // covered by the thumb that pressed it.
     onFormationOrder: () => {
-      if (!toggleOrder({
+      const given = toggleOrder({
         formations: state.allyFormations, members: state.allies, leader: player, owner: "player",
-      })) return;
+      });
+      if (!given) return;
+      // The drill counts the two orders it teaches (`noteOrder`): the press is
+      // reported from here rather than inferred from the line, because the button
+      // toggles and both presses may land between two frames. In every other battle
+      // there is no script listening and the call is a no-op.
+      tutorialRef.current.noteOrder(given);
       updateHud();
     },
     elements: {

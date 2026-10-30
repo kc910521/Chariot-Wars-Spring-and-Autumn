@@ -4,7 +4,7 @@ import { rectHitsAnyObstacle } from "./elements.js";
 import { buildWalkMap } from "./reachability.js";
 import { formationGroundExtent } from "./units/formations.js";
 
-// The tutorial's battlefield promises, and where its two encounters stand.
+// The tutorial's battlefield promises, and where its three encounters stand.
 //
 // The tiger is a pure function of the spawn point: it is on the field from the
 // first frame, so "where the chariot starts" is where it has to be reachable
@@ -12,15 +12,25 @@ import { formationGroundExtent } from "./units/formations.js";
 // battle starts (see createTutorialMapCheck), and a field that fails is rolled
 // again by map.js.
 //
-// The drill line is not. It forms when the tiger dies, and it has to form far
-// from wherever the chariot *is at that moment* - a player who chased the animal
+// The three lines are not. Each forms against wherever the chariot *is at that
+// moment*: 乱军先锋 when the tiger dies, the clan's squad when that line falls,
+// and 乱军精锐 when the squad has been mustered. A player who chased the animal
 // across the field must not be shown a pan back to the map's starting corner. So
-// the layout below is a *preference*, not a promise: findLineGround() walks it as
-// a ladder of bearings and distances from a live origin and takes the first
-// footprint that is clear and that the chariot can drive to.
+// the layout below is a *preference*, not a promise: layOnLadder() walks it as a
+// ladder of bearings and distances from a live origin and takes the first
+// footprint that is clear, free and that the chariot can drive to.
 export const TUTORIAL_LAYOUT = {
   tiger: { distance: 470, bearing: -0.34 },
   line: { distance: 900, bearing: 0.62 },
+  // The squad rides in from the far quarter: the player has just fought his way
+  // out to 0.62 rad, so the clan's men are mustered on the opposite side and the
+  // muster is not a walk back into the fight he just left. 560px is off screen
+  // vertically (the view is 592px tall), so the pan that reveals them is a
+  // reveal - and short, because this is the third pan of one drill.
+  squad: { distance: 560, bearing: -2.1 },
+  // The second band forms where the first one did: the same bearing and distance,
+  // so the two encounters read as one battlefield rather than as two maps.
+  wave: { distance: 900, bearing: 0.62 },
 };
 
 // Ground clearance for the tiger's spot, beyond the body that stands on it: it is
@@ -34,11 +44,18 @@ const TUTORIAL_TIGER_CLEARANCE = 26;
 // reads as "over there", never closer than a chariot's own length.
 export const LINE_DISTANCES = [900, 820, 740, 660, 580, 500, 420];
 
-// Bearings tried at each distance, as offsets from the authored 0.62 (down and to
-// the right of the chariot): the preferred direction first, then outwards, and
-// the far side last. Fixed order and no random numbers - the same battlefield and
-// the same standing place always give the same line.
-const LINE_BEARING_STEPS = [
+// The squad's ladder starts where its own reveal still works - 560px, off the
+// bottom of the view - and then steps *inwards*: a muster is a scene, and the
+// player has to be able to see his borrowed line and drive into it, so a blocked
+// spot is answered by standing the men nearer rather than by a longer pan. The
+// two outer rungs are the fallback for a corner where 560 is against a wall.
+export const SQUAD_DISTANCES = [560, 480, 420, 640, 720];
+
+// Bearings tried at each distance, as offsets from the authored bearing: the
+// preferred direction first, then outwards, and the far side last. Fixed order and
+// no random numbers - the same battlefield and the same standing place always give
+// the same line, for the drill's line, its squad and the second band alike.
+const BEARING_STEPS = [
   0, 0.35, -0.35, 0.7, -0.7, 1.05, -1.05, 1.4, -1.4, 1.75, -1.75, Math.PI,
 ];
 
@@ -49,6 +66,14 @@ const CHECK_ROWS = 3;
 
 export function lineGroundExtent() {
   return formationGroundExtent(formationPresets.tutorialLine);
+}
+
+export function squadGroundExtent() {
+  return formationGroundExtent(formationPresets.tutorialSquad);
+}
+
+export function waveGroundExtent() {
+  return formationGroundExtent(formationPresets.tutorialWave);
 }
 
 function pointAt(world, spawn, { distance, bearing }) {
@@ -72,7 +97,10 @@ function footprintFits(world, spot, halfWidth, halfHeight) {
     && spot.y - reach >= 0 && spot.y + reach <= world.height;
 }
 
-// Where the drill line stands, given where the chariot is standing now.
+// The one search behind every line the drill stands: walk a ladder of distances
+// and bearings out from a live origin and take the first footprint that fits the
+// world, is clear of the palisades, is not standing on a line already on the
+// field, and that the chariot can drive to.
 //
 // `walk` is an optional prebuilt walk map; the map check shares one fill across
 // its samples instead of paying for one per sample, which is sound because
@@ -87,36 +115,79 @@ function footprintFits(world, spot, halfWidth, halfHeight) {
 // says which it was: `clear` is true only for a footprint that was both clear and
 // drivable, so the map check can turn a false one into a re-roll while the drill
 // spawns regardless.
-export function findLineGround(origin, { world, obstacles = [], radius = 17, walk = null }) {
-  const { halfWidth, halfHeight } = lineGroundExtent();
+//
+// `avoid` is the ground other lines are already standing on, as
+// `{ x, y, halfWidth, halfHeight }` boxes - two footprints on the same ground
+// interpenetrate for the rest of the battle, and the second band is placed while
+// the borrowed squad is still on the field.
+function layOnLadder(origin, {
+  world, obstacles = [], radius = 17, walk = null, layout, distances, extent, avoid = [],
+}) {
+  const { halfWidth, halfHeight } = extent;
   const map = walk ?? buildWalkMap({ from: origin, world, obstacles, radius });
   let unreachable = null;
 
-  for (const distance of LINE_DISTANCES) {
-    for (const step of LINE_BEARING_STEPS) {
-      const bearing = TUTORIAL_LAYOUT.line.bearing + step;
+  for (const distance of distances) {
+    for (const step of BEARING_STEPS) {
+      const bearing = layout.bearing + step;
       const x = origin.x + Math.cos(bearing) * distance;
       const y = origin.y + Math.sin(bearing) * distance;
-      // The line faces the chariot it is about to fight, which is what makes the
-      // ranks read as a drill line rather than as a rectangle of soldiers.
+      // Every line faces the chariot it was summoned against, which is what makes
+      // the ranks read as a line of troops rather than as a rectangle of soldiers.
       const heading = Math.atan2(origin.y - y, origin.x - x);
       const spot = { x, y, heading };
       if (!footprintFits(world, spot, halfWidth, halfHeight)) continue;
       if (rectHitsAnyObstacle(x, y, halfWidth, halfHeight, heading, obstacles)) continue;
+      if (avoid.some((box) => box
+        && Math.abs(box.x - x) < box.halfWidth + halfWidth
+        && Math.abs(box.y - y) < box.halfHeight + halfHeight)) continue;
       if (map.reachable(spot)) return { ...spot, clear: true };
       unreachable = unreachable ?? spot;
     }
   }
 
   if (unreachable) return { ...unreachable, clear: false };
-  const distance = LINE_DISTANCES[0];
-  const bearing = TUTORIAL_LAYOUT.line.bearing;
+  const distance = distances[0];
+  const bearing = layout.bearing;
   return {
     x: origin.x + Math.cos(bearing) * distance,
     y: origin.y + Math.sin(bearing) * distance,
     heading: bearing + Math.PI,
     clear: false,
   };
+}
+
+// Where the drill line stands, given where the chariot is standing now.
+export function findLineGround(origin, { world, obstacles = [], radius = 17, walk = null, avoid = [] }) {
+  return layOnLadder(origin, {
+    world, obstacles, radius, walk, avoid,
+    layout: TUTORIAL_LAYOUT.line,
+    distances: LINE_DISTANCES,
+    extent: lineGroundExtent(),
+  });
+}
+
+// Where the clan's squad is mustered: the same ladder, from the opposite quarter
+// and on a shorter leash. It is a friendly line, so it is placed by the caller and
+// not by the ally spawner - the ally spawner reads the hire ladder, and nobody
+// bought this squad.
+export function findSquadGround(origin, { world, obstacles = [], radius = 17, walk = null, avoid = [] }) {
+  return layOnLadder(origin, {
+    world, obstacles, radius, walk, avoid,
+    layout: TUTORIAL_LAYOUT.squad,
+    distances: SQUAD_DISTANCES,
+    extent: squadGroundExtent(),
+  });
+}
+
+// Where the second band forms: the drill line's own ladder, on a wider footprint.
+export function findWaveGround(origin, { world, obstacles = [], radius = 17, walk = null, avoid = [] }) {
+  return layOnLadder(origin, {
+    world, obstacles, radius, walk, avoid,
+    layout: TUTORIAL_LAYOUT.wave,
+    distances: LINE_DISTANCES,
+    extent: waveGroundExtent(),
+  });
 }
 
 // The samples of walkable ground the line has to fit from.
@@ -141,12 +212,18 @@ function checkSamples(world) {
 //   1. the tiger's spot is clear, so the animal does not spawn inside a tree;
 //   2. the tiger is reachable from the spawn point, so nothing the tutorial asks
 //      the player to drive at is walled off behind a palisade;
-//   3. from anywhere the chariot can drive to, there is clear ground for the drill
-//      line. The line is placed against the player's live position, so that
-//      promise has to hold on the whole field and not just at the spawn; the
-//      samples below are positions the chariot can actually stand on (the same
-//      fill answers that), and a field too cramped to give the line a home
+//   3. from anywhere the chariot can drive to, there is clear ground for each of
+//      the three lines the drill stands - 乱军先锋, the clan's squad and
+//      乱军精锐. Every one of them is placed against the player's live position,
+//      so that promise has to hold on the whole field and not just at the spawn;
+//      the samples below are positions the chariot can actually stand on (the
+//      same fill answers that), and a field too cramped to give one of them a home
 //      anywhere gets re-rolled.
+//
+// The three footprints are asked about separately rather than by the widest of
+// them: a field that can hold the second band can hold the first, but a field
+// that can only hold the first must be refused too - the drill is not re-rollable
+// halfway through, and the squad is 8 bodies of script the run cannot do without.
 //
 // `radius` is the player's body: the flood fill asks the question for the widest
 // thing the tutorial asks to be drivable, which is the chariot.
@@ -161,9 +238,11 @@ export function createTutorialMapCheck({ world, spawn, circleIntersectsObstacle,
     const walk = buildWalkMap({ from: spawn, goal: tiger, world, obstacles, radius });
     if (!walk.reachable(tiger)) return false;
     for (const sample of checkSamples(world)) {
-      // Ground the chariot cannot get to is not a place the line has to fit on.
+      // Ground the chariot cannot get to is not a place a line has to fit on.
       if (!walk.reachable(sample)) continue;
       if (!findLineGround(sample, { world, obstacles, radius, walk }).clear) return false;
+      if (!findSquadGround(sample, { world, obstacles, radius, walk }).clear) return false;
+      if (!findWaveGround(sample, { world, obstacles, radius, walk }).clear) return false;
     }
     return true;
   };

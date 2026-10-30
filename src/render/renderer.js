@@ -329,6 +329,14 @@ export function createRenderer({
   // brighter, heavier stroke (the line is under way, and its slots are travelling
   // with the chariot), and a line with bodies still walking back from a 结阵
   // carries an amber stroke until the last of them is on station.
+  //
+  // The wash inside the ring is the ground the line *holds* - the same ground the
+  // banner mends, which is why `tickFormationAura` skips a marching line. So a line
+  // under 出击 holds nothing yet: its ring is travelling with the chariot, and it is
+  // painted as an outline only, so no tint sits under the player's own wheels while
+  // he drives his line about. 结阵 sets the ring down and the wash comes back with
+  // it, from the very frame the order lands (the stragglers' amber stroke says the
+  // ranks are still closing).
   function drawFormation(formation, friendly) {
     if (formation.x < camera.x - 120 || formation.x > camera.x + view.width + 120
       || formation.y < camera.y - 80 || formation.y > camera.y + view.height + 80) return;
@@ -339,10 +347,12 @@ export function createRenderer({
     context.save();
     context.translate(formation.x, formation.y);
     context.rotate(formation.heading);
-    context.fillStyle = friendly ? "rgba(64, 140, 92, 0.07)" : "rgba(126, 43, 31, 0.055)";
     context.beginPath();
     context.rect(-halfWidth, -halfHeight, halfWidth * 2, halfHeight * 2);
-    context.fill();
+    if (!marching) {
+      context.fillStyle = friendly ? "rgba(64, 140, 92, 0.07)" : "rgba(126, 43, 31, 0.055)";
+      context.fill();
+    }
     if (straggling) context.strokeStyle = "rgba(226, 189, 106, 0.5)";
     else if (friendly && marching) context.strokeStyle = "rgba(141, 240, 168, 0.62)";
     else context.strokeStyle = friendly ? "rgba(95, 189, 121, 0.34)" : "rgba(112, 39, 31, 0.2)";

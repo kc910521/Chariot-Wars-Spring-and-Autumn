@@ -146,21 +146,28 @@ export function createStageManager({
     state.bossWarningTimer = 0;
     hideBanner();
     state.objectiveTarget = tutorial
-      // The tiger, and then the line it was guarding. The same kill-count rule a
-      // campaign stage uses, so the extraction opens on the last body of the line.
-      ? formationPresets.tutorialLine.slots.length + 1
+      // The tiger and the two bands of rebels the drill puts in front of the
+      // player (乱军先锋 and 乱军精锐) - the whole scenario's body count, summed
+      // here from the presets that actually stand on the field. In a drill this is
+      // the *counter's* ceiling and nothing else: the HUD names and counts the
+      // encounter the script is on, and whether the extraction opens is the
+      // script's answer, not a number (`state.tutorial`, see the gate in
+      // src/game/game.js). It is still one total rather than a per-beat count so
+      // the number a player can add up and the target can never drift apart.
+      ? formationPresets.tutorialLine.slots.length + formationPresets.tutorialWave.slots.length + 1
       : state.bossStage ? 1
         : campaignRules.objectiveBase
           + Math.min(campaign.stage - 1, campaignRules.objectiveStageCap) * campaignRules.objectiveStep;
-    // A drill rolls no waves: its two encounters are the tutorial's own
+    // A drill rolls no waves: its three encounters are the tutorial's own
     // (src/game/tutorial.js), so the spawn clock never comes due.
     state.spawnTimer = tutorial ? Infinity : 0.8;
     // The hired lines are placed after the player has been returned to the
     // middle of the new map, and they draw no random numbers - spawning them
     // cannot shift the enemy placement on a seeded battlefield. A drill is not
     // the campaign's field, though: it is the player's own training against the
-    // tiger, with the 演武步阵 the drill spawns for it, so no hired line marches
-    // into one (and the drill's count of what stands on the field stays its own).
+    // tiger, and the line it stands there is the one the drill's script borrows
+    // from the clan (演武步阵), so no hired line marches into one (and the drill's
+    // count of what stands on the field stays its own).
     if (!tutorial) spawnFriendlyAllies();
     if (!tutorial && finalBattle) spawnBossSquad();
     else if (!tutorial && state.bossStage) spawnBoss();
