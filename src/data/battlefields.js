@@ -15,7 +15,7 @@ export const battlefields = [
     // walls that survive are ferry landings rather than palisades.
     mix: {
       obstacles: { wall: 0.35, tree: 0.65 },
-      terrain: { shallows: 7, sand: 3 },
+      terrain: { shallows: 10, sand: 8, grass: 5},
     },
   },
   {
@@ -24,7 +24,7 @@ export const battlefields = [
     // Wooded outskirts: canopy everywhere, dry ground underfoot.
     mix: {
       obstacles: { wall: 0.4, tree: 0.6 },
-      terrain: { grass: 5, sand: 3 },
+      terrain: { grass: 7, sand: 10 },
     },
   },
   {
@@ -42,7 +42,7 @@ export const battlefields = [
     // Open plain: sparse cover, a light mix of grass and dust.
     mix: {
       obstacles: { wall: 0.45, tree: 0.55 },
-      terrain: { grass: 6, sand: 2 },
+      terrain: { grass: 10, sand: 2, shallows: 2},
     },
   },
   {
