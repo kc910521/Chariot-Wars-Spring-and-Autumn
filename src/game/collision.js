@@ -141,8 +141,9 @@ export function createCollisionSystem({ campaign, world }) {
     const rows = Math.max(1, Math.ceil(world.height / SIGHT_CELL));
     const cells = new Array(columns * rows).fill(null);
     for (const obstacle of obstacles) {
-      // Sight is a separate column from movement: reeds stop a chariot but let an
-      // arrow through, so they are deliberately left out of this index.
+      // Sight is a separate column from movement, and the index files by that
+      // column rather than by type: a tree stops an axle but not an eye, so it is
+      // deliberately left out and the cell lists stay short.
       if (!clearsSight(obstacle)) continue;
       const [minX, minY, maxX, maxY] = sightBounds(obstacle);
       const firstColumn = clamp(Math.floor(minX / SIGHT_CELL), 0, columns - 1);

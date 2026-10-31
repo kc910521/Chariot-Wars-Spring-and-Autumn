@@ -121,7 +121,13 @@ export const obstacleKinds = deepFreeze({
   tree: {
     shape: "circle",
     blocksMovement: true,
-    blocksSight: true,
+    // A trunk stops an axle; a crown sits above the sight line. So a stand of
+    // trees is something to drive around rather than a blind: nothing that asks
+    // this column (the LOS walk, and through it archers and the aim assist) file
+    // a tree at all. Arrows still meet the trunk - ballistics test the movement
+    // column, not this one - so "you can see him, the bolt may still hit a tree"
+    // is deliberate, not an oversight.
+    blocksSight: false,
     // A maxed axle cap cuts this row down instead of shaking it: see
     // hasMaxedAxleCap() and fellTree().
     fellable: true,

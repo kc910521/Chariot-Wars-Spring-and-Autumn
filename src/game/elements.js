@@ -39,8 +39,10 @@ export function elementIntersects(x, y, radius, element) {
   return OBSTACLE_SHAPES[obstacleShape(element)](x, y, radius, element);
 }
 
-// Sight is a separate column from movement: reeds would stop a chariot but not an
-// arrow, and the LOS walk has to be able to ask that question on its own.
+// Sight is a separate column from movement, and the catalog now answers the two
+// differently: a tree blocks an axle but not an eye, a wall blocks both. The LOS
+// walk asks this column on its own, so the sight index only ever files the rows
+// that can interrupt a line - trees never enter it.
 export function clearsSight(element) {
   return obstacleRow(element)?.blocksSight ?? true;
 }

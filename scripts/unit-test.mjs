@@ -301,12 +301,20 @@ test("entities are clamped inside the world", () => {
   assert.equal(entity.y, world.height - 12);
 });
 
-test("obstacles block movement and line of sight", () => {
+test("a tree stops a body and lets the sight line through", () => {
   const entity = { x: 380, y: 400 };
   collision.moveEntitySafely(entity, 100, 0, 12);
   assert.equal(entity.x, 380, "walked into a tree");
-  assert.equal(collision.hasLineOfSight(300, 400, 640, 400), false);
+  // The crown is above the sight line, so the same tree the axle just bounced off
+  // must not interrupt a ray through its trunk.
+  assert.equal(collision.hasLineOfSight(300, 400, 640, 400), true, "a tree must not block a sight line");
   assert.equal(collision.hasLineOfSight(300, 200, 640, 200), true);
+  // The wall is the row that still is a blind, and it is the only one left.
+  const sight = createCollisionSystem({
+    campaign: { obstacles: [{ type: "wall", x: 480, y: 380, width: 40, height: 40 }], terrain: [] },
+    world,
+  });
+  assert.equal(sight.hasLineOfSight(300, 400, 640, 400), false, "a wall must still block a sight line");
 });
 
 test("terrain slows movement", () => {
@@ -340,7 +348,10 @@ test("line of sight follows whichever list the current battle installed", () => 
     { type: "tree", x: 500, y: 100, radius: 40 },
     { type: "wall", x: 400, y: 300, width: 200, height: 40 },
   ];
-  assert.equal(sight.hasLineOfSight(100, 100, 900, 100), false, "the tree must block the first line");
+  // The tree stands on a list the index has just been handed, and still does not
+  // interrupt a line - only the wall does. The same tree keeps stopping a body.
+  assert.equal(sight.hasLineOfSight(100, 100, 900, 100), true, "a tree must not block the first line");
+  assert.equal(sight.circleIntersectsObstacle(500, 100, 12), true, "the tree still stops a body");
   assert.equal(sight.hasLineOfSight(100, 320, 900, 320), false, "the wall must block the second");
   assert.equal(sight.hasLineOfSight(100, 220, 900, 220), true, "the gap between them is clear");
   local.obstacles = [];
@@ -348,15 +359,23 @@ test("line of sight follows whichever list the current battle installed", () => 
 });
 
 test("the indexed line of sight answers exactly like the full walk", () => {
-  // A dense mixed list, so the sampled lines cross many cells and both shapes.
+  // A dense mixed list, so the sampled lines cross many cells and both shapes. The
+  // trees in it are there on purpose: a tree is on the field but not in the index
+  // (a crown sits above the sight line), so the walk and the index have to agree on
+  // ignoring it. No catalog row blocks sight in a circle any more, so the circle
+  // path is pinned through an unknown type - which also keeps the `?? true` default
+  // in clearsSight() honest.
   const random = createSeededRandom(2024);
   const obstacles = [];
-  for (let index = 0; index < 44; index += 1) {
+  for (let index = 0; index < 48; index += 1) {
     const x = 40 + random() * (world.width - 80);
     const y = 40 + random() * (world.height - 80);
-    obstacles.push(index % 3 === 0
-      ? { type: "wall", x, y, width: 60 + random() * 100, height: 30 + random() * 40 }
-      : { type: "tree", x, y, radius: 24 + random() * 36 });
+    const kind = index % 3;
+    obstacles.push(kind === 0
+      ? { type: "tree", x, y, radius: 24 + random() * 36 }
+      : kind === 1
+        ? { type: "wall", x, y, width: 60 + random() * 100, height: 30 + random() * 40 }
+        : { type: "boulder", x, y, radius: 24 + random() * 36 });
   }
   const sight = createCollisionSystem({ campaign: { obstacles, terrain: [] }, world });
   let blocked = 0;
@@ -449,6 +468,19 @@ test("every obstacle row declares whether it blocks movement", () => {
   assert.equal(blocksMovement({ type: "tree", x: 0, y: 0, radius: 1 }), true);
   assert.equal(blocksMovement({ x: 0, y: 0, radius: 1 }), true);
 });
+// The two columns are independent, and the catalog leans on that: a tree is the row
+// that stops an axle but not an eye, a wall is the row that stops both. This is the
+// one place that states the intent, so flipping either column has to be a
+// deliberate edit here too.
+test("a tree stops a body but not a sight line, and a wall stops both", () => {
+  const tree = { type: "tree", x: 0, y: 0, radius: 30 };
+  const wall = { type: "wall", x: 0, y: 0, width: 120, height: 40 };
+  assert.equal(blocksMovement(tree), true, "a tree must stop a body");
+  assert.equal(clearsSight(tree), false, "a crown sits above the sight line, so a tree must not stop a line");
+  assert.equal(blocksMovement(wall), true);
+  assert.equal(clearsSight(wall), true, "a palisade is a blind");
+});
+
 
 console.log("[unit] map elements");
 
@@ -1434,7 +1466,7 @@ test("clouds drift and wrap instead of flying off the map", () => {
 
 // Felling is the one thing that removes an element from a live battle, so these
 // pin what it leaves behind: a stump that blocks nothing, and an obstacle list
-// whose identity changed (the sight index keys on exactly that).
+// whose identity changed (both indexes key on exactly that).
 test("a felled tree leaves a stump the field walks and shoots straight through", () => {
   const tree = { type: "tree", x: 500, y: 400, radius: 40 };
   const wall = { type: "wall", x: 400, y: 300, width: 200, height: 40 };
@@ -1444,7 +1476,11 @@ test("a felled tree leaves a stump the field walks and shoots straight through",
   assert.equal(isFellable(tree), true, "the tree row must be fellable");
   assert.equal(isFellable(wall), false, "a wall is not a tree");
   assert.equal(isFellable({ type: "boulder", x: 0, y: 0, radius: 10 }), false, "an unknown type is not fellable");
-  assert.equal(field.hasLineOfSight(300, 400, 700, 400), false, "the standing tree must block the line");
+  // A standing tree is a detour, not a blind, so the tree's own row is already a
+  // clear line - and stays one after the axe. The wall is what still interrupts a
+  // sight line, so the wall carries the stale-index check at the end.
+  assert.equal(field.hasLineOfSight(300, 400, 700, 400), true, "a standing tree must not block the line");
+  assert.equal(field.hasLineOfSight(300, 320, 700, 320), false, "the wall blocks the upper line");
 
   const before = local.obstacles;
   const stump = fellTree(local, tree);
@@ -1460,7 +1496,12 @@ test("a felled tree leaves a stump the field walks and shoots straight through",
 
   assert.equal(field.circleIntersectsObstacle(tree.x, tree.y, 12), false, "the stump still blocks movement");
   assert.equal(field.obstacleAt(tree.x, tree.y, 12), null, "the stump is not an obstacle");
-  assert.equal(field.hasLineOfSight(300, 400, 700, 400), true, "the stump still blocks sight");
+  assert.equal(field.hasLineOfSight(300, 400, 700, 400), true, "the stump does not block the line");
+  // Felling a tree can no longer move a sight answer, so the live list is swapped
+  // here instead: the sight index keys on identity, and a list it has not seen
+  // must clear with its wall.
+  local.obstacles = local.obstacles.filter((obstacle) => obstacle !== wall);
+  assert.equal(field.hasLineOfSight(300, 320, 700, 320), true, "a replaced list must rebuild the sight index");
 
   // Two trees, two stumps, and a campaign object built before stumps existed still
   // ends up with a list.
