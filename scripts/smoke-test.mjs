@@ -6,7 +6,7 @@ import { resolve } from "node:path";
 import { createHash } from "node:crypto";
 import { writeFileSync } from "node:fs";
 import { campaignRules, effectRules, projectileRules } from "../src/data/rules.js";
-import { equipment } from "../src/data/equipment.js";
+import { equipment, personnel } from "../src/data/equipment.js";
 import { formationPresets, formationRules, formationTiers } from "../src/data/formations.js";
 
 const projectRoot = resolve(import.meta.dirname, "..");
@@ -1030,6 +1030,27 @@ check("a new tab drops the pinned description",
   `pinned=${shopFrame().pinnedId} label="${shopFrame().info.label}"`);
 check("the fire seats the player and the living crew",
   shopFrame().dossier.camp.seats === 1 + game.campaign.roster.filter((member) => member.alive !== false).length,
+  `seats=${shopFrame().dossier.camp.seats}`);
+
+// The crossbowman is a row like any other: his own name in the title, his own
+// price on the button, and a press that seats one more figure at the fire - the
+// seat the ledger is willing to sell, not one it will refuse at the counter.
+const crossbowRow = personnel.find((member) => member.id === "crossbow");
+const crossbowShopRow = revealRow(crossbowRow.id);
+const seatsBeforeCrossbow = shopFrame().dossier.camp.seats;
+check("the crew page lists the crossbowman at his row's price",
+  Boolean(crossbowShopRow) && crossbowShopRow.title.includes(translate(crossbowRow.nameKey))
+    && crossbowShopRow.price === crossbowRow.price,
+  `title="${crossbowShopRow?.title}" price=${crossbowShopRow?.price} row=${crossbowRow.price}`);
+pressRect(crossbowShopRow.rect);
+check("pressing the crossbowman seats him at the fire",
+  shopFrame().dossier.camp.seats === seatsBeforeCrossbow + 1
+    && shopFrame().dossier.camp.previewSeat === true,
+  `seats=${shopFrame().dossier.camp.seats} preview=${shopFrame().dossier.camp.previewSeat}`);
+releaseRect(crossbowShopRow.rect);
+runFrames(1);
+check("releasing the crossbowman takes the seat back",
+  shopFrame().dossier.camp.seats === seatsBeforeCrossbow,
   `seats=${shopFrame().dossier.camp.seats}`);
 
 const [levyRung, horseRung, siegeRung] = formationTiers;

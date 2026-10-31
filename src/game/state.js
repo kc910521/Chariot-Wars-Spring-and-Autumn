@@ -81,6 +81,11 @@ export function createGameState({ seedSource = () => null } = {}) {
     particles: [],
     meleeEffects: [],
     bloodStains: [],
+    // Bodies left on the field. Pure scenery: written by the three death paths
+    // (enemies.damageEnemy, allies.damageAlly, combat.damageCompanion) through
+    // src/game/corpses.js, read by the renderer's corpse pass, capped at
+    // CORPSE_LIMIT so a long battle cannot grow it without bound.
+    corpses: [],
     spawnTimer: 0,
     lastTime: 0, // Owned by the frame loop (src/game/loop.js) — nothing else may write it.
     sound: true,

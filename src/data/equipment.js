@@ -69,9 +69,32 @@ export const horses = {
   ],
 };
 
+// The recruits, one row per body. `projectile` is the only "is this recruit
+// ranged" flag: the crew volley, the line-of-sight filter and the dismounted brain
+// read it instead of the role name. `footType` is the silhouette the companion
+// walks as once the chariot is gone, and the type the smoke trace fingerprints, so
+// the two rows that predate it keep the labels they have always had. `overlays` is
+// the weapon in his hands - the same list the camp fire seats him with.
 export const personnel = [
-  { id: "archer", nameKey: "personnel.archer.name", descriptionKey: "personnel.archer.description", icon: "➶", price: 150, health: 9, damage: 2, range: 400, cooldown: 1.9 },
-  { id: "halberdier", nameKey: "personnel.halberdier.name", descriptionKey: "personnel.halberdier.description", icon: "⚔", price: 120, health: 13, damage: 5, range: 58, cooldown: 1.5 },
+  {
+    id: "archer", nameKey: "personnel.archer.name", descriptionKey: "personnel.archer.description",
+    icon: "➶", price: 150, health: 9, damage: 2, range: 400, cooldown: 1.9,
+    projectile: "arrow", footType: "archer", overlays: Object.freeze(["bow"]),
+  },
+  {
+    // Three times the bow's reload for twice its damage, on a shot that passes
+    // through one extra body: a single bolt is worth less than the arrows it costs
+    // to load, a bolt down a rank is worth more. Its reach is shorter than the
+    // bow's on purpose - it is a close, flat weapon.
+    id: "crossbow", nameKey: "personnel.crossbow.name", descriptionKey: "personnel.crossbow.description",
+    icon: "➹", price: 200, health: 11, damage: 4, range: 320, cooldown: 5.7,
+    projectile: "bolt", footType: "crossbow", overlays: Object.freeze(["crossbow"]),
+  },
+  {
+    id: "halberdier", nameKey: "personnel.halberdier.name", descriptionKey: "personnel.halberdier.description",
+    icon: "⚔", price: 120, health: 13, damage: 5, range: 58, cooldown: 1.5,
+    footType: "ge", overlays: Object.freeze(["dagger-axe"]),
+  },
 ];
 
 export const emptyEquipment = () => Object.fromEntries(equipment.map((item) => [item.id, 0]));

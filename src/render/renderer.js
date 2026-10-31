@@ -5,6 +5,7 @@ import { effectRules } from "../data/rules.js";
 import { cloudDrift, elementCullMargin } from "../game/elements.js";
 import { createElementRenderer } from "./elements.js";
 import { createGroundPainter } from "./ground.js";
+import { createProjectileArt } from "./projectiles.js";
 import { createSpriteArt, spritePalette } from "./sprites.js";
 
 export function createRenderer({
@@ -22,6 +23,9 @@ export function createRenderer({
   // (src/render/ground.js). It is the only painter that talks about the world at
   // large, so it takes the camera rect and nothing else.
   const ground = createGroundPainter({ context });
+  // Everything that flies, and the debris it leaves: what an arrow, a bolt or a
+  // stone looks like is the projectile's own row's business (src/render/projectiles.js).
+  const projectileArt = createProjectileArt({ context });
 
   function roundedRect(x, y, width, height, radius) {
     context.beginPath();
@@ -33,47 +37,26 @@ export function createRenderer({
   // src/render/sprites.js is the only copy, this factory is the only binding.
   const sprites = createSpriteArt({ context });
 
-  function drawCombatant(unit, isPlayer = false, isAlly = false) {
-    if (unit.destroyed) return;
-    const knockedDown = !isPlayer && unit.knockedDown > 0;
-    context.save();
-    context.translate(unit.x, unit.y);
-    context.rotate(unit.angle + (knockedDown ? Math.PI / 2 : 0));
-    if (knockedDown) context.scale(1.25, 0.55);
-    else {
-      // The player is not a data row, so both he and any unit without a
-      // descriptor keep the pre-dispatch scale the art was tuned at.
-      const scale = unit.visual?.scale ?? (isPlayer ? 1.2 : 1.3);
-      context.scale(scale, scale);
-    }
+  // How a body that has lost its feet lies down. The ram's knock-down and the
+  // corpse pass both read these, so the two poses can never drift apart: the
+  // quarter turn takes the side-on art across its own bearing, the squash is the
+  // ground pressing it flat, and the chalk robe is what tells a fallen man from
+  // one still standing.
+  const DOWNED_ROLL = Math.PI / 2;
+  const DOWNED_SQUASH = { x: 1.25, y: 0.55 };
+  const DOWNED_ROBE = "#806c55";
+  // A wreck is not knocked over so much as dropped, so it keeps the bearing it
+  // died on, give or take the lean of a box that fell off its axle.
+  const WRECK_LEAN = 0.22;
 
-    const shadow = context.createRadialGradient(0, 8, 1, 0, 8, unit.radius * 1.2);
-    shadow.addColorStop(0, "rgba(35, 29, 21, 0.3)");
-    shadow.addColorStop(0.58, "rgba(35, 29, 21, 0.14)");
-    shadow.addColorStop(1, "rgba(35, 29, 21, 0)");
-    context.fillStyle = shadow;
-    context.beginPath();
-    context.ellipse(0, 8, (unit.radius || 14) * 1.25, (unit.radius || 14) * 0.82, 0, 0, Math.PI * 2);
-    context.fill();
-
-    // The formation aura's heal, drawn under the body so it never hides the
-    // silhouette: a pulse that fades over the same `formationAura.flash` as the
-    // banner. A friendly ring mends the player as well as the line it belongs to,
-    // so his body takes the same green; an enemy line's beat is amber, and the
-    // player standing in one is a trespasser, not a patient.
-    if (unit.healFlash > 0) {
-      const glow = Math.min(1, unit.healFlash / formationAura.flash);
-      context.fillStyle = isAlly || isPlayer
-        ? `rgba(126, 233, 152, ${0.34 * glow})`
-        : `rgba(232, 166, 105, ${0.3 * glow})`;
-      context.beginPath();
-      context.arc(0, 0, (unit.radius || 14) + 6, 0, Math.PI * 2);
-      context.fill();
-    }
-
-    // Which silhouette to draw is the row's `visual.kind`, so a new unit type
-    // chooses its art in the data table instead of by editing this chain. The
-    // player has no row: he rides the chariot art while mounted, walks otherwise.
+  // Which silhouette a body wears comes from its row's `visual.kind`, so a new
+  // unit type picks its art in the data table instead of by editing this chain.
+  // The player has no row: he rides the chariot art while mounted, walks otherwise.
+  //
+  // The painter owns the body and nothing else: the caller owns the transform, the
+  // ground shadow, the heal glow, the health bar and the champion's name. That is
+  // what lets the corpse pass below reuse every silhouette without the live trim.
+  function paintBody(unit, { isPlayer = false, isAlly = false, knockedDown = false } = {}) {
     const kind = unit.visual?.kind ?? (isPlayer && player.mode !== "foot" ? "chariot" : "foot");
     if (kind === "elephant") {
       context.fillStyle = "rgba(44, 32, 21, 0.3)";
@@ -293,7 +276,7 @@ export function createRenderer({
       });
     } else {
       sprites.drawFootFigure({
-        robeColor: knockedDown ? "#806c55" : unit.hitFlash > 0 ? "#fff0c7"
+        robeColor: knockedDown ? DOWNED_ROBE : unit.hitFlash > 0 ? "#fff0c7"
           : isPlayer ? spritePalette.playerRobe : isAlly ? spritePalette.allyRobe
             : (unit.visual?.robe ?? spritePalette.enemyRobe),
         friendly: isPlayer || isAlly,
@@ -301,6 +284,49 @@ export function createRenderer({
         hitFlash: unit.hitFlash,
       });
     }
+  }
+
+  function drawCombatant(unit, isPlayer = false, isAlly = false) {
+    if (unit.destroyed) return;
+    const knockedDown = !isPlayer && unit.knockedDown > 0;
+    context.save();
+    context.translate(unit.x, unit.y);
+    context.rotate(unit.angle + (knockedDown ? DOWNED_ROLL : 0));
+    if (knockedDown) context.scale(DOWNED_SQUASH.x, DOWNED_SQUASH.y);
+    else {
+      // The player is not a data row, so both he and any unit without a
+      // descriptor keep the pre-dispatch scale the art was tuned at.
+      const scale = unit.visual?.scale ?? (isPlayer ? 1.2 : 1.3);
+      context.scale(scale, scale);
+    }
+
+    const shadow = context.createRadialGradient(0, 8, 1, 0, 8, unit.radius * 1.2);
+    shadow.addColorStop(0, "rgba(35, 29, 21, 0.3)");
+    shadow.addColorStop(0.58, "rgba(35, 29, 21, 0.14)");
+    shadow.addColorStop(1, "rgba(35, 29, 21, 0)");
+    context.fillStyle = shadow;
+    context.beginPath();
+    context.ellipse(0, 8, (unit.radius || 14) * 1.25, (unit.radius || 14) * 0.82, 0, 0, Math.PI * 2);
+    context.fill();
+
+    // The formation aura's heal, drawn under the body so it never hides the
+    // silhouette: a pulse that fades over the same `formationAura.flash` as the
+    // banner. A friendly ring mends the player as well as the line it belongs to,
+    // so his body takes the same green; an enemy line's beat is amber, and the
+    // player standing in one is a trespasser, not a patient.
+    if (unit.healFlash > 0) {
+      const glow = Math.min(1, unit.healFlash / formationAura.flash);
+      context.fillStyle = isAlly || isPlayer
+        ? `rgba(126, 233, 152, ${0.34 * glow})`
+        : `rgba(232, 166, 105, ${0.3 * glow})`;
+      context.beginPath();
+      context.arc(0, 0, (unit.radius || 14) + 6, 0, Math.PI * 2);
+      context.fill();
+    }
+
+    // Who the silhouette belongs to is `paintBody`'s business; this pass only
+    // supplies the pose and the live decoration.
+    paintBody(unit, { isPlayer, isAlly, knockedDown });
 
     if (!isPlayer && (unit.boss || unit.health < unit.maxHealth)) {
       context.fillStyle = "rgba(47, 33, 24, 0.7)";
@@ -315,6 +341,38 @@ export function createRenderer({
       context.font = "bold 12px serif";
       context.textAlign = "center";
       context.fillText(translate(unit.nameKey), 0, -unit.radius - 17);
+    }
+    context.restore();
+  }
+
+  // The corpse pass. A corpse is a snapshot in `state.corpses`, not a unit, so it is
+  // given a body-shaped view of that snapshot and nothing else: the living pass's
+  // own silhouettes (`paintBody`), laid out the way the ram already lays out a
+  // knock-down - turned on its side, flattened, chalked - and with none of the live
+  // trim: no ground shadow, no health bar, no champion's name, no weapon in hand.
+  // A chariot leaves neither horses nor wheels, only the box `drawChariotWreck`
+  // paints, so `overlays` stays empty for the same reason a wreck has no crew.
+  // `scale` is left out of the view on purpose: the lying pose is the same size as
+  // the ram's knock-down (which ignores the row's scale too), so a body does not
+  // shrink the moment it stops getting up.
+  const corpseAsBody = (corpse) => ({
+    radius: corpse.radius,
+    visual: { kind: corpse.kind, robe: corpse.robe, overlays: [] },
+  });
+
+  function drawCorpse(corpse) {
+    context.save();
+    context.translate(corpse.x, corpse.y);
+    if (corpse.kind === "chariot") {
+      context.rotate(corpse.angle + WRECK_LEAN);
+      context.scale(corpse.scale, corpse.scale);
+      sprites.drawChariotWreck({ robeColor: corpse.robe ?? spritePalette.enemyRobe });
+    } else {
+      // A beast or a toppled engine takes the same squash: it is the one pose the
+      // field already reads as "this body is out of the fight", whatever it was.
+      context.rotate(corpse.angle + DOWNED_ROLL);
+      context.scale(DOWNED_SQUASH.x, DOWNED_SQUASH.y);
+      paintBody(corpseAsBody(corpse), { knockedDown: true });
     }
     context.restore();
   }
@@ -481,6 +539,15 @@ export function createRenderer({
       context.restore();
     }
 
+    // The fallen lie on the stains they left and under everything that still
+    // stands: a body on the ground is scenery, so a live unit, a dropped chest or a
+    // stump must always read on top of it. A corpse is a static snapshot with no
+    // update tick, so this cull is the only work one costs a frame.
+    for (const corpse of state.corpses) {
+      if (!inView(corpse.x, corpse.y)) continue;
+      drawCorpse(corpse);
+    }
+
     // Stumps sit under everything that moves: a felled tree leaves scenery, and the
     // chariot that cut it down drives straight over the top of it.
     for (const stump of getStumps()) {
@@ -500,19 +567,7 @@ export function createRenderer({
       context.globalAlpha = alpha;
       context.translate(arrow.x, arrow.y);
       context.rotate(arrow.angle);
-      context.strokeStyle = "#7a5834";
-      context.fillStyle = "#c3a16a";
-      context.lineWidth = 2;
-      context.beginPath();
-      context.moveTo(-8, 0);
-      context.lineTo(8, 0);
-      context.stroke();
-      context.beginPath();
-      context.moveTo(8, 0);
-      context.lineTo(3, -3);
-      context.lineTo(3, 3);
-      context.closePath();
-      context.fill();
+      projectileArt.paintDecal(arrow);
       context.restore();
     }
 
@@ -611,35 +666,16 @@ export function createRenderer({
 
     for (const bullet of state.bullets) {
       if (!inView(bullet.x, bullet.y, 40)) continue;
-      const color = bullet.kind === "stone" ? "#5f3428"
-        : bullet.owner === "enemy" ? "#a53b2b" : bullet.owner === "ally" ? "#888c56" : "#f1d28b";
       const height = bullet.z ?? 0;
+      const radius = bullet.radius ?? 3.5;
       context.fillStyle = "rgba(48, 38, 26, 0.2)";
       context.beginPath();
-      context.ellipse(bullet.x, bullet.y, bullet.radius ?? 3.5, (bullet.radius ?? 3.5) * 0.55, 0, 0, Math.PI * 2);
+      context.ellipse(bullet.x, bullet.y, radius, radius * 0.55, 0, 0, Math.PI * 2);
       context.fill();
       context.save();
       context.translate(bullet.x, bullet.y - height);
       context.rotate(Math.atan2(bullet.vy, bullet.vx));
-      context.fillStyle = color;
-      if (bullet.kind === "stone") {
-        context.beginPath();
-        context.arc(0, 0, bullet.radius ?? 6, 0, Math.PI * 2);
-        context.fill();
-      } else {
-        context.strokeStyle = color;
-        context.lineWidth = 2.5;
-        context.beginPath();
-        context.moveTo(-7, 0);
-        context.lineTo(5, 0);
-        context.stroke();
-        context.beginPath();
-        context.moveTo(5, 0);
-        context.lineTo(1, -3);
-        context.lineTo(1, 3);
-        context.closePath();
-        context.fill();
-      }
+      projectileArt.paint(bullet);
       context.restore();
     }
 

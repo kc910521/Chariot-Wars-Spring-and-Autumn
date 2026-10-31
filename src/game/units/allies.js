@@ -4,6 +4,7 @@ import {
 import { soundBorrowed, soundCues } from "../../data/sounds.js";
 import { clamp } from "../../utils/math.js";
 import { addBloodStain } from "../blood.js";
+import { addCorpse } from "../corpses.js";
 import { formationExtent, formationGroundExtent, isInsideFormation, layoutSlots, tickFormationAura } from "./formations.js";
 import { advanceOrders } from "./formation-orders.js";
 import {
@@ -381,6 +382,9 @@ export function createAllies({
     if (ally.health === 0) {
       ally.destroyed = true;
       burst(ally.x, ally.y, formationRules.visual.deathBurst);
+      // The line's dead stay on the field like everyone else's; the snapshot is
+      // drawn once per frame and never ticks.
+      addCorpse(state, ally);
       // A hired vehicle goes down like a chariot, a man like a man. Both are
       // borrowed cues until the line has deaths of its own.
       playSound(ally.vehicle ? soundBorrowed.chariotDied : soundBorrowed.friendlyDied);

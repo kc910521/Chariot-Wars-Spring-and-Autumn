@@ -63,6 +63,15 @@ export function chariotRigBox(horseCount = 1, kit = null) {
 }
 
 
+// Local-space extent of a wrecked chariot (`drawChariotWreck`): the fallen box,
+// the snapped shaft and the spokes thrown clear of it. There are no wheels in it,
+// on purpose - what is left after the axle goes is the box. A silhouette change
+// that outgrows this box fails the unit test that measures the real drawing
+// calls, exactly like `chariotRigBox` above.
+export const CHARIOT_WRECK_BOX = Object.freeze({
+  minX: -20, minY: -15, maxX: 22, maxY: 18, width: 42, height: 33,
+});
+
 // One painter bound to one 2d context, mirroring createElementRenderer.
 export function createSpriteArt({ context }) {
   function roundedRect(x, y, width, height, radius) {
@@ -148,6 +157,36 @@ export function createSpriteArt({ context }) {
       context.beginPath();
       context.moveTo(4, 0);
       context.lineTo(17, 0);
+      context.stroke();
+    },
+    // The crossbow on foot: a wooden stock with a straight steel bow already spanned.
+    // Distinct from `bow` at a glance, because the bar is straight where the bow is
+    // an arc.
+    crossbow() {
+      context.strokeStyle = "#59412d";
+      context.lineWidth = 2;
+      context.beginPath();
+      context.moveTo(-8, -4);
+      context.lineTo(-12, 2);
+      context.stroke();
+      context.strokeStyle = "#503826";
+      context.lineWidth = 2.5;
+      context.beginPath();
+      context.moveTo(-2, -1);
+      context.lineTo(16, -1);
+      context.stroke();
+      context.strokeStyle = "#8fa6b4";
+      context.lineWidth = 2;
+      context.beginPath();
+      context.moveTo(12, -7);
+      context.lineTo(12, 5);
+      context.stroke();
+      context.strokeStyle = "#d5c294";
+      context.lineWidth = 1;
+      context.beginPath();
+      context.moveTo(12, -7);
+      context.lineTo(5, -1);
+      context.lineTo(12, 5);
       context.stroke();
     },
     sling() {
@@ -300,6 +339,55 @@ export function createSpriteArt({ context }) {
     context.lineWidth = 1;
     context.stroke();
   }
+
+  // How a rider reads on the deck: a dot in the role's colour plus one mark. Keyed
+  // by personnel role, because the roster only knows a role id; `halberdier` is the
+  // fallback - a polearm is the plainest kit - so a role from a table nobody has
+  // drawn yet still shows a body on the hull instead of nothing.
+  const CREW_MARKS = Object.freeze({
+    archer(crewX, crewY) {
+      context.fillStyle = "#88bd8a";
+      context.beginPath();
+      context.arc(crewX, crewY, 2.5, 0, Math.PI * 2);
+      context.fill();
+      context.strokeStyle = "#493421";
+      context.lineWidth = 1;
+      context.beginPath();
+      context.arc(crewX, crewY, 3.5, -1.1, 1.1);
+      context.stroke();
+    },
+    crossbow(crewX, crewY) {
+      // A steel dot with a straight bow over it: a crossbow reads as a bar where the
+      // bow reads as an arc, even at five pixels.
+      context.fillStyle = "#9fb7c9";
+      context.beginPath();
+      context.arc(crewX, crewY, 2.5, 0, Math.PI * 2);
+      context.fill();
+      context.strokeStyle = "#493421";
+      context.lineWidth = 1;
+      context.beginPath();
+      context.moveTo(crewX - 2.5, crewY);
+      context.lineTo(crewX + 2.5, crewY);
+      context.stroke();
+      context.strokeStyle = "#d8c18d";
+      context.beginPath();
+      context.moveTo(crewX + 0.8, crewY - 2.4);
+      context.lineTo(crewX + 0.8, crewY + 2.4);
+      context.stroke();
+    },
+    halberdier(crewX, crewY) {
+      context.fillStyle = "#d7b574";
+      context.beginPath();
+      context.arc(crewX, crewY, 2.5, 0, Math.PI * 2);
+      context.fill();
+      context.strokeStyle = "#d8c18d";
+      context.lineWidth = 1;
+      context.beginPath();
+      context.moveTo(crewX, crewY - 2);
+      context.lineTo(crewX + 4, crewY - 7);
+      context.stroke();
+    },
+  });
 
   // The chariot rig: hull, wheels, pole, the horse team and the crew dots.
   // `horseCount` is the team the campaign owns, `elapsed` drives the gait,
@@ -471,25 +559,84 @@ export function createSpriteArt({ context }) {
     for (const overlay of overlays) CHARIOT_OVERLAYS[overlay]?.();
     for (let index = 0; index < Math.min(crew.length, CREW_SLOTS.length); index += 1) {
       const [crewX, crewY] = CREW_SLOTS[index];
-      context.fillStyle = crew[index].role === "archer" ? "#88bd8a" : "#d7b574";
-      context.beginPath();
-      context.arc(crewX, crewY, 2.5, 0, Math.PI * 2);
-      context.fill();
-      if (crew[index].role === "archer") {
-        context.strokeStyle = "#493421";
-        context.lineWidth = 1;
-        context.beginPath();
-        context.arc(crewX, crewY, 3.5, -1.1, 1.1);
-        context.stroke();
-      } else {
-        context.strokeStyle = "#d8c18d";
-        context.lineWidth = 1;
-        context.beginPath();
-        context.moveTo(crewX, crewY - 2);
-        context.lineTo(crewX + 4, crewY - 7);
-        context.stroke();
-      }
+      (CREW_MARKS[crew[index].role] ?? CREW_MARKS.halberdier)(crewX, crewY);
     }
+  }
+
+  // What is left of a chariot that lost its crew. The rig is a carriage with a
+  // team, a mast and a banner; a wreck is only the box - no wheels, no pole, no
+  // horses, no flag - because the shape the player recognises at a glance is the
+  // deck he was riding on, not the animal that was dragging it. It keeps the rig's
+  // own planks, rivets and robe-painted flank, so the wreck still reads as *that*
+  // carriage, and it paints no arc at all: the only circles on a chariot are its
+  // wheels.
+  //
+  // The caller owns the tilt and the cull; this paints the box and the debris in
+  // unit-local space, inside CHARIOT_WRECK_BOX.
+  function drawChariotWreck({ robeColor = spritePalette.enemyRobe } = {}) {
+    // The stock deck (-15..11), dropped on a corner, so the fall is in the outline
+    // rather than in a rotation the caller would have to guess.
+    context.fillStyle = "#674a2f";
+    context.beginPath();
+    context.moveTo(-16, -8);
+    context.lineTo(1, -13);
+    context.lineTo(13, -7);
+    context.lineTo(14, 6);
+    context.lineTo(-2, 14);
+    context.lineTo(-16, 7);
+    context.closePath();
+    context.fill();
+    context.strokeStyle = "#d4ae6d";
+    context.lineWidth = 1.5;
+    context.stroke();
+
+    // The painted flank, so a wreck keeps the colours of the side that bought it.
+    context.fillStyle = robeColor;
+    context.beginPath();
+    context.moveTo(-13, -4);
+    context.lineTo(9, -6);
+    context.lineTo(10, 2);
+    context.lineTo(-12, 4);
+    context.closePath();
+    context.fill();
+
+    // A last plank, snapped at the axle.
+    context.strokeStyle = "#f3d88f";
+    context.lineWidth = 1.5;
+    context.beginPath();
+    context.moveTo(-9, 7);
+    context.lineTo(6, 5);
+    context.stroke();
+
+    // Rivets are square on purpose: no arc here means no wheel here.
+    context.fillStyle = "#67472d";
+    for (const [studX, studY] of [[-12, -6], [2, -10], [10, -4], [-10, 5]]) {
+      context.fillRect(studX, studY, 2, 2);
+    }
+
+    // The shaft, snapped off at the nose.
+    context.strokeStyle = "#6b4a2c";
+    context.lineWidth = 3.5;
+    context.beginPath();
+    context.moveTo(13, 4);
+    context.lineTo(20, -3);
+    context.stroke();
+    context.strokeStyle = "#ffe1a0";
+    context.lineWidth = 1.5;
+    context.beginPath();
+    context.moveTo(13, 4);
+    context.lineTo(20, -3);
+    context.stroke();
+
+    // Two spokes thrown clear - all the wheels left.
+    context.strokeStyle = "#c9a861";
+    context.lineWidth = 2;
+    context.beginPath();
+    context.moveTo(-18, 11);
+    context.lineTo(-9, 15);
+    context.moveTo(-13, 17);
+    context.lineTo(-5, 9);
+    context.stroke();
   }
 
   // The foot silhouette - the default, shared by the ranks and by anyone walking.
@@ -572,6 +719,7 @@ export function createSpriteArt({ context }) {
 
   return {
     drawChariotRig,
+    drawChariotWreck,
     drawFootFigure,
     // What the art can paint, so a data row asking for kit nobody drew is a test
     // failure instead of a silently missing weapon.
@@ -579,5 +727,8 @@ export function createSpriteArt({ context }) {
       foot: Object.keys(FOOT_OVERLAYS),
       chariot: Object.keys(CHARIOT_OVERLAYS),
     },
+    // The roles that have a place on the deck. The painter falls back to the
+    // halberdier for anything else, so this list is what a test can pin.
+    crewMarks: Object.keys(CREW_MARKS),
   };
 }

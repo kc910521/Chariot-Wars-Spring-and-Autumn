@@ -150,6 +150,12 @@ export const soundBorrowed = Object.freeze({
   victory: soundCues.shopUpgrade,
   // TODO(sound): a shield/buckler deflect. A hit landing is the closest thing.
   playerBlocked: soundCues.arrowHit,
+  // TODO(sound): a recruit's crossbow release of its own - a hard wooden clack.
+  // Until then it takes the player's crossbow, which is the only crossbow in the
+  // set: a recruit volley should not be the bow string. It inherits that cue's
+  // `chariotArrow` mix (gain 0.5), so a bolt lands louder than an arrow - which is
+  // the right read for a slower, heavier weapon.
+  crossbowShoot: soundCues.chariotArrow,
   // TODO(sound): stone off armour. The ground impact is the same material.
   stoneBodyHit: soundCues.stoneGround,
   // TODO(sound): a chariot breaking up. Felled timber reads as the cart going.

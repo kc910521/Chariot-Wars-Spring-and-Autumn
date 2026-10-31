@@ -11,6 +11,7 @@ import {
 } from "../src/data/equipment.js";
 import { campaignRules, chariotRules, effectRules, projectileRules } from "../src/data/rules.js";
 import { addBloodStain } from "../src/game/blood.js";
+import { addCorpse, CORPSE_LIMIT } from "../src/game/corpses.js";
 import { selectAimTarget } from "../src/game/aim.js";
 import { createPlayerIdentity, pickWeighted } from "../src/game/identity.js";
 import { battlefields } from "../src/data/battlefields.js";
@@ -36,17 +37,19 @@ import {
 import { wildAnimalStats } from "../src/data/wilds.js";
 import { createElementRenderer } from "../src/render/elements.js";
 import { createGroundPainter } from "../src/render/ground.js";
+import { createProjectileArt } from "../src/render/projectiles.js";
 import { createRenderer } from "../src/render/renderer.js";
-import { chariotRigBox, createSpriteArt, spritePalette } from "../src/render/sprites.js";
+import { chariotRigBox, CHARIOT_WRECK_BOX, createSpriteArt, spritePalette } from "../src/render/sprites.js";
 import { CHARIOT_CONTROL_CONFIG, createPlayerController } from "../src/game/player.js";
 import {
   allyStats, bossTypes, chariotTactics, enemyStats, formationAura, formationOrders, formationPatterns,
   formationPresets, formationRules, formationTiers, hireCount, nextTierFor, tierForIndex,
 } from "../src/data/formations.js";
 import {
-  createBallisticProjectile, createProjectileSystem, solveBallisticElevation,
+  createBallisticProjectile, createProjectileSystem, projectileImpactEffects, solveBallisticElevation,
   solveTimeToGround, updateProjectiles,
 } from "../src/game/projectiles.js";
+import { projectileKinds, resolveProjectileKind } from "../src/data/projectiles.js";
 import { createEnemies } from "../src/game/units/enemies.js";
 import { createBehaviours } from "../src/game/units/behaviours.js";
 import {
@@ -88,7 +91,7 @@ import {
   soundMix, soundPurchaseCues, soundStreams, soundChannels,
 } from "../src/data/sounds.js";
 import { buildMixTable, createAudio, indexSoundFiles } from "../src/assets/audio.js";
-import { pickFinalStage } from "../src/game/stages.js";
+import { pickFinalStage, createStageManager } from "../src/game/stages.js";
 import {
   VICTORY_LOCK_KEY, VICTORY_LOCK_MINUTES, VICTORY_LOCK_MS, createVictoryLock, parseVictoryRecord,
 } from "../src/game/victory-lock.js";
@@ -775,7 +778,7 @@ test("clouds are the last thing painted, and only ever a veil", () => {
     },
     state: {
       elapsed: 1.5, shake: 0, damageFlash: 0, phase: "running", extractionPoint: null,
-      particles: [], bloodStains: [], groundArrows: [], drops: [], meleeEffects: [],
+      particles: [], bloodStains: [], corpses: [], groundArrows: [], drops: [], meleeEffects: [],
       formations: [], allyFormations: [], bullets: [],
       enemies: [enemy], footCompanions: [], allies: [],
     },
@@ -1789,7 +1792,7 @@ function createTestProjectiles({ state, player, dust = () => {}, burst = () => {
     },
     burst,
     dust,
-    playSound: () => {},
+    playSound: extras.playSound ?? (() => {}),
     damageEnemy: extras.damageEnemy ?? (() => {}),
     damagePlayer: extras.damagePlayer ?? (() => {}),
     damageCompanion: extras.damageCompanion ?? (() => {}),
@@ -1912,9 +1915,50 @@ test("stones raise dust on ground, obstacle and body impacts", () => {
   assert.equal(bodyHit.dusts.length, 1, "a stone that hits a body should still kick up dust");
 });
 
+test("an enemy bolt passes through a body on foot, never through the champion", () => {
+  // One row decides the same thing for both owners: the crossbowman the player
+  // hires and the 弩兵 row in `enemyStats` fire the same `bolt`, so the piercing
+  // has to live in the projectile system rather than in whoever pulled the
+  // trigger. The champion's rig is where an enemy shot always ends.
+  function enemyShotAtTheLine(row) {
+    const state = {
+      bullets: [], groundArrows: [], enemies: [], particles: [],
+      footCompanions: [{ x: 1310, y: 1500, radius: 12, destroyed: false, health: 9 }],
+    };
+    const player = { x: 1450, y: 1500, radius: 17, mode: "foot" };
+    const hits = { player: 0, companion: 0 };
+    const projectiles = createTestProjectiles({
+      state,
+      player,
+      extras: {
+        damagePlayer: () => { hits.player += 1; },
+        damageCompanion: () => { hits.companion += 1; },
+      },
+    });
+    projectiles.fireEnemyShot({ ...row, x: 1100, y: 1500 }, 0, player);
+    for (let frame = 0; frame < 600 && state.bullets.length > 0; frame += 1) {
+      projectiles.update(1 / 60);
+    }
+    return { hits, left: state.bullets.length };
+  }
+
+  // The companion is the first body in the line and the champion stands behind
+  // him: the bolt spends its one pass-through and ends on the hull.
+  const bolt = enemyShotAtTheLine(enemyStats.crossbow);
+  assert.deepEqual(bolt.hits, { player: 1, companion: 1 },
+    "the bolt did not go through the companion into the champion");
+  assert.equal(bolt.left, 0, "the bolt should not outlive its last body");
+
+  // A bow has no pass-through, so the same shot stops at the first man and the
+  // champion behind him is never touched.
+  const arrow = enemyShotAtTheLine(enemyStats.archer);
+  assert.deepEqual(arrow.hits, { player: 0, companion: 1 }, "an arrow must stop at the body it hits");
+  assert.equal(arrow.left, 0);
+});
+
 test("dust particles carry their own lifetime and a palette that reads on grass", () => {
   const state = {
-    particles: [], enemies: [], drops: [], footCompanions: [], bloodStains: [], meleeEffects: [],
+    particles: [], enemies: [], drops: [], footCompanions: [], bloodStains: [], corpses: [], meleeEffects: [],
   };
   const enemies = createEnemies({
     bossTypes,
@@ -1954,6 +1998,110 @@ test("dust particles carry their own lifetime and a palette that reads on grass"
     assert.ok(mote.size >= effectRules.dust.sizeMin && mote.size <= effectRules.dust.sizeMax);
     assert.ok(mote.vy < 0, "dust should drift upwards");
   }
+});
+
+// The crossbow's bolt is the first shot that does not stop on the first body. These
+// three cases drive the real projectile system with two bodies standing in the
+// flight path and read what the enemies were dealt, instead of asserting on the
+// `pierce` field the update loop trusts.
+function pierceRig({ kind, bodies = 2, decal = null } = {}) {
+  const state = emptyBattleState();
+  const player = { x: 100, y: 1500, radius: 17, mode: "chariot" };
+  const hits = [];
+  const cues = [];
+  state.enemies = [];
+  for (let index = 0; index < bodies; index += 1) {
+    state.enemies.push({ x: 300 + index * 90, y: 1500, radius: 16, health: 500, destroyed: false });
+  }
+  const projectiles = createTestProjectiles({
+    state,
+    player,
+    extras: {
+      damageEnemy: (enemy, amount) => hits.push({ enemy, amount }),
+      playSound: (cue) => cues.push(cue),
+    },
+  });
+  projectiles.fireAllyShot({
+    x: player.x, y: player.y, targetX: 460, targetY: player.y,
+    damage: kind === "stone" ? 7 : 4,
+    // The crew's own reach, so the shot has room for both bodies inside it.
+    range: projectileRules.allyArrow.crewRange, originOffset: 0, kind,
+  });
+  const fired = state.bullets[0];
+  for (let frame = 0; frame < 240 && state.bullets.length > 0; frame += 1) {
+    projectiles.update(1 / 60);
+  }
+  return { hits, cues, fired, state, decal };
+}
+
+test("a bolt passes through the first body and stops in the second", () => {
+  const bolt = pierceRig({ kind: "bolt" });
+  assert.equal(bolt.fired.rule.id, "bolt", "the shot lost the row it was fired with");
+  assert.equal(bolt.hits.length, 2, "a bolt should be worth two bodies in a line");
+  assert.deepEqual(bolt.hits.map((hit) => hit.amount), [4, 4], "piercing should not split the damage");
+  assert.deepEqual(bolt.hits.map((hit) => hit.enemy), bolt.state.enemies, "the bolt skipped a body");
+  assert.equal(bolt.state.bullets.length, 0, "the bolt is still in the air");
+  // One cue for what left the hand, one per body it opened.
+  assert.equal(bolt.cues.filter((cue) => cue === projectileKinds.bolt.cue.release).length, 1);
+  assert.equal(bolt.cues.filter((cue) => cue === projectileKinds.bolt.cue.body).length, 2);
+
+  // The arrow is the control case: same field, same aim, one body's worth of shot.
+  const arrow = pierceRig({ kind: "arrow" });
+  assert.equal(arrow.hits.length, 1, "an arrow must stop on the first body it meets");
+  assert.equal(arrow.state.bullets.length, 0, "the arrow is still in the air");
+});
+
+test("a piercing shot never hits the same body twice", () => {
+  // With one body in the line the bolt has a pierce left when it exits: without the
+  // `hitUnits` ledger it would re-hit the same enemy every frame it overlapped it.
+  const bolt = pierceRig({ kind: "bolt", bodies: 1 });
+  assert.equal(bolt.hits.length, 1, "the bolt hit the same body more than once");
+  assert.equal(bolt.state.bullets.length, 0, "the bolt did not land after passing through");
+});
+
+test("what a shot leaves in the grass is the decal its own row names", () => {
+  // The renderer used to paint every arrow the same brown nock; the decal name is
+  // what tells a bolt apart once it is stuck.
+  // The body list is empty on purpose: this case is about the shot that misses.
+  assert.equal(pierceRig({ kind: "arrow", bodies: 0 }).state.groundArrows[0]?.kind, projectileKinds.arrow.decal);
+  assert.equal(pierceRig({ kind: "bolt", bodies: 0 }).state.groundArrows[0]?.kind, projectileKinds.bolt.decal);
+  // A stone leaves nothing: a hole in the grass would read as a fallen arrow.
+  assert.equal(pierceRig({ kind: "stone", bodies: 0 }).state.groundArrows.length, 0, "a stone left a decal");
+});
+
+test("every projectile row names art, effects and cues that exist", () => {
+  const art = createProjectileArt({ context: recordingContext().context });
+  const cues = new Set([...Object.values(soundCues), ...Object.values(soundBorrowed)]);
+  for (const [id, row] of Object.entries(projectileKinds)) {
+    assert.equal(row.id, id, `${id} carries a different id`);
+    assert.ok(row.speed > 0 && row.gravity > 0 && row.radius > 0, `${id} has no flight numbers`);
+    assert.ok(Number.isInteger(row.pierce) && row.pierce >= 0, `${id} has no pierce count`);
+    assert.ok(projectileImpactEffects[row.impact], `${id} asks for an impact effect nobody wrote`);
+    assert.ok(row.bodyImpact === null || projectileImpactEffects[row.bodyImpact],
+      `${id} asks for a body impact effect nobody wrote`);
+    assert.ok(art.visuals.includes(row.visual), `${id} asks for a body painter nobody wrote`);
+    assert.ok(row.decal === null || art.decals.includes(row.decal), `${id} asks for a decal nobody wrote`);
+    // release, body, ground, obstacle - a shot that falls back to a silent cue is a
+    // shot the player cannot hear land.
+    for (const [slot, cue] of Object.entries(row.cue)) {
+      assert.ok(cues.has(cue), `${id}'s ${slot} cue is not a cue`);
+    }
+    // The owner is the second axis of the palette, and the one every shot has.
+    for (const owner of ["enemy", "ally", "player"]) {
+      const recorder = recordingContext();
+      createProjectileArt({ context: recorder.context }).paint({ rule: row, owner, radius: row.radius });
+      assert.ok(Number.isFinite(recorder.bounds.minX), `${id} painted nothing for ${owner}`);
+      if (row.decal) {
+        const decalRecorder = recordingContext();
+        createProjectileArt({ context: decalRecorder.context }).paintDecal({ kind: row.decal });
+        assert.ok(Number.isFinite(decalRecorder.bounds.minX), `${id}'s decal painted nothing`);
+      }
+    }
+  }
+  // A kind nobody has drawn is not a reason to stop the battle.
+  assert.equal(resolveProjectileKind("bolt"), projectileKinds.bolt);
+  assert.equal(resolveProjectileKind("harpoon"), projectileKinds.arrow);
+  assert.equal(resolveProjectileKind(undefined), projectileKinds.arrow);
 });
 
 console.log("[unit] dust trails");
@@ -2090,7 +2238,7 @@ console.log("[unit] crew");
 function crewRig({ roster = [], enemies = [], mode = "chariot" } = {}) {
   const shots = [];
   const melee = [];
-  const state = { enemies, bullets: [], footCompanions: [], groundArrows: [] };
+  const state = { enemies, bullets: [], footCompanions: [], groundArrows: [], bloodStains: [], corpses: [] };
   const player = {
     mode,
     x: 100,
@@ -2229,6 +2377,79 @@ test("no module reads the personnel table by array position", () => {
   assert.equal(/personnel\s*\[\s*\d+\s*\]\s*\./.test(source), false, "combat.js indexes personnel by position");
 });
 
+const crossbowRow = personnel.find((person) => person.id === "crossbow");
+
+test("a crossbowman joins the volley fan and looses bolts of his own", () => {
+  const rig = crewRig({
+    roster: [{ id: 1, role: "archer" }, { id: 2, role: "crossbow" }],
+    enemies: [{ x: 380, y: 100, radius: 16, health: 200, destroyed: false }],
+  });
+  rig.combat.updateCrew(1 / 60);
+  // Two shooters, two lanes: the ranged check is the row's `projectile`, so the
+  // crossbow is counted exactly like the bow and the halberdiers stay excluded.
+  assert.deepEqual(rig.shots.map((shot) => [shot.kind, shot.index, shot.count]), [
+    [archerRow.projectile, 0, 2],
+    [crossbowRow.projectile, 1, 2],
+  ]);
+  assert.equal(rig.shots[1].damage, crossbowRow.damage);
+  assert.equal(rig.campaign.roster[1].cooldown, crossbowRow.cooldown);
+});
+
+test("a dismounted crossbowman walks as himself and shoots bolts", () => {
+  const rig = crewRig({
+    roster: [{ id: 1, role: "archer" }, { id: 2, role: "crossbow" }, { id: 3, role: "halberdier" }],
+  });
+  rig.combat.dismountPlayer();
+  // `type` is the silhouette the renderer and the smoke trace read, `projectile` is
+  // what he carries: they used to be one `role === "archer"` test.
+  assert.deepEqual(rig.state.footCompanions.map((companion) => companion.type), ["archer", "crossbow", "ge"]);
+  assert.deepEqual(rig.state.footCompanions.map((companion) => companion.projectile), ["arrow", "bolt", null]);
+  // The weapon in his hands is the row's, not the default sword.
+  assert.deepEqual(rig.state.footCompanions.map((companion) => companion.visual.overlays),
+    [["bow"], ["crossbow"], ["dagger-axe"]]);
+
+  const firing = crewRig({
+    roster: [{ id: 1, role: "crossbow" }],
+    enemies: [{ x: 300, y: 100, radius: 16, health: 100, destroyed: false }],
+  });
+  firing.combat.dismountPlayer();
+  // The crossbow reloads on its own row's 5.7s clock, and a companion starts the
+  // walk already part way through it: step past the start offset in one go.
+  firing.combat.updateFootCompanions(3);
+  assert.deepEqual(firing.shots.map((shot) => [shot.kind, shot.damage]), [["bolt", crossbowRow.damage]]);
+});
+
+test("every recruit names a silhouette, a shot and a weapon that exist", () => {
+  const art = createSpriteArt({ context: recordingContext().context });
+  for (const member of personnel) {
+    assert.ok(member.footType, `${member.id} has no silhouette to walk as`);
+    // `footType` is a unit type id, not an art name: it has to resolve to a row in
+    // one of the rosters the field reads. A recruit walking as a name nobody
+    // defined is a typo only the trace would ever notice.
+    const walksAs = enemyStats[member.footType] ?? allyStats[member.footType] ?? wildAnimalStats[member.footType];
+    assert.ok(walksAs, `${member.id} walks as a "${member.footType}" no unit row defines`);
+    assert.ok(art.crewMarks.includes(member.id), `${member.id} has no mark on the deck`);
+    for (const overlay of member.overlays ?? []) {
+      assert.ok(art.overlayKinds.foot.includes(overlay),
+        `${member.id} holds a "${overlay}" the foot art never painted`);
+    }
+    if (member.projectile) {
+      // Forward reference: a recruit may not fire a shot the table does not define.
+      assert.equal(resolveProjectileKind(member.projectile).id, member.projectile,
+        `${member.id} fires a "${member.projectile}" nobody defined`);
+    }
+  }
+  // The crossbow's whole identity is the trade: slower, harder, straight through.
+  assert.ok(crossbowRow.projectile && crossbowRow.projectile !== archerRow.projectile);
+  assert.ok(crossbowRow.damage > archerRow.damage && crossbowRow.cooldown > archerRow.cooldown);
+  assert.ok(resolveProjectileKind(crossbowRow.projectile).pierce > resolveProjectileKind(archerRow.projectile).pierce,
+    "the crossbow hits no more bodies than a bow");
+  // The recruit's shot and the enemy row that shares its type id are one weapon:
+  // retuning the bolt means retuning both, so they may not drift apart.
+  assert.equal(enemyStats.crossbow.projectile, crossbowRow.projectile,
+    "the 弩兵 fires something other than the bolt its own type id walks as");
+});
+
 console.log("[unit] bow");
 
 // The chariot's bow is a two-stage control: press, draw, release. These tests
@@ -2239,7 +2460,7 @@ function bowRig({ mode = "chariot", enemies = [], lineOfSight = () => true, rand
   const melee = [];
   const sounds = [];
   const state = {
-    enemies, bullets: [], footCompanions: [], groundArrows: [], bloodStains: [],
+    enemies, bullets: [], footCompanions: [], groundArrows: [], bloodStains: [], corpses: [],
     fireHold: 0, fireHeld: false,
   };
   const player = {
@@ -2451,7 +2672,7 @@ function formationRig({ sight = { on: true }, seed = 11, obstacles = [], terrain
   const state = {
     enemies: [], particles: [], drops: [], footCompanions: [], formations: [],
     formationsSpawned: 0, wave: 1, elapsed: 0, mode: "running", score: 0, kills: 0,
-    bloodStains: [], meleeEffects: [], bullets: [], groundArrows: [], shake: 0,
+    bloodStains: [], corpses: [], meleeEffects: [], bullets: [], groundArrows: [], shake: 0,
     // The champion roster: `spawnBoss`/`spawnBossSquad` fill it, and the squad
     // stage reads it back to decide when the battle is won.
     bosses: [], bossStage: false, bossDefeated: false, finalBattle: false,
@@ -3466,7 +3687,7 @@ test("the camp fire seats the player plus one body per seat, far side first", ()
 });
 
 test("every recruit has a figure at the fire, and an unknown role still gets one", () => {
-  const { overlayKinds } = createSpriteArt({ context: recordingContext().context });
+  const { overlayKinds, crewMarks } = createSpriteArt({ context: recordingContext().context });
   for (const member of personnel) {
     const figure = roleFigure(member.id);
     assert.equal(figure.robeColor, spritePalette.allyRobe, `${member.id} is not wearing the ally colour`);
@@ -3475,6 +3696,9 @@ test("every recruit has a figure at the fire, and an unknown role still gets one
       assert.ok(overlayKinds.foot.includes(overlay),
         `${member.id} asks for a "${overlay}" the foot art never painted`);
     }
+    // The camp fire and the chariot deck read one table: a recruit the fire seats
+    // has a body on the hull, not a blank space where a rider should be.
+    assert.ok(crewMarks.includes(member.id), `${member.id} has no mark on the chariot deck`);
   }
   // A row added tomorrow shows up at the fire before anyone has drawn it a kit.
   const unknown = roleFigure("future-recruit");
@@ -4679,6 +4903,7 @@ function hireRig({ hires = 0 } = {}) {
     particles: [],
     meleeEffects: [],
     bloodStains: [],
+    corpses: [],
   };
   const player = { x: 1000, y: 800, radius: 17, angle: -Math.PI / 2, mode: "chariot" };
   const world = { width: 2000, height: 1600 };
@@ -5288,6 +5513,205 @@ test("damage to a hire stains the ground, and the last point kills it", () => {
   assert.ok(rig.state.allyFormations[0], "one fallen archer removed the whole line");
 });
 
+console.log("[unit] the fallen");
+
+// A corpse is a snapshot, never the body. The unit it came from keeps being
+// filtered out of its own roster on the frame it dies, so a corpse holding a
+// reference would be a handle to a body that is about to vanish - and the "the
+// corpse stayed in the line" test above is the proof that the body does go.
+test("a corpse is a copy of the body it left, not a handle to it", () => {
+  const state = { corpses: [] };
+  const unit = {
+    x: 120, y: 240, angle: 0.5, radius: 14,
+    visual: { kind: "foot", robe: "#a74732", scale: 1.3, overlays: ["sword"] },
+  };
+  addCorpse(state, unit);
+  assert.deepEqual(state.corpses[0], {
+    x: 120, y: 240, angle: 0.5, kind: "foot", robe: "#a74732", scale: 1.3, radius: 14,
+  });
+  unit.x = 900;
+  unit.visual.robe = "#ffffff";
+  assert.equal(state.corpses[0].x, 120, "the corpse followed the body it was copied from");
+  assert.equal(state.corpses[0].robe, "#a74732", "the corpse still shares the row's visual");
+  // No live fields in the snapshot: a corpse cannot be mistaken for a body that
+  // something might update, shoot at or heal.
+  for (const field of ["health", "maxHealth", "destroyed", "visual"]) {
+    assert.equal(field in state.corpses[0], false, `a corpse carries a live field: ${field}`);
+  }
+});
+
+test("forty bodies is the whole pile, and the oldest one is the one that goes", () => {
+  const state = { corpses: [] };
+  for (let index = 0; index < CORPSE_LIMIT + 5; index += 1) {
+    addCorpse(state, { x: index, y: 0, angle: 0, radius: 12, visual: { kind: "foot" } });
+  }
+  assert.equal(state.corpses.length, CORPSE_LIMIT);
+  assert.equal(state.corpses[0].x, 5, "the pile dropped the newest body instead of the oldest");
+  assert.equal(state.corpses[CORPSE_LIMIT - 1].x, CORPSE_LIMIT + 4);
+});
+
+test("a killed enemy leaves one body where it fell, and no other trace", () => {
+  const rig = idleRig();
+  const victim = infantry(rig.state)[0];
+  const bodyCount = rig.state.enemies.length;
+  const fallPoint = { x: victim.x, y: victim.y };
+  const bearing = victim.angle;
+  rig.enemies.damageEnemy(victim, 1e6);
+  assert.equal(rig.state.corpses.length, 1, "a death left no body on the ground");
+  const [corpse] = rig.state.corpses;
+  assert.deepEqual({ x: corpse.x, y: corpse.y }, fallPoint, "the body did not stay where it fell");
+  assert.equal(corpse.kind, victim.visual.kind, "the corpse forgot which silhouette it wore");
+  assert.equal(corpse.angle, bearing, "the body was laid out on a bearing nobody rolled");
+  // Scenery: the field's own books do not grow with a body, so the enemy cap, the
+  // separation pass, targeting, formation bookkeeping and the aura tick cannot see
+  // it at all.
+  assert.equal(rig.state.enemies.length, bodyCount, "the corpse entered the enemy list");
+  assert.equal(rig.state.enemies.includes(corpse), false);
+  assert.equal(rig.state.corpses.includes(victim), false, "the pile kept the unit instead of a copy");
+  // A second death adds a second body rather than reshaping the pile.
+  rig.enemies.damageEnemy(infantry(rig.state).find((unit) => !unit.destroyed), 1e6);
+  assert.equal(rig.state.corpses.length, 2);
+});
+
+test("a slain hire stays on the field, and a vehicle stays a vehicle", () => {
+  const rig = hireRig({ hires: 2 });
+  rig.allies.spawnFriendlyFormations();
+  const archer = rig.state.allies.find((ally) => ally.type === "archer");
+  rig.allies.damageAlly(archer, 1e6, archer.x - 20, archer.y);
+  assert.equal(rig.state.corpses.length, 1, "a hire died without leaving a body");
+  assert.equal(rig.state.corpses[0].kind, archer.visual.kind, "a fallen hire changed silhouette");
+
+  // A chariot is the one body whose corpse is not a man on the ground: it leaves
+  // the wreck `drawChariotWreck` paints, in the colours of the side that owned it.
+  const chariot = rig.state.allies.find((ally) => ally.vehicle);
+  rig.allies.damageAlly(chariot, 1e6, chariot.x - 30, chariot.y);
+  const wreck = rig.state.corpses[1];
+  assert.equal(wreck.kind, "chariot", "a wrecked chariot left a rider's body behind");
+  assert.equal(wreck.robe, chariot.visual.robe, "the wreck lost its own colours");
+});
+
+test("a companion buried beside the hull leaves a body too", () => {
+  const rig = crewRig({ roster: [{ id: 1, role: "archer" }] });
+  const companion = {
+    personnelId: 1, type: "archer", x: 160, y: 120, angle: 0.4, radius: 11,
+    health: 4, maxHealth: 4, hitFlash: 0, invulnerable: 0, destroyed: false,
+    visual: { kind: "foot", robe: "#398b63", overlays: ["bow"] },
+  };
+  rig.combat.damageCompanion(companion, 99, 0, 0);
+  assert.equal(companion.destroyed, true, "the companion survived a lethal hit");
+  assert.equal(rig.state.corpses.length, 1, "a buried companion left no body");
+  assert.deepEqual({ x: rig.state.corpses[0].x, y: rig.state.corpses[0].y }, { x: 160, y: 120 });
+});
+
+test("the wreck fits the box it claims, and has no wheels left", () => {
+  // Measured by its drawing calls, exactly like the rig above: the box is the
+  // promise the cull and the tests both read, so it must not drift. `arc` is the
+  // only wheel in this art, which makes "no arc" the same statement as "no wheel".
+  const recorder = recordingContext();
+  let arcs = 0;
+  const arc = recorder.context.arc;
+  recorder.context.arc = (x, y, radius) => {
+    arcs += 1;
+    arc(x, y, radius);
+  };
+  createSpriteArt({ context: recorder.context }).drawChariotWreck({ robeColor: spritePalette.enemyRobe });
+  const drawn = recorder.bounds;
+  assert.ok(CHARIOT_WRECK_BOX.minX <= drawn.minX && CHARIOT_WRECK_BOX.maxX >= drawn.maxX,
+    `the wreck paints past its box horizontally (${drawn.minX}..${drawn.maxX} vs ${CHARIOT_WRECK_BOX.minX}..${CHARIOT_WRECK_BOX.maxX})`);
+  assert.ok(CHARIOT_WRECK_BOX.minY <= drawn.minY && CHARIOT_WRECK_BOX.maxY >= drawn.maxY,
+    `the wreck paints past its box vertically (${drawn.minY}..${drawn.maxY} vs ${CHARIOT_WRECK_BOX.minY}..${CHARIOT_WRECK_BOX.maxY})`);
+  assert.equal(arcs, 0, "a wheel survived the crash");
+});
+
+// Where the fallen sit in the layering, read back from a real frame: a corpse is
+// ground, so it goes over the stain it left and under everything still standing.
+// The chalk robe is the marker - no other painter uses that colour.
+test("the fallen are painted over their stains and under the living", () => {
+  const view = { width: 960, height: 592 };
+  const drawField = (corpse) => {
+    const context = callLog();
+    createRenderer({
+      canvas: { width: view.width, height: view.height },
+      context, view,
+      camera: { x: 0, y: 0 },
+      world: { width: 2800, height: 1800 },
+      player: {
+        x: 90, y: 470, angle: 0, radius: 14, health: 10, maxHealth: 10,
+        invulnerable: 0, mode: "mounted", destroyed: false,
+      },
+      state: {
+        elapsed: 1.5, shake: 0, damageFlash: 0, phase: "running", extractionPoint: null,
+        particles: [], groundArrows: [], drops: [], meleeEffects: [],
+        // The stain the body fell on, and the body that killed it.
+        bloodStains: [{ x: 320, y: 330, rotation: 0, width: 16, height: 8, color: "#0b0b0b", drops: [] }],
+        corpses: [corpse],
+        formations: [], allyFormations: [], bullets: [],
+        enemies: [{
+          x: 360, y: 300, angle: 0, radius: 12, health: 4, maxHealth: 10,
+          knockedDown: 0, hitFlash: 0, destroyed: false,
+          visual: { kind: "foot", robe: "#654321", scale: 1.3, overlays: ["sword"] },
+        }],
+        footCompanions: [], allies: [],
+      },
+      getObstacles: () => [],
+      getTerrain: () => [],
+      getClouds: () => [],
+      getHorseCount: () => 2,
+      getRoster: () => [],
+    }).draw();
+    return context.log;
+  };
+  const corpse = { x: 320, y: 330, angle: 0.4, kind: "foot", robe: "#a74732", scale: 1.3, radius: 12 };
+  const log = drawField(corpse);
+  const indexOfPaint = (color) => log.findIndex(([name, args]) => name === "fillStyle" && args[0] === color);
+  const stainAt = indexOfPaint("#0b0b0b");
+  // The chalk robe a knocked-down body - and now a corpse - is painted in.
+  const corpseAt = indexOfPaint("#806c55");
+  const liveAt = indexOfPaint("#654321");
+  assert.ok(stainAt >= 0 && corpseAt >= 0 && liveAt >= 0,
+    `a layer never painted (stain ${stainAt}, corpse ${corpseAt}, live ${liveAt})`);
+  assert.ok(stainAt < corpseAt, "the body was painted under the stain it left");
+  assert.ok(corpseAt < liveAt, "the body was painted over a unit that is still standing");
+
+  // Off camera a corpse costs nothing: the pass culls it by its snapshot point,
+  // because a body with no update tick has no frame budget to spend.
+  const away = drawField({ ...corpse, x: -5000 });
+  assert.equal(away.some(([name, args]) => name === "fillStyle" && args[0] === "#806c55"), false,
+    "a corpse off camera was still painted");
+});
+
+// Enough of the host for `resetMission`, which is where a new battle clears the
+// field the last one left behind.
+test("a new mission leaves the last battle's bodies behind", () => {
+  const state = { battleMode: "campaign", bloodStains: [], corpses: [] };
+  const campaign = { stage: 2, equipment: emptyEquipment(), horseCount: 1, random: () => 0.5 };
+  const stages = createStageManager({
+    campaign,
+    state,
+    player: { x: 0, y: 0, radius: 17, angle: 0, mode: "chariot" },
+    world: { width: 2400, height: 1600 },
+    view: { width: 960, height: 592 },
+    camera: { x: 0, y: 0 },
+    circleIntersectsObstacle: () => false,
+    updateHud: () => {},
+    setMode: () => {},
+    spawnBoss: () => {},
+    spawnBossSquad: () => {},
+    announceBoss: () => {},
+    spawnFriendlyAllies: () => [],
+    resizeCanvas: () => {},
+    playSound: () => {},
+    hideBanner: () => {},
+  });
+  addCorpse(state, { x: 40, y: 60, angle: 0, radius: 12, visual: { kind: "foot" } });
+  assert.equal(state.corpses.length, 1);
+  stages.resetMission();
+  assert.equal(state.corpses.length, 0, "the old battle's dead stood on the new field");
+});
+
+
+
+
 test("the order button acts on the nearest own line the player stands in", () => {
   const rig = hireRig({ hires: 2 });
   const lines = rig.allies.spawnFriendlyFormations();
@@ -5419,7 +5843,7 @@ test("a marching ring is an outline: the wash is the ground a line holds", () =>
       },
       state: {
         elapsed: 1, shake: 0, damageFlash: 0, phase: "running", extractionPoint: null,
-        particles: [], bloodStains: [], groundArrows: [], drops: [], meleeEffects: [],
+        particles: [], bloodStains: [], corpses: [], groundArrows: [], drops: [], meleeEffects: [],
         formations: [], allyFormations: [line], bullets: [], enemies: [],
         footCompanions: [], allies: [],
       },

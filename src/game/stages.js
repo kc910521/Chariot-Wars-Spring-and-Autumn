@@ -205,6 +205,9 @@ export function createStageManager({
     state.particles = [];
     state.meleeEffects = [];
     state.bloodStains = [];
+    // The dead of the last battle stay there: a mission reset is a new field, and
+    // the corpses are the one piece of the old one the player would notice.
+    state.corpses = [];
     state.spawnTimer = 1.2;
     state.elapsed = 0;
     state.fireHold = 0;

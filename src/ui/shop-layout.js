@@ -10,6 +10,7 @@
 // but the preview still repaints thirty times a second, so the same rule keeps
 // the button exactly where the player pressed it.
 import { clamp } from "../utils/math.js";
+import { personnel } from "../data/equipment.js";
 import { chariotRigBox, spritePalette } from "../render/sprites.js";
 
 const CATEGORY_IDS = ["equipment", "horse", "personnel"];
@@ -485,13 +486,13 @@ export function campSeats(count, {
 }
 
 // What a seated figure wears and carries. A recruit wears the same ally robe the
-// battlefield gives a companion and holds the weapon his role's row uses, so the
-// camp previews the team instead of inventing a second costume; the colours come
-// from the sprite module's palette rather than a copy of it.
-const CREW_KIT = Object.freeze({
-  archer: Object.freeze(["bow"]),
-  halberdier: Object.freeze(["dagger-axe"]),
-});
+// battlefield gives a companion and holds the weapon his own row lists, so the camp
+// previews the team instead of inventing a second costume; the colours come from
+// the sprite module's palette rather than a copy of it, and the kit from the
+// personnel table rather than a second copy of the roster.
+const CREW_KIT = Object.freeze(Object.fromEntries(
+  personnel.filter((person) => person.overlays).map((person) => [person.id, person.overlays]),
+));
 
 export function roleFigure(role) {
   if (!role) return { robeColor: spritePalette.playerRobe, overlays: ["sword"] };

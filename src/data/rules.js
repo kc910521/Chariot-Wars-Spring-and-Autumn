@@ -41,13 +41,15 @@ export const projectileRules = Object.freeze({
     // (0.5 = ±60°), so a target beside or behind the axle is never assisted.
     tapCooldown: 0.34, tapRange: 380, tapConeCosine: 0.5,
   }),
+  // Aiming and rhythm only. How hard a shot leaves the hand is the shot's own row
+  // (src/data/projectiles.js), because that is the number the arc is solved from.
   allyArrow: Object.freeze({
-    speed: 420, gravity: 420, spread: 0.055, crewOriginOffset: 25, crewRange: 430, footOriginOffset: 12,
+    spread: 0.055, crewOriginOffset: 25, crewRange: 430, footOriginOffset: 12,
   }),
   enemyShot: Object.freeze({
-    arrowSpeed: 420, arrowGravity: 420,
-    stoneSpeed: 455, stoneGravity: 430,
-    bossStoneSpeed: 560, bossStoneGravity: 430,
+    // The one speed that is not a row: a champion throws heavier than the catapult
+    // the hired line buys, so his stone overrides `stone.speed`.
+    bossStoneSpeed: 560,
     catapultRange: 540, catapultCooldown: 3.1,
     cooldownBase: 2.1, cooldownJitter: 0.7,
   }),
@@ -111,7 +113,7 @@ export const campaignRules = Object.freeze({
   // stage so the player has met the ladder in the shop before being handed a rung.
   clanGrantStage: 4,
   waveScoreStep: 500,
-  enemyLimit: 28,
+  enemyLimit: 68,
   spawnIntervalMin: 4.2,
   spawnIntervalBase: 7.2,
   spawnIntervalStep: 0.2,
@@ -127,5 +129,5 @@ export const campaignRules = Object.freeze({
   finalSquad: Object.freeze([
     "elephant", "elephant", "lion", "lion", "catapult", "catapult", "catapult", "catapult",
   ]),
-  finalStageEnemyLimit: 52,
+  finalStageEnemyLimit: 99,
 });

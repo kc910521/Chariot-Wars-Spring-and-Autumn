@@ -45,7 +45,7 @@ python3 -m http.server 8000     # 备选：使用系统自带 Python
 
 撒点不再是在整张地图上均匀取点，而是先选环带再在环带内均匀取点：`src/data/ring-elements.js` 给每一类元素一张「哪一环长得密」的表（`high`/`medium`/`low`/`none` = 3/2/1/0，乘以该环自己的面积），`map.js` 的 `ringWeightsFor()` 把等级换算成权重、`placeInBand()` 先抽一环再抽一点，于是芦苇荡的水落在中环与外环、树木集中在中带、栅栏贴边，「回」字的层次不需要生成器里任何一个 if。等级乘的是**环的面积**而不是环的数量，所以 `high` 说的是密度：把中带改窄，树会往外挪，而不是被挤成一堵树墙。预算仍然只管数量：`obstacleTarget`、`terrainKinds[*].placement.count` 与 `obstacleAttemptCap` 决定撒几个、最多试几次，被拒绝的落点不吃名额（重试仍落在同一类元素的下一环里）；贴边的横向栅栏不再被丢弃，而是往内挪进边距——边距之上正是栅栏该待的地方。每环另有覆盖上限（`ringCoverage`，占该环面积的百分比），它只在比例被推到极端时说话：某一环被指定成年年长满树时，它会在变成一堵实心树墙之前停止接收。
 
-地板本身是一层单独的画：`src/render/ground.js` 只画地面，颜色全在 `src/data/elements.js` 的 `groundVisual` 里 —— 一层底色，加上每格一块柔和的「翻过的土 / 阴影 / 晒白的浮土」，再按更细的格子长出稀疏的短草或落一粒土渣。这里故意没有网格：被它换掉的 40px 网格线是全场地最硬的边缘，而低对比的地面最经不起这种边缘。每一格都由自己的世界坐标哈希出来（`src/utils/math.js` 的 `hashNoise`），不用 `Math.random`，于是同一块地每一帧画得一模一样（`H5_TRACE_DRAW` 摘要仍然可比），而格子锚在世界坐标而不是屏幕上，镜头移动时纹理是「滑过去」而不是「跟着走」。地表块随后盖在地板之上并向它羽化：`visual.fill` 是中心的颜色、`visual.fade` 是同一颜色的零透明度版本，绘制时先把坐标系压扁，渐变才会贴着椭圆走到边缘、正好在自己的边界上归零（否则短轴那一圈会留下硬边）。草块（`terrainKinds.grass`）的 `visual.kind` 现在是 `weeds`：一丛按哈希摆位的草叶，外加几根带穗的高草，高度按地块半径的比例给，所以大块是「更高」，不是「更稀」。地板之后依次是地表块、血迹与树桩、障碍、单位、特效，云影压在最后一层（`draw()` 里的 `drawSky()`）：它半透明，所以能从整场之上飘过而不遮挡任何东西；反过来说，任何东西画在它之后都会变成「云在树后面」的那种错，单测因此把「云之后只剩云自己那两笔」钉住了。
+地板本身是一层单独的画：`src/render/ground.js` 只画地面，颜色全在 `src/data/elements.js` 的 `groundVisual` 里 —— 一层底色，加上每格一块柔和的「翻过的土 / 阴影 / 晒白的浮土」，再按更细的格子长出稀疏的短草或落一粒土渣。这里故意没有网格：被它换掉的 40px 网格线是全场地最硬的边缘，而低对比的地面最经不起这种边缘。每一格都由自己的世界坐标哈希出来（`src/utils/math.js` 的 `hashNoise`），不用 `Math.random`，于是同一块地每一帧画得一模一样（`H5_TRACE_DRAW` 摘要仍然可比），而格子锚在世界坐标而不是屏幕上，镜头移动时纹理是「滑过去」而不是「跟着走」。地表块随后盖在地板之上并向它羽化：`visual.fill` 是中心的颜色、`visual.fade` 是同一颜色的零透明度版本，绘制时先把坐标系压扁，渐变才会贴着椭圆走到边缘、正好在自己的边界上归零（否则短轴那一圈会留下硬边）。草块（`terrainKinds.grass`）的 `visual.kind` 现在是 `weeds`：一丛按哈希摆位的草叶，外加几根带穗的高草，高度按地块半径的比例给，所以大块是「更高」，不是「更稀」。地板之后依次是地表块、血迹与尸体、树桩、障碍、单位、特效，云影压在最后一层（`draw()` 里的 `drawSky()`）：它半透明，所以能从整场之上飘过而不遮挡任何东西；反过来说，任何东西画在它之后都会变成「云在树后面」的那种错，单测因此把「云之后只剩云自己那两笔」钉住了。
 
 
 钱与战功在重试时只会回滚到「本战开局时的军资」：`campaign.entryGold` 在每次 `createBattle()` 里快照，`restartStage()` 把它还原（打到一半倒下时，这一战路上捡的钱不算，之前各战存入的钱不动），教学战重试还会清掉 `campaign.tutorialHandoff`。教学战本身的战功正常计入这一局；`arm()` 以 `state.battleId` 为键，因此暂停、切语言、失焦回来都不会把开场再演一遍。
@@ -54,7 +54,7 @@ python3 -m http.server 8000     # 备选：使用系统自带 Python
 
 一局有多长，在抽姓名的同一刻就已定下：`startRun()` 先抽姓名，再用同一条 `campaign.random` 抽终局战局（`campaignRules.finalStageMin` 起始、`finalStageSpan` 跨度，即第 10–13 战局之一），之后 `createBattle()` 才重新播种。抽签发生在播种之前，所以 `?seed=` 仍然逐帧复现同一场战斗，而一局的长度本身逐局不同。终局由战局号单独判定（`stages.isFinalBattle()`）：即使间隔规则本不认为它是首领战，终局也一定是首领战。序章的第六行由这条抽签补上（`prologue.final`），`#prologue-final` 在没有终局时保持 `hidden`。
 
-终局的首领不再是随机一位，而是 `campaignRules.finalSquad` 里的固定阵容：两面象兵、两位狮王馭者、四辆投石车，按 784 点总耐久（本作的 `bossTypes` 表：2×204 + 2×78 + 4×55）环绕玩家列阵。`enemies.spawnBossSquad()` 让每位首领各占一个方位，被地形挡住时逐级收小半径；确实无处可放时退到夹取后的落点，而不是在终局中途抛错。终局仍会刷新普通敌军，因此它的编队上限单独放宽到 `finalStageEnemyLimit`（52），否则八名首领就会把普通波次挡在门外。`state.bosses` 保存整支车队（阵亡者也留在册上，便于统计），`state.bossDefeated` 只在**最后一位**倒下时为真——这是开启撤离点的唯一条件。
+终局的首领不再是随机一位，而是 `campaignRules.finalSquad` 里的固定阵容：两面象兵、两位狮王馭者、四辆投石车，按 784 点总耐久（本作的 `bossTypes` 表：2×204 + 2×78 + 4×55）环绕玩家列阵。`enemies.spawnBossSquad()` 让每位首领各占一个方位，被地形挡住时逐级收小半径；确实无处可放时退到夹取后的落点，而不是在终局中途抛错。终局仍会刷新普通敌军，因此它的编队上限单独放宽到 `finalStageEnemyLimit`（99），否则八名首领就会把普通波次挡在门外。`state.bosses` 保存整支车队（阵亡者也留在册上，便于统计），`state.bossDefeated` 只在**最后一位**倒下时为真——这是开启撤离点的唯一条件。
 
 战场 HUD 用 `ui/labels.js` 的 `stageLabel()` 决定战局栏写什么：平时是两位数字，终局改写 `battle.finalStage`（中文「终局」、英文 `FINAL`），并带上 `.is-final` 让样式把字号收小一档，以免五个字符撑破原本只放两位数字的格子。本役目标栏在首领战里显示整支车队的总耐久（`battle.bossSquad`，例：「8 将 · 象兵」），条随每一具倒下而下降；预警横幅在终局读作 `battle.finalWarning`，副标题为 `battle.bossSquadBanner`。
 
@@ -73,17 +73,21 @@ python3 -m http.server 8000     # 备选：使用系统自带 Python
 - **触屏**：摇杆方向就是地图移动方向；战车会平滑转向，松开摇杆后凭惯性减速；使用发射键攻击，按下即开始蓄力（外环显示蓄力进度），按住不足 0.6 秒松开是上面说的短射，按住更久再松开是长程固定弹道
 - **触屏反向小输入**：静止或慢速时，朝车头后方约 135° 以上轻推摇杆（幅度不超过 0.45），战车会沿车尾方向倒车，并带一点后轮转向：车头以约 42°/s 的慢速转向摇杆的反方向，也就是车尾跟着摇杆摆；斜向倒车因此沿弧线并入摇杆方向（最多摆 45°，约 1.1 秒），推满摇杆仍是原来的转向
 
-每个战局只有一次挑战机会，不再有三辆战车的复活次数。战车耐久耗尽后将下车继续作战：WASD / 方向键直接移动步卒，空格挥剑。驾驶员固定随车，不占车员名额且不攻击；招募的弓手会自动射箭，戟士会自动近战，二者均可在步战中阵亡。阵亡车员不会自动补充，可按相同价格重新招募。车箱等级决定车员名额：初始 1 个，升级后为 3、5、9 个。战马初始 1 匹，最多 4 匹，提供机动加成。步卒阵亡则本役失败；可重试当前战局，保留已购装备和已收军资。
+每个战局只有一次挑战机会，不再有三辆战车的复活次数。战车耐久耗尽后将下车继续作战：WASD / 方向键直接移动步卒，空格挥剑。驾驶员固定随车，不占车员名额且不攻击；招募的弓手会自动射箭，弩士装填慢三倍、单发伤害翻倍并让弩矢穿透一名敌人，戟士会自动近战，三者均可在步战中阵亡。阵亡车员不会自动补充，可按相同价格重新招募。车箱等级决定车员名额：初始 1 个，升级后为 3、5、9 个。战马初始 1 匹，最多 4 匹，提供机动加成。步卒阵亡则本役失败；可重试当前战局，保留已购装备和已收军资。
 
 凯旋商店的「招募车员」页还可以雇一队募兵：1000 两一队，最多两队，占的是营地而不是车员名额。每队七人——四名矛手、一辆战车、两名弓手——按你起步的朝向列在车侧的空地上，步卒只守阵脚（最多前出 150px、离位不超过 70px），弓手站在后排放箭。阵旗是双方阵型共用的机制：每 3 秒为站在虚线圈内的本阵成员回复 1 点耐久；阵亡的士卒在下一战重新补齐，雇来的队伍不会消耗军府车员，也不会因一次战败而消失。募兵的战车沿用敌车数据（14 点耐久）：耐久降到 20% 或以下时向阵位撤退，回到阵中借阵旗回血，超过 40% 才再次出击；若撤退途中被近战缠住，则进入 FIGHT_TO_DEATH，此后永不再逃。这套士气循环不在募兵里私有：`units/chariot.js` 是双方共用的状态机（`nextChariotState()` 只读血量与视野，输出 HOLD/ENGAGE/REGROUP 三种意图，阈值集中在 `chariotTactics`），敌军的冲撞战车与募兵车只在「腿」上不同——募兵被缰绳拴在阵位，敌车退回自己的队列空位；两边都借本阵阵旗回血，超过 40% 才再次出击，撤退途中被近战缠住同样进入 FIGHT_TO_DEATH。溃逃、回差（hysteresis）与困兽死战完全同源，改一处两边同时生效；阵旗的计时、治疗与脉冲也只有一份：`units/formations.js` 的 `tickFormationAura()` 同时驱动 `state.formations` 与 `state.allyFormations`（敌军的 `chariot-archer` 仍走弓手脑子：它面对压力的答案是拉开距离，而不是死战）。商店的营地预览会为每队竖起一顶帐篷；开局布阵不消耗随机数，因此 `?seed=` 复现的敌军布阵不受募兵影响。
 
-移动设备建议横屏游玩。战斗画面会铺满屏幕，并提供半透明摇杆与攻击键；战车阶段摇杆方向直接决定地图上的移动目标方向，战车平滑转向并沿车头前进，急转时会减速，松开摇杆后凭惯性减速至停止。静止或慢速（低于 32 px/s）时，朝车头后方约 135° 以上轻推摇杆且幅度不超过 0.45，战车会沿车尾方向倒退，同时带轻微的后轮转向：车头以约 42°/s 的慢速转向摇杆的反方向，车尾跟着摇杆摆，斜向倒退因此沿弧线并入摇杆方向（最多约 45°、约 1.1 秒）而不是瞬间横移；角度或幅度超出该范围时仍按原有方式转向。键盘输入固定为满幅，因此只走转向分支。步战阶段摇杆切换为直接移动，攻击键改为按下即挥剑：蓄力只属于车上的弩，下车后不会留下一段悬着的蓄力。摇杆在窗口尺寸变化时保持显示，摇杆内的细环标出的正是反向小输入的半径。所有箭矢和石弹都会飞完全程落地，不会在半空中凭空消失：弓箭落地后会短暂留在地面，石弹无论落在空地、被墙木挡住还是命中目标，都会扬起浅色尘土并留下扩散的冲击环（战场草色偏亮，尘土因此使用更浅的色调，时长也长于普通火花）。玩家和随行车员受伤时也会留下血迹。已招募的弓手和戟士会在下车后跟随玩家并自动攻击；初始驾驶员不攻击，也不作为步战援兵。
+移动设备建议横屏游玩。战斗画面会铺满屏幕，并提供半透明摇杆与攻击键；战车阶段摇杆方向直接决定地图上的移动目标方向，战车平滑转向并沿车头前进，急转时会减速，松开摇杆后凭惯性减速至停止。静止或慢速（低于 32 px/s）时，朝车头后方约 135° 以上轻推摇杆且幅度不超过 0.45，战车会沿车尾方向倒退，同时带轻微的后轮转向：车头以约 42°/s 的慢速转向摇杆的反方向，车尾跟着摇杆摆，斜向倒退因此沿弧线并入摇杆方向（最多约 45°、约 1.1 秒）而不是瞬间横移；角度或幅度超出该范围时仍按原有方式转向。键盘输入固定为满幅，因此只走转向分支。步战阶段摇杆切换为直接移动，攻击键改为按下即挥剑：蓄力只属于车上的弩，下车后不会留下一段悬着的蓄力。摇杆在窗口尺寸变化时保持显示，摇杆内的细环标出的正是反向小输入的半径。所有箭矢和石弹都会飞完全程落地，不会在半空中凭空消失：弓箭落地后会短暂留在地面，石弹无论落在空地、被墙木挡住还是命中目标，都会扬起浅色尘土并留下扩散的冲击环（战场草色偏亮，尘土因此使用更浅的色调，时长也长于普通火花）。玩家和随行车员受伤时也会留下血迹。已招募的弓手、弩士和戟士会在下车后跟随玩家并自动攻击；初始驾驶员不攻击，也不作为步战援兵。
 
 战车属性为火力、防护、机动、稳定、容量，初始为 3 点（容量 2 点），范围为 1–10。火力决定弩箭伤害（火力 × 1.5）；防护按属性值 × 5% 概率完全抵消一次针对整辆战车的远程攻击；机动乘数为 0.5 + 机动 × 0.05；稳定决定战车耐久（稳定 × 10，初始 30 点）；容量仅供显示，车员名额由车箱升级决定。五件装备各有三级，后续等级会按配置明确带来属性惩罚；战马只增加机动。凯旋商店显示五项属性与购置预览，装备、马匹和人员价格均由配置表提供。这些换算集中定义在 `src/data/rules.js` 与 `src/data/equipment.js` 的派生函数中。
 
 战车高速正面冲撞可对可冲撞的敌人造成伤害，基础为 1 点；每级轴与轮辋升级额外增加 2 点（Lv1/Lv2/Lv3 分别为 3/5/7 点）。普通接触不造成冲撞伤害，重甲单位等免疫冲撞伤害的敌人仍不会受伤。机动和战马只影响战车速度与转向，不会直接增加冲撞伤害；弩架只提高弩箭伤害。
 
 冲撞步卒或弓手会将其撞倒，片刻后重新起身；重甲步卒可被撞倒，但不会受到车轮冲撞伤害，仍可被武器击伤。高速冲阵会以醒目的金色冲击特效刮伤敌军，并受到密集步卒反击。敌军刀剑与戈的近战攻击有不同的挥击特效，也会伤害车体；步卒会在攻击距离保持稳定，不再贴身前后抖动。战场上有轻薄、缓慢飘移的云影，画在最后一层（树冠、车身、血条都在它们之下），只靠透明度存在：整场之上飘过，从不遮挡任何东西。战马数量由购置决定，最多四匹，战马可见地随战车行进。敌方弓手、投石兵和弓车会在视线畅通时发射带抛物线的箭矢或石弹；墙木会遮挡低空弹道。树只挡路、不挡视线：树冠在视线之上，所以战车得从树缝里绕，弓手却能隔着树林点火（箭矢仍会撞在树干上）。战场上有浅滩、沙地和草地，分别会显著、中度和轻微减慢所有单位。步卒编队会护住后排远程单位，只在战车未进入阵型范围时保持阵线；战车一旦驶入阵型范围，整条阵线会一起压上来，追出有限的距离后收兵回位，不会无休止地追击，也不会被逐个引走。第 4、6、8… 战局会出现象兵、狮王馭者或投石车首领，首领战仍会持续刷新普通敌军；击败首领后前往撤离点。每一局还会在开战前抽定一个终局战局（第 10–13 之一），那一战必定是首领战：两头象兵、两头狮王馭者与四辆投石车同时结阵而来，且当战局标签改读「终局」，战绩栏的血条统计的是整支车队，而非某一位首领。八名首领全部倒下才开启撤离点；走到撤离点不再是开店，而是以凯旋卡结束这一局。受伤单位会在地面留下有限数量的血迹。战车遭受弩箭、战车冲撞或高速撞上障碍会损伤车体；耐久耗尽后下车继续作战。敌军会掉落铜钱、银锭或金饼，接触拾取；达成目标后，未拾取的战利也会在凯旋时收归军府。
+
+倒下的尸体留在战场上，纯属风景：步卒与猛兽沿用冲撞撞倒的那套姿态（侧翻压扁、灰白袍色、不再持械），战车则留下一辆没轮子的残骸（`drawChariotWreck`，只剩箱体、断裂的车辕和两截辐条），并保留自己一方的袍色。尸体只存在于 `state.corpses` 里，不进 `state.enemies`/`state.allies`：不占敌军上限、不会被瞄准或碰撞分离、不算作阵型的活人、也不参与光环结算，因此对战斗结果没有任何影响；它们画在血迹之上、树桩与活人之下，最多 40 具，超出时最早的那具先消失。每具尸体都是死亡瞬间的快照（位置、朝向、轮廓、袍色），绘制时不掷任何随机数，`H5_TRACE` 逐帧摘要因此逐字节不变；换关（`resetMission`）时清空。
+
+飞行物只有一张表：`src/data/projectiles.js` 的每一行写清初速、重力、半径、可穿透几名敌人、命中身体 / 落地 / 撞障碍各自的特效与音效、落地后留在草里的痕迹，以及空中和痕迹各用哪个画笔（`arrow` 箭、`bolt` 弩矢、`stone` 石弹）。弹道系统只在出膛时查一次表，把这一行挂在飞行物上；此后落地留痕、命中音效、穿透判定与绘制分支都读这一行的字段，没有任何一处再比较 `kind` 字符串——新增一种飞行物就是加一行（需要新外形时再加一个画笔），单测会把「表里点名的画笔、特效和音效都必须真的存在」钉住。三行的差别因此只是数字：箭 420 px/s、需要约 24.8° 仰角才能打 320 px，弩矢 760 px/s、仰角只有 6.7° 且能穿透一名敌人后继续飞，石弹命中身体也扬尘、落地不留痕迹（留给石弹的「插在地上的箭」会读作一支射失的箭）。老存档里的直飞子弹没有 `kind`，一律按无重力直飞处理，不至于因为缺一行数据就停在半空；表里查不到的 `kind` 也退化成箭，而不是让整场战局报错。这张表对两边一视同仁：`enemyStats` 的行只写「射哪一种」（`projectile`），穿透也属于弹道系统而不是射手，所以把一行 `projectile: "bolt"` 写在敌军名册上，敌军的弩矢同样会穿过挡在前面的人；唯一的例外是车体——命中玩家的那一发永远停下。敌军名册里的 `crossbow`（弩兵）就是这样一个定义：它写下弩士下车后那具身体的类型（`personnel.crossbow.footType` 指的就是这个 id），今天没有哪个阵型会派出它，所以加它不改任何一场战局的手感，只是让「`footType` 必须能在单位表里查到」这件事成立（单测钉住了这条引用）。
 
 ## 声音
 
@@ -145,6 +149,7 @@ h5game/
 │   │   ├── equipment.js          # Equipment, horse and personnel values; derived stat helpers
 │   │   ├── formations.js         # Formation patterns, unit/boss stats, shared chariot morale and banner aura
 │   │   ├── names.js              # Frozen clan/given name tables (weights + story keys)
+│   │   ├── projectiles.js        # One row per shot that flies: flight numbers, pierce, impact, decal, cues, painter
 │   │   ├── rules.js              # Balance constants for stats, projectiles, impact effects and campaign pacing
 │   │   ├── sounds.js             # The sound registry: files, cues, mix, death/purchase tables, soundscapes
 │   │   └── wilds.js              # Wild animals (the tiger): one row each, with `species` and `loot`
@@ -166,10 +171,11 @@ h5game/
 │   │   ├── combat.js             # Player fire (tap/drawn bow), crew attacks, damage, dismounting
 │   │   ├── aim.js                # Tap-shot target picker: nearest enemy in the nose's cone with a clear line
 │   │   ├── player.js             # Steering and player movement
-│   │   ├── projectiles.js        # Ballistic projectile creation, arcs, and collision
+│   │   ├── projectiles.js        # Ballistic creation from the data row, impact effects, piercing, collision
 │   │   ├── particles.js          # Particle lifecycle: the one builder, integrator and pruner
 │   │   ├── trails.js             # Speed-scaled ground dust behind anything travelling
 │   │   ├── blood.js              # Blood decal accumulation
+│   │   ├── corpses.js            # The fallen: snapshot bodies for the renderer, capped and outside every list that fights
 │   │   ├── equipment.js          # Shop purchases and campaign roster
 │   │   └── units/
 │   │       ├── enemies.js        # Enemy/boss/wild spawning, damage, and collision
@@ -181,7 +187,8 @@ h5game/
 │   │   ├── camera.js             # Player-follow camera (clamped delta, self-healing, optional focus point)
 │   │   ├── elements.js           # Element art: palisades, canopies, terrain patterns, cloud puffs
 │   │   ├── ground.js             # The floor: soil washes, grass flecks and grit, hashed onto the world
-│   │   ├── sprites.js            # Unit art: chariot rig and foot figure, shared by battlefield and shop
+│   │   ├── projectiles.js        # Shot art: the bodies in the air and the decals they leave, chosen by row
+│   │   ├── sprites.js            # Unit art: chariot rig, chariot wreck and foot figure, shared by battlefield and shop
 │   │   └── renderer.js           # Canvas rendering for terrain, units, and effects
 │   ├── platform/
 │   │   ├── audio.js              # Host seam: the only file that names Web Audio / <audio>; decode cache, unlock, graceful silence
@@ -271,7 +278,7 @@ H5_SEED=7 node scripts/smoke-test.mjs            # 换一个随机种子复跑�
 
 在任意地址后加 `?seed=<数字>`（例如 `http://localhost:8000/?seed=7`）即可固定本局种子，战场、编队与掉落都会重演，便于复盘问题。`?rings=10,40,30,20` 则只为这一次启动换一组战场环带比例（见上文「回」字一节），两者可以并用：同一个种子加不同的比例，得到的就是同一串随机数落在不同环带上的地图。启动参数由 `src/platform/launch.js` 的 `launchQuery()` 读取，`game.js` 只把 `seedSource` 与 `ringSource` 注入 `createGameState()` / `createStageManager()`，`src/utils/random.js` 保持纯函数（`parseSeed()` / `createRandomSeed()`），因此引擎层不依赖 `location`、`URLSearchParams` 或 `wx`。`window.__h5game` 暴露 `state`、`player`、`campaign`、`world`、`view`、`camera`，仅供调试脚本读取。
 
-Gameplay behavior is coordinated by `game/game.js`; specialized systems receive shared state and callbacks through small factories. `game/collision.js` owns obstacle/terrain queries, `game/combat.js` owns player fire and damage, `game/projectiles.js` owns ballistic flight and impacts, and `game/loop.js` owns the animation-frame loop with failure isolation. The loop is also the only writer of the time base (`state.lastTime`), clamping every delta to `[0, 0.05]` seconds and treating non-finite values as zero; `render/camera.js` re-seats itself if it is ever handed a non-finite position, so no single bad frame can poison the view for the rest of the session. Collision lives in one factory so player, enemy, and projectile code share the same geometry rules.
+Gameplay behavior is coordinated by `game/game.js`; specialized systems receive shared state and callbacks through small factories. `game/collision.js` owns obstacle/terrain queries, `game/combat.js` owns player fire and damage, `game/projectiles.js` owns ballistic flight and impacts, and `game/loop.js` owns the animation-frame loop with failure isolation. What a shot *is* — its release speed, gravity, radius, how many bodies it passes through, the effect and cue at each kind of impact, the decal it leaves, and the painter that draws it — is one row in `data/projectiles.js`; the system resolves that row when a bullet is created, keeps it on the bullet, and every later branch (pierce, cue, decal, art) reads the row instead of comparing a `kind` string. The row belongs to the shot, not to the side that loosed it: an enemy row that names `bolt` pierces the player's line exactly as the recruit's does (the champion's rig is the one body an enemy shot always stops on), and `enemyStats.crossbow` exists so the type id a recruit walks as (`personnel.crossbow.footType`) always resolves to a real unit row — no preset fields it, so the roster and every battle trace are unchanged. The loop is also the only writer of the time base (`state.lastTime`), clamping every delta to `[0, 0.05]` seconds and treating non-finite values as zero; `render/camera.js` re-seats itself if it is ever handed a non-finite position, so no single bad frame can poison the view for the rest of the session. Collision lives in one factory so player, enemy, and projectile code share the same geometry rules.
 
 Particles have one lifecycle module, `game/particles.js`: `spawnParticle()` fills the fields every emitter used to repeat, `updateParticles()` and `pruneParticles()` advance and drop them, and `countParticles()` answers "how many of this kind are alive". The impact burst in `units/enemies.js`, the speed-scaled ground trail in `game/trails.js` and the frame loop in `game.js` all go through it, so a field that a copy used to forget - `maxLife`, say, which the renderer needs to compute alpha - cannot diverge between emitters. The trail itself measures speed from each unit's own displacement (`distance / delta`) instead of its `speed` field, which makes a hull pinned against a wall, a unit turning on the spot and a crowd being shoved stay quiet for free; a displacement pointing away from the nose is rejected, so a reversing chariot (and the drag of a knockback) leaves no wake. It draws no random numbers at all - a lateral offset and a palette step alternate instead - because every draw would come out of the battle's seed stream and move every enemy decision in the run. The cap (`effectRules.trail.maxLive`) and the off-screen cull keep a full formation from flooding the list, and the renderer paints the trail in its own pass under the bodies while the sparks, rings and motes keep their pass above them.
 

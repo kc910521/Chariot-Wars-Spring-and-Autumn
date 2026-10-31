@@ -5,6 +5,13 @@ import { translate } from "../i18n/index.js";
 import { distanceBetween } from "../utils/math.js";
 import { selectAimTarget } from "./aim.js";
 import { addBloodStain } from "./blood.js";
+import { addCorpse } from "./corpses.js";
+
+// The roster stores a role id, never a copy of the row: price, reach, damage and
+// what the recruit shoots all live in one table (src/data/equipment.js). Looking the
+// row up by id is the only way this module touches `personnel`, so a new recruit
+// needs no code here.
+const rowFor = (role) => personnel.find((person) => person.id === role);
 
 // Player-side combat: chariot/foot attacks, crew, dismounted companions, and
 // the damage model. Screen transitions are delegated through `onDefeat`, banner
@@ -96,23 +103,26 @@ export function createCombatSystem({
   function updateCrew(delta) {
     if (player.mode === "foot") return;
     const members = campaign.roster.filter((member) => member.alive !== false);
-    // The volley fan is measured over the archers alone. `fireAllyShot` turns
+    // The volley fan is measured over the shooters alone. `fireAllyShot` turns
     // `index`/`count` into a bearing offset, so counting the halberdiers in either
-    // number pushes every archer's arrow off the target it actually aimed at.
-    const archers = members.filter((member) => member.role === "archer");
+    // number pushes every shot off the target it actually aimed at. A shooter is any
+    // row carrying a `projectile` - the same flag the line-of-sight filter and the
+    // guard below use, so a new ranged recruit joins the fan without a code change.
+    const shooters = members.filter((member) => rowFor(member.role)?.projectile);
     for (const member of members) {
-      const config = personnel.find((person) => person.id === member.role);
+      const config = rowFor(member.role);
       if (!config) continue;
       member.cooldown = Math.max(0, (member.cooldown ?? 0) - delta);
       if (member.cooldown > 0) continue;
       const target = state.enemies
         .filter((enemy) => !enemy.destroyed)
         .filter((enemy) => distanceBetween(player.x, player.y, enemy.x, enemy.y) <= config.range)
-        .filter((enemy) => member.role !== "archer" || collision.hasLineOfSight(player.x, player.y, enemy.x, enemy.y))
+        .filter((enemy) => !config.projectile
+          || collision.hasLineOfSight(player.x, player.y, enemy.x, enemy.y))
         .sort((first, second) => distanceBetween(player.x, player.y, first.x, first.y) - distanceBetween(player.x, player.y, second.x, second.y))[0];
       if (!target) continue;
 
-      if (member.role === "archer") {
+      if (config.projectile) {
         projectiles.fireAllyShot({
           x: player.x,
           y: player.y,
@@ -123,10 +133,13 @@ export function createCombatSystem({
           // The firing member's own row. `personnel[0]` only happens to be the
           // archer row, so it tied crew damage to the order of the roster table.
           damage: config.damage,
-          // `indexOf` rather than a firing counter: an archer waiting on cooldown
+          // The row's own shot: a bolt passes through one extra body and an arrow
+          // stops on the first, and both arcs come from the same data table.
+          kind: config.projectile,
+          // `indexOf` rather than a firing counter: a shooter waiting on cooldown
           // must not shift the lanes of the ones that do fire.
-          index: archers.indexOf(member),
-          count: archers.length,
+          index: shooters.indexOf(member),
+          count: shooters.length,
         });
       } else {
         const angle = Math.atan2(target.y - player.y, target.x - player.x);
@@ -154,18 +167,27 @@ export function createCombatSystem({
     const roster = campaign.roster.filter((member) => member.alive !== false);
     for (let index = 0; index < roster.length; index += 1) {
       const member = roster[index];
-      const config = personnel.find((person) => person.id === member.role);
+      const config = rowFor(member.role);
       if (!config) continue;
-      const isArcher = member.role === "archer";
+      // Two different questions: `projectile` is what the companion carries (and
+      // whether it shoots at all), `footType` is the silhouette it walks as. They
+      // used to be one `role === "archer"` test, which painted a crossbowman green
+      // and handed him a bow.
+      const ranged = Boolean(config.projectile);
       state.footCompanions.push({
-        type: isArcher ? "archer" : "ge",
+        type: config.footType ?? "ge",
         x: player.x - Math.cos(player.angle) * (44 + Math.floor(index / 2) * 22)
           + Math.sin(player.angle) * ((index % 2 === 0 ? -1 : 1) * (20 + Math.floor(index / 2) * 10)),
         y: player.y - Math.sin(player.angle) * (44 + Math.floor(index / 2) * 22)
           - Math.cos(player.angle) * ((index % 2 === 0 ? -1 : 1) * (20 + Math.floor(index / 2) * 10)),
         radius: 10,
         angle: player.angle,
-        color: isArcher ? "#398b63" : "#b28b4d",
+        color: ranged ? "#398b63" : "#b28b4d",
+        // What it looses when it shoots: null for a melee body.
+        projectile: config.projectile ?? null,
+        // What it holds: the row's own kit, so a dismounted crossbowman walks to
+        // the line with a crossbow and not with the default sword.
+        visual: { overlays: config.overlays ?? ["sword"] },
         health: config.health,
         maxHealth: config.health,
         // Snapshotted like health: the dismounted companion fights on its own row's
@@ -212,7 +234,7 @@ export function createCombatSystem({
         const headingX = point === null ? followX : point.x;
         const headingY = point === null ? followY : point.y;
         const followAngle = Math.atan2(headingY - companion.y, headingX - companion.x);
-        const speed = companion.type === "archer" ? 112 : 122;
+        const speed = companion.projectile ? 112 : 122;
         collision.moveEntitySafely(
           companion,
           Math.cos(followAngle) * Math.min(followDistance, speed * delta) + (companion.knockbackX || 0) * delta,
@@ -229,7 +251,7 @@ export function createCombatSystem({
       // then throw the answer away because the bow was still reloading. That was
       // the whole steady cost of the foot phase.
       if (companion.attackCooldown > 0) continue;
-      if (companion.type === "archer") {
+      if (companion.projectile) {
         const range = companion.range;
         const target = state.enemies
           .filter((enemy) => !enemy.destroyed && distanceBetween(companion.x, companion.y, enemy.x, enemy.y) < range)
@@ -245,6 +267,9 @@ export function createCombatSystem({
           originOffset: projectileRules.allyArrow.footOriginOffset,
           range,
           damage: companion.damage,
+          // A dismounted crossbowman still looses bolts: the row that decided the
+          // body also decides the shot.
+          kind: companion.projectile,
         });
         companion.attackCooldown = companion.cooldown;
       } else {
@@ -317,6 +342,9 @@ export function createCombatSystem({
       const member = campaign.roster.find((person) => person.id === companion.personnelId);
       if (member) member.alive = false;
       burst(companion.x, companion.y, "#8d4534");
+      // A buried companion is still a body on the ground, drawn from the same
+      // snapshot list as an enemy's - the roster is what forgets him, not the field.
+      addCorpse(state, companion);
     }
   }
 

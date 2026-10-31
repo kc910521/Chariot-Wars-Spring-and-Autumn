@@ -1,5 +1,6 @@
 import { formationAura, formationOrders } from "../../data/formations.js";
 import { addBloodStain } from "../blood.js";
+import { addCorpse } from "../corpses.js";
 import { campaignRules, effectRules } from "../../data/rules.js";
 import { soundCues, soundDeathCues } from "../../data/sounds.js";
 import { clamp, shortestAngleDifference } from "../../utils/math.js";
@@ -512,6 +513,10 @@ export function createEnemies({
       }
       dropLoot(enemy);
       burst(enemy.x, enemy.y, enemy.deathBurst);
+      // What is left on the ground. A snapshot for the renderer only: the body is
+      // not re-added anywhere, so it cannot come back as a target, a separation
+      // partner or the last man a formation counts as standing.
+      addCorpse(state, enemy);
       // The silhouette decides the death: a champion riding a chariot sounds like
       // a chariot going, a foot soldier like a man going. `visual.kind` is the same
       // field the renderer draws from, so the two can never disagree.

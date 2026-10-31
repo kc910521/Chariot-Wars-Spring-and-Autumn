@@ -4,7 +4,7 @@ export const formationPatterns = [
     slots: [
       ["spear", -82, -54], ["ge", -27, -54], ["spear", 27, -54], ["spear", 82, -54],
       ["chariot", -60, 0], ["chariot-archer", 0, 0], ["chariot", 60, 0],
-      ["archer", -42, 58], ["slinger", 42, 58],
+      ["archer", -42, 58], ["crossbow", 42, 58],
     ],
   },
   {
@@ -12,7 +12,7 @@ export const formationPatterns = [
     slots: [
       ["heavy", -90, -48], ["spear", -30, -48], ["heavy", 30, -48], ["spear", 90, -48],
       ["ge", -90, 0], ["spear", -30, 0], ["ge", 30, 0], ["spear", 90, 0],
-      ["archer", -45, 58], ["slinger", 45, 58],
+      ["archer", -45, 58], ["crossbow", 45, 58],
     ],
   },
   {
@@ -20,7 +20,7 @@ export const formationPatterns = [
     slots: [
       ["spear", -90, -70], ["spear", -30, -70], ["ge", 30, -70], ["spear", 90, -70],
       ["spear", -90, -20], ["ge", -30, -20], ["archer", 30, -20], ["ge", 90, -20],
-      ["archer", -60, 48], ["slinger", 0, 48], ["archer", 60, 48],
+      ["archer", -60, 48], ["crossbow", 0, 48], ["archer", 60, 48],
       ["spear", -60, 96], ["spear", 0, 96], ["ge", 60, 96],
     ],
   },
@@ -30,7 +30,7 @@ export const formationPatterns = [
       ["spear", -105, -80], ["heavy", -35, -80], ["heavy", 35, -80], ["spear", 105, -80],
       ["ge", -105, -25], ["spear", -35, -25], ["ge", 35, -25], ["spear", 105, -25],
       ["spear", -105, 30], ["ge", -35, 30], ["spear", 35, 30], ["heavy", 105, 30],
-      ["archer", -70, 88], ["slinger", 0, 88], ["chariot-archer", 70, 88],
+      ["archer", -70, 88], ["crossbow", 0, 88], ["chariot-archer", 70, 88],
     ],
   },
 ];
@@ -173,7 +173,7 @@ export const formationTiers = [
   },
   {
     // The first line with vehicles in it: two chariots in the centre, a heavy on
-    // each flank, and a mixed shooting rank (one bow, three slings).
+    // each flank, and a mixed shooting rank (one bow, three crossbows).
     nameKey: "formation.horseCannon",
     descriptionKey: "shop.formationDescription.horseCannon",
     price: 1150,
@@ -181,7 +181,7 @@ export const formationTiers = [
       ["ge", -96, -56], ["ge", -32, -56], ["ge", 32, -56], ["ge", 96, -56],
       ["heavy", -84, 0], ["heavy", 84, 0],
       ["chariot", -30, 0], ["chariot", 30, 0],
-      ["archer", -72, 58], ["slinger", -24, 58], ["slinger", 24, 58], ["slinger", 72, 58],
+      ["archer", -72, 58], ["crossbow", -24, 58], ["crossbow", 24, 58], ["crossbow", 72, 58],
     ],
   },
   {
@@ -293,6 +293,16 @@ export const allyStats = {
 //                 (its travel in that time is the span it may leave the slot)
 //   weapon / attackInterval
 //                 what the melee swing draws and how often it lands
+//   projectile    the shot, named after a row in data/projectiles.js. That row
+//                 (not this one) decides how the shot flies: speed, gravity,
+//                 how many bodies it passes through, its impact effect, its
+//                 decal and its cues. This table only says *which* shot leaves.
+//   projectileSpeed / projectileRange / fireInterval
+//                 the three numbers a row may still override: how fast this
+//                 unit throws it, how far it aims, and how long it reloads. A
+//                 missing speed falls back to the projectile's own, a missing
+//                 range to `range`, and a missing interval is rolled from
+//                 `projectileRules.enemyShot`.
 //   kite          ranged unit: back off inside `retreat`, only loose a shot
 //                 beyond `minFire`
 //   vehicle       the player's hull pushes foot units aside, never these
@@ -343,6 +353,27 @@ export const enemyStats = {
     holdsRank: true,
     kite: { retreat: 210, minFire: 120 },
     visual: { kind: "foot", scale: 1.3, robe: "#4f8b55", overlays: ["bow"] },
+  },
+  // The 弩兵 - the body the recruit table's `footType: "crossbow"` names. The
+  // crossbowman a player hires walks as this type id, and a type id has to exist
+  // in the roster the rest of the field reads, or the recruit would be walking as
+  // a name nobody defined (the two recruits that predate it said "archer" and
+  // "ge", which are rows here). Its shot is the same `bolt` row the recruit
+  // fires - one extra body, flat arc - and the piercing itself lives in the
+  // projectile system for both owners, so an enemy bolt obeys this row too.
+  //
+  // No preset or spawn pattern fields this row today: the campaign's roster is
+  // unchanged, which is why adding it moves no balance and no trace. It is the
+  // definition, not a new enemy - a formation only has to say "crossbow" to put
+  // it on the field. Numbers follow the recruit's trade: twice the bow's damage
+  // on three times its reload, reaching shorter.
+  crossbow: {
+    health: 5, radius: 14, speed: 42, damage: 20, range: 400,
+    ranged: true, projectile: "bolt", projectileSpeed: 760, projectileRange: 300, fireInterval: 6.3,
+    behaviour: "ranged", sightRange: 620, score: 130, deathBurst: "#a74732",
+    holdsRank: true,
+    kite: { retreat: 210, minFire: 120 },
+    visual: { kind: "foot", scale: 1.3, robe: "#7a5030", overlays: ["crossbow"] },
   },
   slinger: {
     health: 3, radius: 13, speed: 47, damage: 14, range: 330,
