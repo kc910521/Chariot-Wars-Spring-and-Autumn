@@ -14,6 +14,9 @@ export function createCombatSystem({
   state, player, campaign, collision, projectiles,
   damageEnemy, addMeleeEffect, burst, playSound, updateHud,
   announceBanner, onDefeat,
+  // Optional route planner for the dismounted crew's follow slot (see
+  // src/game/pathfinding.js). Null keeps the straight line to the slot.
+  paths = null,
 }) {
   // Two releases share one button. While the button is down the bow is only
   // drawn: `state.fireHold` counts the draw and `state.fireHeld` remembers the
@@ -202,7 +205,13 @@ export function createCombatSystem({
       const followY = player.y - Math.sin(player.angle) * backOffset - Math.cos(player.angle) * sideOffset;
       const followDistance = distanceBetween(companion.x, companion.y, followX, followY);
       if (followDistance > 13) {
-        const followAngle = Math.atan2(followY - companion.y, followX - companion.x);
+        // The slot is where the companion is going; the step may head for a
+        // waypoint instead when a tree or a wall stands between the two. The cap
+        // below still measures the real slot, so a detour never looks like arrival.
+        const point = paths === null ? null : paths.waypoint(companion, followX, followY);
+        const headingX = point === null ? followX : point.x;
+        const headingY = point === null ? followY : point.y;
+        const followAngle = Math.atan2(headingY - companion.y, headingX - companion.x);
         const speed = companion.type === "archer" ? 112 : 122;
         collision.moveEntitySafely(
           companion,

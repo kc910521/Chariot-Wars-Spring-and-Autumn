@@ -125,7 +125,7 @@ h5game/
 │   ├── transcode-audio.mjs       # The asset pipeline: 22.05 kHz / 16-bit / mono PCM, peak-normalised, loop edges sealed
 │   ├── perf-test.mjs             # Frame-budget benchmark for the per-frame loops
 │   ├── smoke-test.mjs            # Boots main.js against a stub DOM: menu → prologue → battle → shop (hire a line) → defeat → the last stage → victory card → resting menu → the tiger drill
-│   └── unit-test.mjs             # Rules, collision, ballistics, bow aim, blood, RNG, naming, shop geometry, hired formations, the last stage, the post-victory rest and the tiger drill
+│   └── unit-test.mjs             # Rules, collision, pathfinding, ballistics, bow aim, blood, RNG, naming, shop geometry, hired formations, the last stage, the post-victory rest and the tiger drill
 ├── styles/
 │   └── game.css
 ├── src/
@@ -160,7 +160,8 @@ h5game/
 │   │   ├── stages.js             # Campaign stages, objectives, extraction, the drawn last stage and the victory hand-off
 │   │   ├── victory-lock.js       # The post-victory rest: one storage key, one window, expiry and clock-skew handling
 │   │   ├── identity.js           # Weighted name roll: one clan, one given name, their story keys
-│   │   ├── collision.js          # Obstacle/terrain collision, movement clamping, indexed line of sight
+│   │   ├── collision.js          # Obstacle/terrain collision, movement clamping, the movement broadphase, indexed line of sight
+│   │   ├── pathfinding.js        # Grid routing for every non-player unit: one clearance field, typed-array A*, the per-frame gate
 │   │   ├── elements.js           # Element runtime: shapes, sight, movement cost, drift, footprint queries
 │   │   ├── combat.js             # Player fire (tap/drawn bow), crew attacks, damage, dismounting
 │   │   ├── aim.js                # Tap-shot target picker: nearest enemy in the nose's cone with a clear line
@@ -237,9 +238,30 @@ H5_SEED=7 node scripts/smoke-test.mjs            # 换一个随机种子复跑�
 
 冒烟脚本最后还有一段“下车阶段”：先通过真实的“下一战”流程重开一场战局，买入一名弓手和一名长戈兵，再用真实的伤害路径把车体打空，于是 `dismountPlayer`、随从站位、随从寻敌与齐射都会真正跑起来。这段流程需要 HUD 之外的两个入口，因此 `window.__h5game` 额外暴露了 `combat` 与 `stageManager`（仍然只由测试脚本读取）。
 
-`scripts/perf-test.mjs` 用同一套种子化的战场（46 个障碍、四支编队、满编随从）给每帧循环计时，并把阈值写在文件顶部的 `budgets` 里：敌军 AI、弓手齐射、下车随从、30 发弹道，以及单次 `hasLineOfSight` 的微秒成本。阈值是棘轮 —— 每一项都紧贴当前实测值，性能改动落地后要把它调低，注释里记着实测数与目标数。
+`scripts/perf-test.mjs` 用同一套种子化的战场（46 个障碍、四支编队、满编随从）给每帧循环计时，并把阈值写在文件顶部的 `budgets` 里：敌军 AI、弓手齐射、下车随从、30 发弹道，以及单次 `hasLineOfSight`、单次寻路门控（直线畅通）和单次完整规划（直线被挡）的微秒成本。阈值是棘轮 —— 每一项都紧贴当前实测值，性能改动落地后要把它调低，注释里记着实测数与目标数。
 
 商店页也有一条冒烟链路，而且它走的是玩家真正走的那条路：脚本用 `stageManager.enterShop()` 切进商店，之后只按画布自己在一帧里登记的命中矩形（`shopScreen.lastFrame()` 的 `rows[i].buyRect`、`tabs`、`next`）派发指针事件，既不查 DOM 商品卡也不点按钮。链路逐条走完：开页画出雷达、战车与页脚；按下一行先让雷达与车身预览（松手才扣钱），滑到行外等于取消，轻点则把这条说明钉住——购置会整页重画，钉住的说明必须还在；买不起的按钮写出价格而不是一个灰掉的「购置」；买下的行升一级，同一句话既进画布上的提示条也进 `#shop-live` 这个 `aria-live` 区域；切到车员页后篝火按营帐数搭帐，按住募兵多搭一顶、松手收回、买下就留着；页脚的「下一战」离店并领着这队募兵开上下一战局。单元测试不必开浏览器：`fakePageCanvas()` 给一块带 `getBoundingClientRect` 与指针事件的假画布，指针坐标按元素比例换算进 960 宽的视图单位，于是「按下 → 滑开 → 抬起」「买不起」「关页后不再排帧」「0×0 的画布是空操作」这些行为都能在没有 DOM 的情况下断言。雷达与车阵仍是纯几何，另有单元测试直接守住：`radarPolygon()` 必须等于 `calculateChariotStats()` 的五个属性值，任何装备加成或惩罚的 stat 名都必须出现在雷达轴表里，四种马匹数量（含满配底盘）的战车都必须完整落在版面交给它的矩形内，而且只有一种轴被填满——拟合是撑满而不是缩到角落里。
+
+### 寻路与碰撞宽相位
+
+移动查询和视线查询是同一种病：`moveEntitySafely` 让每个单位每帧问两次（逐轴各一次），满编战局就是每秒上千次全表扫描，而它想要的只是一个「这一步走不走得过去」。于是 `circleIntersectsObstacle` 也走一张均匀网格（96px，按元素自身的包围盒登记，查询时按圆的包围盒取格），`blocksMovement` 为否的元素不进这张表。键与视线索引相同 —— `campaign.obstacles` 的**列表身份 + 长度**，所以换战场和 `fellTree()` 都不用额外通知；而 `map.js` 边生成边查的那个还在长的数组会自动退回全表扫描（它的长度每次都变，给它建索引只会更慢）。`obstacleAt()` 仍然全表扫：它回答的是「是哪一个障碍挡住了我」，答案是列表里的第一个，格子的顺序会悄悄改掉这个答案。判定与全表逐点等价（单元测试 4000 个随机点 × 5 种半径对拍）。单次约 1.5µs → 0.05µs。
+
+有了这张宽相位的底子，寻路才付得起账。`pathfinding.js` 整场仗只维护**一张 Float32 距离场**：`clear[格]` 是该格中心到最近障碍表面的有符号距离，上限 48，2800×1800 只要 12.3KB。它不是「通/不通」的布尔格，而是每格一个 clearance，于是同一张表同时服务全部四种体积（16/24/32/40，`radiusBucket()` 把 12~38px 的半径向上取到 8 的倍数），不需要按半径建多份掩码。建表按障碍画、不按格扫：46 个障碍各自写「包围盒外扩 48px」内的格子，实测 0.19ms，逐格扫全表要 4~5ms。列表一换（换战场、倒树）整张重建，每条路线都带着建表时的 generation，过期即作废。
+
+搜索是八方向 A*，禁止切角（对角的两个直角面也必须装得下这个体积），octile 启发，节点上限 1200。起点与终点按 Chebyshev 两环吸附到最近的「装得下这个体积」的格子 —— 单位贴墙站时它自己那格本来就过不去，布尔格只能回答「堵住」然后把人困死，距离场加两环吸附把这个损失降到 0。每一步的代价乘 `1 + 0.3 × (1 - clearance/48)`，路线因此走缝隙中间而不是刮着墙；启发式仍是纯 octile，所以依然可采纳。
+
+产出不是格子的台阶，而是航点：贪心拉直（从锚点往前伸，直到走不过去为止）把 60~90 格的锯齿压到约 2.7 个航点 —— 精确的 string-pull 每条路线要 400µs，是预算的十倍。但网格的值采在格中心，拐角处最多会把间隙高估半个格对角线（28px），所以**每条被采用的航段还要用真实几何复核**（每 12px 采样，直接问 `circleIntersectsObstacle` —— 前面那张宽相位表就是为了让它够便宜）：复核不过就退一格重试，退到一格还不过，就停在最后一个可达点，绝不把一段穿墙的线交给移动代码。实测 193 条随机路线里 2 段有 0.3px 级的采样残差，没有一段超过 2px。
+
+同一个问题每帧问三次，越便宜越先试：① 手上这条路线还活着（目标移动没超过 24px、TTL 未到、没被判定卡住）就直接给下一个航点；② 直线畅通就把目标原样还回去 —— 绝大多数单位绝大多数帧走的是这一层，代价 0.27µs；③ 都不行才规划，且**每帧最多两次**（稳态需求约 0.8 次/帧）。卡住（0.3s 内挪不到 6px）、路线走完却还没到（多半是目标本身就落在某个障碍的余量里）、搜索失败，三种情况都丢掉路线并退避 0.3s —— 不退避的话，一个够不着的目标会让它每帧重新规划（实测 40 秒里规划了 1999 次）。时钟只吃 `beginFrame(delta)` 累起来的模拟时间，不读 `performance.now()`，所以 `H5_TRACE` 能逐帧复现。
+
+接进去的只有非玩家的身体：敌军（推进、搜索、回岗、战车结阵）、雇佣阵线（`stepToward` 是唯一入口）、下车随从（跟队）。玩家自己开，`moveEntitySafely` 才是所有人的刹车，寻路只决定「往哪个方向走」。每个调用点都留了「没有寻路时的原样」：注入的 `paths` 为 `null` 时走的还是原来那条 atan2 直线，`stepToward` 返回的距离始终是到**真实目标**的距离（调用方拿它判断「到没到」），`searchWalk`/`walkHome` 的到达判定也仍量真实目标。`retreat()`（后撤）、`guardPost` 的贴身旁移、编队分离、玩家本体、`resolveInfantryCollision`、`separateAllies/Enemies` 一概未动。
+
+行为上的收益实测：把 120 组「直线走不通」的起点/终点交给真实移动代码跑 40 秒，有寻路时 57 组走到（失败的 10 组里 9 组的目标本身落在障碍余量内、物理上不可达，另 1 组是体积挤不进的窄袋），没有寻路时只有 21 组。代价：单次规划 20~23µs（跨整图最坏 55µs），门控 0.27µs，敌军 AI 每帧 0.14ms、弓手齐射 0.16ms、下车随从 0.11ms、30 发弹道 0.06ms（后三项都比改动前更低，那是宽相位省下来的）。
+
+和上一段不同，这次 `H5_TRACE` 的摘要**应该**变（`9243a9e5…` 对 `26e63db9…`）：第一处差异出现在第 1952 帧，是一辆正在追击的敌方战车换了个朝向。把 `paths` 换成一个只会返回 `null` 的桩，摘要与改动前逐字节相同 —— 所以差异只可能来自「路线真的带它绕了」，而不是哪一处算术被顺手改了。
+
+两个回滚旋钮：`CLEAR_REWARD=0` 关掉贴墙偏好（路线更短、更贴墙），`MAX_PLANS_PER_FRAME=0` 关掉规划，只剩直线门控。
+
 
 视线查询曾经是最大的逐帧热点：每次 `hasLineOfSight` 沿线段每 12px 采样一次，每个采样点都要遍历全部约 46 个障碍（约 1.5k 次形状测试），而一名准备就绪的弓手会为每个候选敌人各走一遍。现在 `collision.js` 在开战换列表时把“遮挡视线的”元素按格装进一张均匀网格索引（`campaign.obstacles` 换了列表或长度才重建），每个采样点只查自己所在的格子，判定结果与全表遍历逐条等价（单元测试用 500 条随机线段对拍）；`combat.js` 则把随从的冷却检查移到寻敌之前，装填中的弓手不再白算一遍视线。同一套基准下，单次视线从约 57µs 降到 0.6µs，弓手齐射从约 12ms 的突发降到 0.2ms，下车随从从约 9ms 降到 0.15ms，敌军 AI 从约 0.9ms 降到 0.25ms，而 `H5_TRACE=1` 的逐帧摘要完全不变 —— 这是一次只改代价、不改行为的重构。小游戏端同源同款，摘要同样不变。
 

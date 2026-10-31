@@ -11,6 +11,7 @@ import { createAllies } from "./units/allies.js";
 import { createPlayerController } from "./player.js";
 import { createGameState } from "./state.js";
 import { createCollisionSystem } from "./collision.js";
+import { createPathSystem } from "./pathfinding.js";
 import { fellTree, isFellable, rectHitsAnyObstacle, rectTerrain } from "./elements.js";
 import { createCombatSystem } from "./combat.js";
 import { createProjectileSystem } from "./projectiles.js";
@@ -179,6 +180,15 @@ function boot() {
     },
   });
   const collision = createCollisionSystem({ campaign, world });
+  // Grid routing for every body that is not the player. One clearance field per
+  // battle, one A* route per unit per second at most (see pathfinding.js): the
+  // player drives himself, and `moveEntitySafely` is what stops everyone else, so
+  // this only ever decides *which way* a unit walks. It leans on the collision
+  // broadphase for its exact segment check, which is why it is built after it.
+  const paths = createPathSystem({
+    campaign, world,
+    circleIntersectsObstacle: collision.circleIntersectsObstacle,
+  });
   const renderer = createRenderer({
     canvas, context, view, camera, world, player, state,
     getObstacles: () => campaign.obstacles,
@@ -292,6 +302,7 @@ function boot() {
     random: () => campaign.random(),
     circleIntersectsObstacle: collision.circleIntersectsObstacle,
     moveEntitySafely: collision.moveEntitySafely,
+    paths,
     getChariotCollisionDamage: () => calculateChariotCollisionDamage(campaign.equipment),
     playSound, updateHud, hasLineOfSight: collision.hasLineOfSight,
     fireEnemy: defer(() => projectileRef.current, "fireEnemyShot"),
@@ -327,7 +338,7 @@ function boot() {
     moveEntitySafely: collision.moveEntitySafely,
     hasLineOfSight: collision.hasLineOfSight,
     circleIntersectsObstacle: collision.circleIntersectsObstacle,
-    rectHitsAnyObstacle, rectTerrain,
+    rectHitsAnyObstacle, rectTerrain, paths,
     damageEnemy, fireAllyShot: defer(() => projectileRef.current, "fireAllyShot"),
     addMeleeEffect, burst, playSound,
   });
@@ -340,7 +351,7 @@ function boot() {
   projectileRef.current = projectiles;
 
   const combat = createCombatSystem({
-    state, player, campaign, collision, projectiles,
+    state, player, campaign, collision, projectiles, paths,
     damageEnemy, addMeleeEffect, burst, playSound, updateHud,
     announceBanner,
     onDefeat: () => {
@@ -480,6 +491,10 @@ function boot() {
 
   function update(delta) {
     state.elapsed += delta;
+    // The route clock is simulated time, not wall time: a route's TTL and its
+    // stuck timer have to replay identically under H5_TRACE, and the planning
+    // budget has to reset once per simulated frame (pathfinding.js).
+    paths.beginFrame(delta);
     player.swarmDamageCooldown = Math.max(0, player.swarmDamageCooldown - delta);
     // A tutorial card (or a pan) is a real pause: every control reads neutral, so
     // the chariot coasts to a stop instead of the field freezing mid-stride. The

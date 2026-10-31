@@ -820,9 +820,10 @@ function sampleFootPhase() {
     }
     // A fallen companion is left where it fell, which is the whole point of the
     // follow check: only the ones still on their feet have to keep up. The metric
-    // is the *closest* companion rather than the farthest - the follow loop walks
-    // straight at its slot with no pathfinding, so one companion can snag on a
-    // wall corner while the group is fine. A broken loop would strand them all.
+    // is the *closest* companion rather than the farthest - a companion can still
+    // snag on a wall corner while the group is fine (the follow loop bends round
+    // obstacles through src/game/pathfinding.js, but a body that was shoved into a
+    // pocket has to walk out of it). A broken loop would strand them all.
     if (companion.destroyed) continue;
     footPhase.closest = Math.min(
       footPhase.closest,

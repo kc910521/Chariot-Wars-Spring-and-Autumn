@@ -9,9 +9,11 @@ import { elementIntersects } from "./elements.js";
 // createBattlefield in map.js). This is the question it asks.
 //
 // A coarse flood fill over the obstacle list, not a pathfinder: nothing consumes
-// the route, only its existence. A cell is walkable when the body fits at its
-// centre, which is deliberately conservative - a false "blocked" costs one
-// re-roll, while a false "clear" strands an objective behind a wall.
+// the route, only its existence, and the answer is needed *before* the battle
+// exists. A cell is walkable when the body fits at its centre, which is
+// deliberately conservative - a false "blocked" costs one re-roll, while a false
+// "clear" strands an objective behind a wall. The per-frame question ("which way
+// do I walk from here") is src/game/pathfinding.js, on a 40px distance field.
 const REACHABILITY_CELL = 60;
 
 // The fill on its own, so a caller with more than one question ("can the chariot

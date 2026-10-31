@@ -32,10 +32,21 @@ const RAM_COUNTER_SPEED = 65;
 
 export function createBehaviours({
   player, moveEntitySafely, fireEnemy, damageCombatTarget, addMeleeEffect, burst, damageEnemy,
-  getChariotTravelSpeed,
+  getChariotTravelSpeed, paths = null,
 }) {
-  function advance(enemy, angle, delta) {
-    moveEntitySafely(enemy, Math.cos(angle) * enemy.speed * delta, Math.sin(angle) * enemy.speed * delta, enemy.radius);
+  // Walk at a point rather than along a heading. Without a path system this is
+  // the old `advance` step with the angle to the goal - the same `atan2` the
+  // brains used to compute themselves, so the arithmetic is unchanged to the last
+  // bit. With one, the heading comes from the route and the *pace* is untouched: a
+  // unit still travels at its own speed, it only picks a longer way round. Returns
+  // the angle it walked at, for the brains that also turn the hull to face it.
+  function advanceTo(enemy, goalX, goalY, delta, pace = enemy.speed) {
+    const point = paths === null ? null : paths.waypoint(enemy, goalX, goalY);
+    const targetX = point === null ? goalX : point.x;
+    const targetY = point === null ? goalY : point.y;
+    const angle = Math.atan2(targetY - enemy.y, targetX - enemy.x);
+    moveEntitySafely(enemy, Math.cos(angle) * pace * delta, Math.sin(angle) * pace * delta, enemy.radius);
+    return angle;
   }
 
   function retreat(enemy, angle, delta) {
@@ -76,9 +87,8 @@ export function createBehaviours({
       const guardY = enemy.homeY + Math.sin(bearing) * lean;
       const postDistance = Math.hypot(guardX - enemy.x, guardY - enemy.y);
       if (postDistance > GUARD_ARRIVE) {
-        const guardAngle = Math.atan2(guardY - enemy.y, guardX - enemy.x);
         const pace = enemy.speed * clamp(postDistance / GUARD_EASE, 0, 1);
-        moveEntitySafely(enemy, Math.cos(guardAngle) * pace * delta, Math.sin(guardAngle) * pace * delta, enemy.radius);
+        advanceTo(enemy, guardX, guardY, delta, pace);
       }
     }
     if (distance <= reach && enemy.attackCooldown === 0) strike(enemy, target, angle);
@@ -95,7 +105,7 @@ export function createBehaviours({
     const goal = defendedPoint(player, enemy, target.x, target.y);
     const reach = honestReach(enemy, target);
     if (Math.hypot(goal.x - enemy.x, goal.y - enemy.y) > reach) {
-      advance(enemy, Math.atan2(goal.y - enemy.y, goal.x - enemy.x), delta);
+      advanceTo(enemy, goal.x, goal.y, delta);
       return;
     }
     if (distance <= reach && enemy.attackCooldown === 0) strike(enemy, target, angle);
@@ -110,7 +120,7 @@ export function createBehaviours({
       else guardPost(enemy, target, distance, angle, delta);
       return;
     }
-    if (distance > honestReach(enemy, target)) advance(enemy, angle, delta);
+    if (distance > honestReach(enemy, target)) advanceTo(enemy, target.x, target.y, delta);
     else if (enemy.attackCooldown === 0) strike(enemy, target, angle);
   }
 
@@ -141,10 +151,8 @@ export function createBehaviours({
   // The one order that overrides the loop's "face the target" heading: run for
   // the home slot at the shared regroup pace.
   function regroup(enemy, delta) {
-    const bearing = Math.atan2(enemy.homeY - enemy.y, enemy.homeX - enemy.x);
-    enemy.angle = bearing;
     const pace = enemy.speed * chariotTactics.regroupSpeed;
-    moveEntitySafely(enemy, Math.cos(bearing) * pace * delta, Math.sin(bearing) * pace * delta, enemy.radius);
+    enemy.angle = advanceTo(enemy, enemy.homeX, enemy.homeY, delta, pace);
   }
 
   function ramTarget(enemy, target, angle) {
@@ -174,7 +182,7 @@ export function createBehaviours({
     }
     // ENGAGE, including the latched last stand.
     if (distance > enemy.radius + target.radius + 2) {
-      advance(enemy, angle, delta);
+      advanceTo(enemy, target.x, target.y, delta);
       return;
     }
     if (enemy.contactCooldown !== 0) return;
@@ -196,7 +204,7 @@ export function createBehaviours({
   // lobs stones from anywhere inside its much longer `range`.
   function bossOnSight(enemy, target, distance, angle, delta) {
     if (distance < enemy.band[0]) retreat(enemy, angle, delta);
-    else if (distance > enemy.band[1]) advance(enemy, angle, delta);
+    else if (distance > enemy.band[1]) advanceTo(enemy, target.x, target.y, delta);
     if (enemy.attack.kind === "shot") {
       if (distance < enemy.range && enemy.shotCooldown === 0) fireEnemy(enemy, angle, target);
       return;
@@ -216,7 +224,7 @@ export function createBehaviours({
   function wildOnSight(enemy, target, distance, angle, delta) {
     const reach = honestReach(enemy, target);
     if (distance > reach) {
-      advance(enemy, angle, delta);
+      advanceTo(enemy, target.x, target.y, delta);
       return;
     }
     if (enemy.attackCooldown !== 0) return;

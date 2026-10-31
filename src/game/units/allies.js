@@ -75,6 +75,11 @@ export function createAllies({
   moveEntitySafely, hasLineOfSight, circleIntersectsObstacle,
   rectHitsAnyObstacle, rectTerrain,
   damageEnemy, fireAllyShot, addMeleeEffect, burst, playSound = () => {},
+  // Optional route planner. Every step a hired unit takes goes through
+  // `stepToward`, so this is the whole wiring: with it, a step that would walk
+  // into a wall is redirected at the next waypoint; without it the unit walks the
+  // straight line it always did.
+  paths = null,
 }) {
   const { engage, chariot: chariotConfig } = formationRules;
 
@@ -101,11 +106,17 @@ export function createAllies({
   }
 
   function stepToward(ally, x, y, delta, speedScale = 1) {
-    const dx = x - ally.x;
-    const dy = y - ally.y;
-    const distance = Math.hypot(dx, dy);
+    const distance = Math.hypot(x - ally.x, y - ally.y);
     if (distance < 0.5) return distance;
-    moveEntitySafely(ally, (dx / distance) * ally.speed * speedScale * delta, (dy / distance) * ally.speed * speedScale * delta, ally.radius);
+    // Only the *heading* may bend: every caller uses the return value as "am I
+    // there yet?", so it stays the distance to the real goal even when this step
+    // is walking towards a waypoint on the way there.
+    const point = paths === null ? null : paths.waypoint(ally, x, y);
+    const stepX = (point === null ? x : point.x) - ally.x;
+    const stepY = (point === null ? y : point.y) - ally.y;
+    const span = Math.hypot(stepX, stepY);
+    if (span === 0) return distance;
+    moveEntitySafely(ally, (stepX / span) * ally.speed * speedScale * delta, (stepY / span) * ally.speed * speedScale * delta, ally.radius);
     return distance;
   }
 
@@ -561,13 +572,16 @@ export function createAllies({
   // dry beats merely uniform beats "slots are free but a wall crosses the
   // footprint", the same ladder the enemy spawner uses. Unlike the enemy spawner
   // it never gives up - a line that cost coins has to appear - so the best rung is
-  // committed even when every rung failed, and the first clamped candidate is the
-  // floor beneath that. `tier` only supplies the stations being laid out, so a
-  // wide siege camp asks about - and clears - more ground than a rank of halberds.
+  // committed even when every rung failed; beneath it sits the candidate with the
+  // fewest obstructed stations, and the first clamped candidate is the floor under
+  // that. `tier` only supplies the stations being laid out, so a wide siege camp
+  // asks about - and clears - more ground than a rank of halberds.
   function findSpawn(index, extent, clearance, tier) {
     const preferred = index % 2 === 0 ? -Math.PI / 2 : Math.PI / 2;
     const offsets = [preferred, ...SPAWN_OFFSETS.filter((offset) => offset !== preferred)];
     let best = null;
+    let safest = null;
+    let safestBlocked = Infinity;
     let fallback = null;
     for (const distance of SPAWN_DISTANCES) {
       for (const offset of offsets) {
@@ -591,12 +605,23 @@ export function createAllies({
           if (candidate.tier === 3) return candidate;
           continue;
         }
-        if (slotCoordinates.some((slot) => circleIntersectsObstacle(slot.x, slot.y, 20))) continue;
+        const blockedSlots = slotCoordinates.filter((slot) => circleIntersectsObstacle(slot.x, slot.y, 20)).length;
+        if (blockedSlots > 0) {
+          // A station standing on an obstacle. Nothing on this rung can be
+          // committed, but the candidate with the fewest such stations is the
+          // ground a body can still walk off (src/game/pathfinding.js routes it),
+          // so it beats "whatever was tried first" when every candidate is bad.
+          if (blockedSlots < safestBlocked) {
+            safestBlocked = blockedSlots;
+            safest = candidate;
+          }
+          continue;
+        }
         candidate.tier = 1;
         if (!best || candidate.tier > best.tier) best = candidate;
       }
     }
-    return best ?? fallback;
+    return best ?? safest ?? fallback;
   }
 
   // One line, committed to the field: the formation row, its stations filled with

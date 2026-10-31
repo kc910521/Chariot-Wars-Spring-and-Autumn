@@ -61,6 +61,10 @@ export function createEnemies({
   world, campaign, random,
   circleIntersectsObstacle, moveEntitySafely, getChariotCollisionDamage, playSound, updateHud,
   hasLineOfSight, fireEnemy, damagePlayer, damageCompanion, damageAlly = () => {},
+  // Optional: with it a walk bends round an obstacle instead of grinding into it.
+  // Null keeps the straight line the code used to walk, which is what the tests
+  // and any headless rig get.
+  paths = null,
 }) {
   // `random` is late-bound by the caller so every gameplay roll (and the
   // particle spray) draws from the PRNG of the battle in progress, keeping a
@@ -565,7 +569,7 @@ export function createEnemies({
   // brain cannot reach into spawning, loot or the HUD.
   const behaviours = createBehaviours({
     player, moveEntitySafely, fireEnemy, damageCombatTarget, addMeleeEffect, burst, damageEnemy,
-    getChariotTravelSpeed,
+    getChariotTravelSpeed, paths,
   });
 
   // Turn on the spot towards a bearing at a capped rate. The old code wrote the
@@ -644,7 +648,10 @@ export function createEnemies({
     const goal = searchPoint(player, enemy, enemy.lastSeenX, enemy.lastSeenY);
     const span = Math.hypot(goal.x - enemy.x, goal.y - enemy.y);
     if (span > SEARCH_ARRIVE && enemy.searchTimer > 0) {
-      const bearing = Math.atan2(goal.y - enemy.y, goal.x - enemy.x);
+      // The heading comes from the route; the arrival test above stays on the real
+      // goal, so a detour can never read as "arrived".
+      const point = paths === null ? null : paths.waypoint(enemy, goal.x, goal.y);
+      const bearing = Math.atan2((point === null ? goal.y : point.y) - enemy.y, (point === null ? goal.x : point.x) - enemy.x);
       turnToward(enemy, bearing, SEARCH_TURN_RATE, delta);
       strideAt(enemy, bearing, enemy.speed * SEARCH_JOG, delta);
       return;
@@ -678,7 +685,8 @@ export function createEnemies({
       scanGround(enemy, enemy.homeAngle ?? enemy.angle, IDLE_SCAN_ANGLE, IDLE_TURN_RATE, delta);
       return;
     }
-    const bearing = Math.atan2(enemy.homeY - enemy.y, enemy.homeX - enemy.x);
+    const point = paths === null ? null : paths.waypoint(enemy, enemy.homeX, enemy.homeY);
+    const bearing = Math.atan2((point === null ? enemy.homeY : point.y) - enemy.y, (point === null ? enemy.homeX : point.x) - enemy.x);
     turnToward(enemy, bearing, RETURN_TURN_RATE, delta);
     strideAt(enemy, bearing, enemy.speed * 0.55, delta);
   }

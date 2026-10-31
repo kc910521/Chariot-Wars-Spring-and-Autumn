@@ -18,6 +18,7 @@ import { personnel } from "../src/data/equipment.js";
 import { bossTypes, enemyStats, formationPatterns } from "../src/data/formations.js";
 import { createBattlefield } from "../src/game/map.js";
 import { createCollisionSystem } from "../src/game/collision.js";
+import { createPathSystem } from "../src/game/pathfinding.js";
 import { createCombatSystem } from "../src/game/combat.js";
 import { createProjectileSystem } from "../src/game/projectiles.js";
 import { createGameState } from "../src/game/state.js";
@@ -32,21 +33,29 @@ const noop = () => {};
 // budget so a failure says what moved and by how much.
 const budgets = {
   // Enemy AI: per-unit line of sight, chase, and the O(n^2) separation sweeps.
-  // Measurements on a warm machine spread 0.19-0.26ms, so the ceiling carries
-  // that spread rather than a single run.
-  enemyFrame: 0.6, // 0.19-0.26 measured
+  // The movement broadphase and the routing gate both landed here, so this is
+  // *cheaper* than the 0.19-0.26ms it used to be: measurements spread 0.116-0.141.
+  enemyFrame: 0.25, // 0.116-0.141 measured
   // Crew volley: every bow ready, five archers resolving a target against 48
   // candidates on every frame. The sight index plus the cooldown gate took this
-  // from a ~12ms burst to 0.18-0.27ms, but it is still the frame a player feels
-  // if it regresses: one dropped frame is a visible hitch.
-  crewVolley: 0.6, // 0.18-0.27 measured
+  // from a ~12ms burst to 0.16ms, but it is still the frame a player feels if it
+  // regresses: one dropped frame is a visible hitch.
+  crewVolley: 0.3, // 0.159-0.168 measured
   // Dismounted companions: the same shape, but sustained rather than periodic.
-  footCompanions: 0.5, // 0.13-0.14 measured
+  footCompanions: 0.2, // 0.105-0.108 measured
   // Projectile integration for a 30-arrow flight.
-  projectiles: 0.4, // 0.11-0.13 measured
+  projectiles: 0.12, // 0.059-0.066 measured
   // One bow-length line-of-sight query, in microseconds, over the real obstacle
   // set. This is the per-call cost the two scan budgets above are made of.
-  lineOfSightMicro: 3, // 0.55-0.60 measured
+  lineOfSightMicro: 1.5, // 0.58-0.83 measured (the high end is a busy machine)
+  // The routing gate: one `waypoint` call on a clear straight line, which is what
+  // every moving unit asks every frame. The 0.47 outlier is the first pass warming
+  // the field access up; the steady number is 0.26-0.27.
+  pathGateMicro: 1, // 0.26-0.47 measured
+  // One full plan - A* plus the exact segment validation - on a blocked line of
+  // 200-700px. This is the spike, and MAX_PLANS_PER_FRAME is what bounds it: two
+  // of these in a frame is still under 0.05ms.
+  pathPlanMicro: 40, // 20-23 measured
 };
 
 const { state, player, campaign, world } = createGameState({ seedSource: () => "20240607" });
@@ -59,6 +68,14 @@ campaign.obstacles = field.obstacles;
 campaign.terrain = field.terrain;
 campaign.clouds = field.clouds;
 
+// The battle's own path system, wired the way game.js wires it: the frame
+// scenarios below therefore measure the routing cost on the units that actually
+// ask for a route, not a scene with routing switched off.
+const paths = createPathSystem({
+  campaign, world,
+  circleIntersectsObstacle: collision.circleIntersectsObstacle,
+});
+
 const enemies = createEnemies({
   bossTypes,
   enemyStats,
@@ -70,6 +87,7 @@ const enemies = createEnemies({
   random: () => campaign.random(),
   circleIntersectsObstacle: collision.circleIntersectsObstacle,
   moveEntitySafely: collision.moveEntitySafely,
+  paths,
   getChariotCollisionDamage: () => 1,
   playSound: noop,
   updateHud: noop,
@@ -106,6 +124,7 @@ const combat = createCombatSystem({
   player,
   campaign,
   collision,
+  paths,
   projectiles: { fireAllyShot: (options) => shots.push(options) },
   damageEnemy: noop,
   addMeleeEffect: noop,
@@ -142,15 +161,18 @@ const delta = 1 / 60;
 const results = [];
 const scenarios = [
   ["enemy AI + separation", "enemyFrame", () => {
+    paths.beginFrame(delta);
     enemies.updateUnits(delta);
   }],
   ["crew volley (5 bows, all ready)", "crewVolley", () => {
+    paths.beginFrame(delta);
     for (const member of campaign.roster) member.cooldown = 0;
     combat.updateCrew(delta);
   }],
   // The dismount is one-way, so it runs after the mounted scenario is done. Every
   // companion is forced ready for the same reason the bows are.
   ["deployed companions (9)", "footCompanions", () => {
+    paths.beginFrame(delta);
     for (const companion of state.footCompanions) companion.attackCooldown = 0;
     combat.updateFootCompanions(delta);
   }],
@@ -212,6 +234,57 @@ for (let pass = 0; pass < 3; pass += 1) {
 }
 const lineOfSightMicro = (performance.now() - sightStart) * 1000 / sightChecks;
 
+// Routing, measured per call. Two numbers, because a unit pays two different
+// prices: the gate (one 20px-sampled walk down the clearance field) on every
+// frame it is moving, and a full plan (A* plus the exact segment validation) only
+// on the frames the straight line is blocked. A route is planned at most once a
+// second per unit, so the gate is the steady cost and the plan is the spike.
+const probes = [];
+for (let index = 0; index < 400; index += 1) {
+  const fromX = 80 + random() * (world.width - 160);
+  const fromY = 80 + random() * (world.height - 160);
+  const angle = random() * Math.PI * 2;
+  const span = 200 + random() * 500;
+  probes.push({
+    fromX, fromY,
+    toX: Math.min(world.width - 60, Math.max(60, fromX + Math.cos(angle) * span)),
+    toY: Math.min(world.height - 60, Math.max(60, fromY + Math.sin(angle) * span)),
+  });
+}
+const grid = paths.field();
+const clearProbes = probes.filter((probe) => paths.lineClear(grid, probe.fromX, probe.fromY, probe.toX, probe.toY, 16));
+const blockedProbes = probes.filter((probe) => !paths.lineClear(grid, probe.fromX, probe.fromY, probe.toX, probe.toY, 16));
+
+let gateCalls = 0;
+const gateStart = performance.now();
+for (let pass = 0; pass < 4; pass += 1) {
+  for (const probe of clearProbes) {
+    // A unit object per probe, reused: the point of the measurement is that a
+    // clear line allocates nothing.
+    const unit = { x: probe.fromX, y: probe.fromY, radius: 16 };
+    paths.beginFrame(delta);
+    paths.waypoint(unit, probe.toX, probe.toY);
+    gateCalls += 1;
+  }
+}
+const pathGateMicro = (performance.now() - gateStart) * 1000 / gateCalls;
+
+let planCalls = 0;
+const planStart = performance.now();
+for (let pass = 0; pass < 2; pass += 1) {
+  for (const probe of blockedProbes) {
+    const unit = { x: probe.fromX, y: probe.fromY, radius: 16 };
+    paths.beginFrame(delta);
+    // Force the plan: without this every probe after the first would take the
+    // cached tier and measure nothing.
+    unit.route = null;
+    unit.routeRetryAt = 0;
+    paths.waypoint(unit, probe.toX, probe.toY);
+    planCalls += 1;
+  }
+}
+const pathPlanMicro = (performance.now() - planStart) * 1000 / planCalls;
+
 const failures = [];
 function report(label, measured, budget, unit) {
   const ok = measured <= budget;
@@ -224,6 +297,8 @@ console.log("[perf] ms per simulated frame");
 for (const { label, perFrame, budgetKey } of results) report(label, perFrame, budgets[budgetKey], " ms");
 console.log("[perf] per call");
 report("hasLineOfSight", lineOfSightMicro, budgets.lineOfSightMicro, "us");
+report("path gate (clear line)", pathGateMicro, budgets.pathGateMicro, "us");
+report("path plan (blocked line)", pathPlanMicro, budgets.pathPlanMicro, "us");
 
 console.log(failures.length === 0 ? "\n[perf] PASS" : `\n[perf] FAIL: ${failures.join("; ")}`);
 process.exitCode = failures.length === 0 ? 0 : 1;

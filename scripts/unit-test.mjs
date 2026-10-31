@@ -20,9 +20,10 @@ import { createCollisionSystem } from "../src/game/collision.js";
 import { createCombatSystem } from "../src/game/combat.js";
 import { cloudKinds, elementRules, groundVisual, obstacleKinds, terrainKinds } from "../src/data/elements.js";
 import {
-  clearsSight, cloudDrift, elementBoundingRadius, elementCullMargin, elementIntersects,
+  blocksMovement, clearsSight, cloudDrift, elementBoundingRadius, elementCullMargin, elementIntersects,
   elementSpeedAt, fellTree, isFellable, obstacleShape, rectHitsAnyObstacle, rectTerrain,
 } from "../src/game/elements.js";
+import { createPathSystem, radiusBucket } from "../src/game/pathfinding.js";
 import { createBattlefield } from "../src/game/map.js";
 import { bandsFromShares, createRingLayout, resolveRingHalves, ringLayoutFromShares } from "../src/game/rings.js";
 import { parseRingShares, ringRules } from "../src/data/rings.js";
@@ -383,6 +384,70 @@ test("obstacleAt names the element the move was rejected by", () => {
   assert.equal(field.obstacleAt(100, 700, 6), null, "open ground names nothing");
   // The two queries are the same predicate: whatever one rejects, the other names.
   assert.equal(field.circleIntersectsObstacle(510, 320, 6), field.obstacleAt(510, 320, 6) !== null);
+});
+
+// The movement broadphase files every movement-blocking element into a uniform
+// grid, keyed on the *query* pixel rather than on the body size, so one index
+// serves every radius in the roster. These pin the two shapes it has to file, the
+// rebuild when a battle installs a new list, and - the one that matters - that the
+// indexed answer is identical to scanning the whole list.
+test("the indexed move query answers exactly like the full scan", () => {
+  const random = createSeededRandom(77);
+  const obstacles = [];
+  for (let index = 0; index < 40; index += 1) {
+    const x = 30 + random() * (world.width - 60);
+    const y = 30 + random() * (world.height - 60);
+    obstacles.push(index % 4 === 0
+      ? { type: "wall", x, y, width: 40 + random() * 180, height: 24 + random() * 46 }
+      : { type: "tree", x, y, radius: 22 + random() * 18 });
+  }
+  const field = createCollisionSystem({ campaign: { obstacles, terrain: [] }, world });
+  // A different array with the same contents is exactly the shape `map.js` hands
+  // the query while it is still building one, and it is what reaches the scan path.
+  const scanned = [...obstacles];
+  let blocked = 0;
+  for (let index = 0; index < 4000; index += 1) {
+    const x = random() * world.width;
+    const y = random() * world.height;
+    for (const radius of [12, 16, 24, 32, 40]) {
+      const expected = field.circleIntersectsObstacle(x, y, radius, scanned);
+      assert.equal(
+        field.circleIntersectsObstacle(x, y, radius), expected,
+        `divergence at (${x.toFixed(1)}, ${y.toFixed(1)}) for radius ${radius}`,
+      );
+      if (expected) blocked += 1;
+    }
+  }
+  assert.ok(blocked > 500, `the sample must also contain blocked points, got ${blocked}`);
+});
+
+test("the move index follows the list the battle installed", () => {
+  const local = { obstacles: [], terrain: [] };
+  const field = createCollisionSystem({ campaign: local, world });
+  assert.equal(field.circleIntersectsObstacle(500, 430, 20), false, "an empty map blocks nothing");
+  local.obstacles = [{ type: "tree", x: 500, y: 400, radius: 30 }];
+  assert.equal(field.circleIntersectsObstacle(500, 430, 20), true, "the new tree must be in the index");
+  local.obstacles = [];
+  assert.equal(field.circleIntersectsObstacle(500, 430, 20), false, "a new battle must clear the index");
+});
+
+test("a felled tree stops blocking movement at once", () => {
+  const tree = { type: "tree", x: 500, y: 400, radius: 30 };
+  const local = { obstacles: [tree], terrain: [] };
+  const field = createCollisionSystem({ campaign: local, world });
+  assert.equal(field.circleIntersectsObstacle(500, 400, 20), true);
+  fellTree(local, tree);
+  assert.equal(field.circleIntersectsObstacle(500, 400, 20), false, "the index kept a felled tree");
+});
+
+test("every obstacle row declares whether it blocks movement", () => {
+  for (const [name, row] of Object.entries(obstacleKinds)) {
+    assert.equal(typeof row.blocksMovement, "boolean", `${name} is missing its blocksMovement column`);
+  }
+  // An instance carries only its type and geometry, and an unknown type still has
+  // to stop a body: the fallback is the safe one.
+  assert.equal(blocksMovement({ type: "tree", x: 0, y: 0, radius: 1 }), true);
+  assert.equal(blocksMovement({ x: 0, y: 0, radius: 1 }), true);
 });
 
 console.log("[unit] map elements");
@@ -5459,6 +5524,231 @@ test("a gap in the same wall opens the path again", () => {
 test("one tree in an open field is walked around, not through", () => {
   const obstacles = [{ type: "tree", x: 600, y: 450, radius: 30 }];
   assert.equal(pathIsClear({ from: reachFrom, to: reachTo, world: reachWorld, obstacles, radius: 17 }), true);
+});
+
+console.log("[unit] pathfinding");
+
+// One clearance field, four body sizes. The field stores the signed distance from
+// a cell's centre to the nearest obstacle surface, capped at 48, so `clear >=
+// bucket` is the only passability test in the whole file - which makes the field
+// itself the contract to pin: it has to agree with `elementIntersects` exactly,
+// cell centre by cell centre, for every bucket the roster lands in.
+function pathFixture(obstacles) {
+  const world = { width: 1200, height: 900 };
+  const campaign = { obstacles, terrain: [] };
+  const collision = createCollisionSystem({ campaign, world });
+  const paths = createPathSystem({ campaign, world, circleIntersectsObstacle: collision.circleIntersectsObstacle });
+  return { world, campaign, collision, paths };
+}
+
+// A palisade with a 160px gap in it: the straight line from one side to the other
+// is blocked for every body in the roster, and the only way through is the gap.
+function palisadeWithGap() {
+  return [
+    { type: "wall", x: 560, y: 0, width: 80, height: 380 },
+    { type: "wall", x: 560, y: 540, width: 80, height: 360 },
+  ];
+}
+
+// The exact test the segment validator uses, spelled out here so the test does not
+// depend on the module's own helper: a body of radius `need` walked along the
+// segment, sampled every 4px, must not touch anything and must stay inside the
+// world border.
+function segmentIsClear(obstacles, world, fromX, fromY, toX, toY, need) {
+  const dx = toX - fromX;
+  const dy = toY - fromY;
+  const steps = Math.max(1, Math.ceil(Math.hypot(dx, dy) / 4));
+  for (let step = 0; step <= steps; step += 1) {
+    const fraction = step / steps;
+    const x = fromX + dx * fraction;
+    const y = fromY + dy * fraction;
+    if (x < need || y < need || x > world.width - need || y > world.height - need) return false;
+    if (obstacles.some((obstacle) => elementIntersects(x, y, need, obstacle))) return false;
+  }
+  return true;
+}
+
+test("every body radius the roster has lands in a bucket", () => {
+  assert.equal(radiusBucket(12), 16);
+  assert.equal(radiusBucket(13), 16);
+  assert.equal(radiusBucket(16), 16);
+  assert.equal(radiusBucket(17), 24);
+  assert.equal(radiusBucket(21), 24);
+  assert.equal(radiusBucket(31), 32);
+  assert.equal(radiusBucket(36), 40);
+  assert.equal(radiusBucket(38), 40);
+  // Nothing in the game is bigger than a rank of four cells, and a body without a
+  // radius still has to fit somewhere.
+  assert.equal(radiusBucket(0), 16);
+  assert.equal(radiusBucket(75), 40);
+});
+
+test("the clearance field agrees with the element test at every cell centre", () => {
+  const random = createSeededRandom(1234);
+  const obstacles = [];
+  for (let index = 0; index < 14; index += 1) {
+    const x = 80 + random() * 1040;
+    const y = 80 + random() * 740;
+    obstacles.push(index % 3 === 0
+      ? { type: "wall", x, y, width: 60 + random() * 150, height: 26 + random() * 44 }
+      : { type: "tree", x, y, radius: 22 + random() * 18 });
+  }
+  const { world, paths } = pathFixture(obstacles);
+  const grid = paths.field();
+  let blocked = 0;
+  for (const bucket of [16, 24, 32, 40]) {
+    for (let row = 0; row < grid.rows; row += 1) {
+      for (let column = 0; column < grid.columns; column += 1) {
+        const x = (column + 0.5) * grid.cell;
+        const y = (row + 0.5) * grid.cell;
+        const clear = grid.clear[row * grid.columns + column];
+        // The border is part of the field (a body fits at a point only when it is
+        // `radius` from every edge) and is not an element.
+        const expected = x < bucket || y < bucket || x > world.width - bucket || y > world.height - bucket
+          || obstacles.some((obstacle) => elementIntersects(x, y, bucket, obstacle));
+        assert.equal(clear < bucket, expected, `cell ${column},${row} disagrees for bucket ${bucket}`);
+        if (expected) blocked += 1;
+      }
+    }
+  }
+  assert.ok(blocked > 500, `the field must have blocked cells too, got ${blocked}`);
+});
+
+test("the clearance field is rebuilt when the list it was built from is replaced", () => {
+  const local = { obstacles: [], terrain: [] };
+  const world = { width: 1200, height: 900 };
+  const collision = createCollisionSystem({ campaign: local, world });
+  const paths = createPathSystem({ campaign: local, world, circleIntersectsObstacle: collision.circleIntersectsObstacle });
+  const empty = paths.field();
+  assert.equal(paths.field(), empty, "asking twice with nothing changed must not rebuild");
+  local.obstacles = [{ type: "tree", x: 600, y: 450, radius: 30 }];
+  const rebuilt = paths.field();
+  assert.notEqual(rebuilt, empty, "a new obstacle list must produce a new field");
+  // A cell at the tree's centre is inside it, so its clearance is zero for every
+  // bucket - which is what makes the rebuilt field, not the old one, the live one.
+  assert.ok(paths.clearAt(600, 450) < 16, "the tree is missing from the new field");
+  assert.ok(paths.clearAt(600, 750) >= 48, "open ground should read as fully clear");
+});
+
+test("a clear straight line hands back the goal itself", () => {
+  const { paths } = pathFixture([]);
+  const unit = { x: 100, y: 100, radius: 16 };
+  paths.beginFrame(1 / 60);
+  const point = paths.waypoint(unit, 900, 700);
+  assert.deepEqual({ x: point.x, y: point.y }, { x: 900, y: 700 });
+  assert.ok(!unit.route, "a gated request must not leave a route behind");
+  assert.ok(paths.stats.gated > 0);
+});
+
+test("a wall between unit and goal is walked round, not into", () => {
+  const obstacles = palisadeWithGap();
+  const { world, paths } = pathFixture(obstacles);
+  const unit = { x: 150, y: 200, radius: 16 };
+  paths.beginFrame(1 / 60);
+  const point = paths.waypoint(unit, 1050, 200);
+  assert.notEqual(point.x, 1050, "the planner aimed straight through the palisade");
+  assert.ok(unit.route && unit.route.points.length >= 2, "no route was planned");
+  // Every committed segment must clear the body, and the route must end on the
+  // goal: that is the whole point of the exact validation in `smooth`.
+  const need = radiusBucket(unit.radius);
+  let cursorX = unit.x;
+  let cursorY = unit.y;
+  for (const waypoint of unit.route.points) {
+    assert.ok(segmentIsClear(obstacles, world, cursorX, cursorY, waypoint.x, waypoint.y, need),
+      `segment ${cursorX.toFixed(0)},${cursorY.toFixed(0)} -> ${waypoint.x.toFixed(0)},${waypoint.y.toFixed(0)} clips`);
+    cursorX = waypoint.x;
+    cursorY = waypoint.y;
+  }
+  assert.equal(cursorX, 1050);
+  assert.equal(cursorY, 200);
+  // And it goes through the gap, which is the only way through.
+  assert.ok(unit.route.points.some((waypoint) => waypoint.y > 380 && waypoint.y < 540), "the route missed the gap");
+});
+
+test("a live route is reused instead of replanned every frame", () => {
+  const { paths } = pathFixture(palisadeWithGap());
+  const unit = { x: 150, y: 200, radius: 16 };
+  paths.beginFrame(1 / 60);
+  paths.waypoint(unit, 1050, 200);
+  const route = unit.route;
+  const planned = paths.stats.planned;
+  // 0.4s of frames: the target has not moved, so every frame takes the cached tier.
+  for (let frame = 0; frame < 24; frame += 1) {
+    unit.x += 1; // creep towards the waypoint so the stuck timer stays quiet
+    paths.beginFrame(1 / 60);
+    paths.waypoint(unit, 1050, 200);
+  }
+  assert.equal(unit.route, route, "the route was thrown away while it was still good");
+  assert.equal(paths.stats.planned, planned, "a cached route must not plan again");
+});
+
+
+test("a route dies with the field it was planned on", () => {
+  const { campaign, paths } = pathFixture(palisadeWithGap());
+  const unit = { x: 150, y: 200, radius: 16 };
+  paths.beginFrame(1 / 60);
+  paths.waypoint(unit, 1050, 200);
+  const route = unit.route;
+  assert.ok(route);
+  // `fellTree` and a new battle both *replace* the array rather than mutating it,
+  // and that is the notification the path system keys on.
+  campaign.obstacles = [...campaign.obstacles];
+  paths.beginFrame(1 / 60);
+  paths.waypoint(unit, 1050, 200);
+  assert.notEqual(unit.route, route, "a route outlived the field it was planned on");
+});
+
+test("planning is capped per frame, and a deferred request still aims somewhere", () => {
+  const { paths } = pathFixture(palisadeWithGap());
+  paths.beginFrame(1 / 60);
+  const planned = paths.stats.planned;
+  const routed = [];
+  for (let index = 0; index < 4; index += 1) {
+    const unit = { x: 150, y: 150 + index * 40, radius: 16 };
+    const point = paths.waypoint(unit, 1050, 150 + index * 40);
+    assert.ok(Number.isFinite(point.x) && Number.isFinite(point.y), "a deferred request must still answer");
+    routed.push(Boolean(unit.route));
+  }
+  // MAX_PLANS_PER_FRAME is 2: the rest are deferred to the next frame rather than
+  // queueing a plan each, which is what bounds the worst frame.
+  assert.deepEqual(routed, [true, true, false, false]);
+  assert.equal(paths.stats.planned - planned, 2);
+});
+
+test("a unit that cannot move is replanned, not left pinned", () => {
+  const { paths } = pathFixture(palisadeWithGap());
+  const unit = { x: 150, y: 200, radius: 16 };
+  paths.beginFrame(1 / 60);
+  paths.waypoint(unit, 1050, 200);
+  const first = unit.route;
+  assert.equal(unit.routePlans, 1);
+  // 0.31s of standing still: past STUCK_TIME, so the route is dropped and a new
+  // one is planned from where the unit actually is.
+  paths.beginFrame(0.31);
+  paths.waypoint(unit, 1050, 200);
+  assert.equal(unit.routePlans, 2);
+  assert.notEqual(unit.route, first, "the stuck route was kept");
+});
+
+test("a goal it cannot reach fails quietly and backs off", () => {
+  const boxed = [
+    { type: "wall", x: 400, y: 300, width: 200, height: 20 },
+    { type: "wall", x: 400, y: 480, width: 200, height: 20 },
+    { type: "wall", x: 400, y: 300, width: 20, height: 200 },
+    { type: "wall", x: 580, y: 300, width: 20, height: 200 },
+  ];
+  const { paths } = pathFixture(boxed);
+  const unit = { x: 500, y: 400, radius: 16 };
+  const failed = paths.stats.failed;
+  for (let frame = 0; frame < 60; frame += 1) {
+    paths.beginFrame(1 / 60);
+    paths.waypoint(unit, 900, 400);
+  }
+  assert.ok(!unit.route, "a walled-in unit must not hold a route through the wall");
+  // One second of frames may only ask a few times: FAIL_BACKOFF is what stops a
+  // hopeless unit from planning on every frame for the rest of the battle.
+  const attempts = paths.stats.failed - failed;
+  assert.ok(attempts >= 1 && attempts <= 4, `expected a couple of attempts in a second, got ${attempts}`);
 });
 
 console.log("[unit] the tiger drill's ground");

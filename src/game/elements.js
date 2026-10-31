@@ -45,6 +45,15 @@ export function clearsSight(element) {
   return obstacleRow(element)?.blocksSight ?? true;
 }
 
+// The movement half of that pair. Every row in the catalog blocks movement
+// today, so this reads `true` for the whole list - it exists because the
+// collision broadphase (src/game/collision.js) files obstacles by this column
+// rather than by type, and a future purely-decorative obstacle must be able to
+// say so without teaching the index a new name.
+export function blocksMovement(element) {
+  return obstacleRow(element)?.blocksMovement ?? true;
+}
+
 // Culling margin: how far from its anchor an element can still paint a pixel. The
 // anchor of a rect is its top-left corner, so its own extent covers it; a circle
 // is anchored at its centre and gets a little slack on top.
